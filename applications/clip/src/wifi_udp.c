@@ -7,7 +7,7 @@
  * Receives AT commands from client and dispatches to AT server.
  * Receives ACK frames and forwards to transport_udp for sliding window.
  *
- * Protocol: CLIP UDP Transfer Protocol v2 (see docs/udp_protocol.md)
+ * Protocol: CLIP UDP Transfer Protocol (see docs/udp_protocol.md)
  *
  * Server sends: DATA, FILE_START, FILE_END, TRANSFER_DONE, AT_RESP, HEARTBEAT
  * Server receives: ACK, HEARTBEAT, AT commands (plain text)
@@ -52,13 +52,10 @@ static void handle_packet(const uint8_t *buf, size_t len)
     uint8_t frame_type = buf[0];
 
     switch (frame_type) {
-    case UDP_FRAME_ACK:
-        /* ACK frame: [type(1)][ack_seq_lo(1)][ack_seq_hi(1)][window(1)][bitmap(1)] */
-        if (len >= UDP_ACK_FRAME_SIZE) {
-            uint16_t ack_seq = buf[1] | (buf[2] << 8);
-            uint8_t window = buf[3];
-            uint8_t bitmap = buf[4];
-            transport_udp_notify_ack(ack_seq, window, bitmap);
+    case UDP_FRAME_FILE_ACK:
+        /* FILE_ACK: [type(1)][result(1)] — 0x00=OK, 0x01=NACK */
+        if (len >= UDP_FILE_ACK_FRAME_SIZE) {
+            transport_udp_notify_file_ack(buf[1]);
         }
         break;
 
@@ -130,7 +127,7 @@ static void udp_server_thread(void *p1, void *p2, void *p3)
         return;
     }
 
-    LOG_INF("UDP server v2 listening on port %d", WIFI_AP_UDP_PORT);
+    LOG_INF("UDP server listening on port %d", WIFI_AP_UDP_PORT);
 
     while (server_running) {
         memset(udp_recv_buf, 0, sizeof(udp_recv_buf));
@@ -146,7 +143,6 @@ static void udp_server_thread(void *p1, void *p2, void *p3)
             k_sleep(K_MSEC(100));
             continue;
         }
-
         if (ret > 0) {
             /* Track client address for responses */
             if (client_len > 0) {
@@ -176,6 +172,7 @@ int wifi_udp_init(void)
     server_sock = -1;
     client_len = sizeof(client_addr);
     memset(&client_addr, 0, sizeof(client_addr));
+    
     return 0;
 }
 

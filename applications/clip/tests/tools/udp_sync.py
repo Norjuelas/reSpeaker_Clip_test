@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """
-UDP Sync Tool for Clip — Protocol v2
+UDP Sync Tool for Clip
 
-Downloads recording sessions via UDP with sliding window protocol:
-- Per-frame CRC32 (IEEE) for integrity
-- Cumulative ACK + selective bitmap for efficient acknowledgment
-- Dynamic flow control via window advertisement
+Downloads recording sessions via UDP with per-file CRC32 verification:
+- Fire-and-forget DATA frames (no per-frame ACK)
+- Per-frame CRC32 for corruption detection
 - Full-file CRC32 verification at FILE_END
+- FILE_ACK response (OK/NACK) for per-file verification
+- Entire file retransmission on CRC mismatch
 
 WiFi AP Configuration:
   SSID:     ClipAP_XXXX  (XXXX = last 4 hex digits of chip ID)
@@ -14,9 +15,9 @@ WiFi AP Configuration:
   IP:       192.168.4.1
   UDP Port: 8089
 
-Frame Types (v2):
+Frame Types:
   DATA          = 0x01   Server→Client
-  ACK           = 0x02   Client→Server
+  FILE_ACK      = 0x03   Client→Server
   FILE_START    = 0x10   Server→Client
   FILE_END      = 0x11   Server→Client
   TRANSFER_DONE = 0x12   Server→Client
@@ -38,9 +39,9 @@ import time
 import binascii
 from pathlib import Path
 
-# Frame types (CLIP UDP Transfer Protocol v2)
+# Frame types (CLIP UDP Transfer Protocol)
 UDP_FRAME_DATA          = 0x01
-UDP_FRAME_ACK           = 0x02
+UDP_FRAME_FILE_ACK      = 0x03
 UDP_FRAME_FILE_START    = 0x10
 UDP_FRAME_FILE_END      = 0x11
 UDP_FRAME_TRANSFER_DONE = 0x12
@@ -49,12 +50,9 @@ UDP_FRAME_HEARTBEAT     = 0x30
 
 # Frame sizes
 UDP_DATA_HEADER_SIZE = 9   # type(1) + seq(2) + len(2) + crc32(4)
-UDP_ACK_FRAME_SIZE   = 5   # type(1) + ack_seq(2) + window(1) + bitmap(1)
 
 # Protocol config
-WINDOW_SIZE = 32
 HEARTBEAT_INTERVAL_S = 5.0
-CONNECTION_TIMEOUT_S = 30.0
 DEFAULT_HOST = "192.168.4.1"
 DEFAULT_PORT = 8089
 
@@ -64,10 +62,7 @@ DEFAULT_PORT = 8089
 # ============================================================================
 
 def ieee_crc32(data: bytes) -> int:
-    """IEEE CRC32 matching Zephyr crc32_ieee_update(0, data, len).
-
-    Equivalent to: binascii.crc32(data)
-    """
+    """IEEE CRC32 matching Zephyr crc32_ieee_update(0, data, len)."""
     return binascii.crc32(data) & 0xFFFFFFFF
 
 
@@ -229,7 +224,7 @@ def _fmt_bytes(n):
 
 
 # ============================================================================
-# UDP Sync Client (Protocol v2)
+# UDP Sync Client
 # ============================================================================
 
 class UDPSync:
@@ -241,7 +236,6 @@ class UDPSync:
         self.device_name = "Clip"
         self.bytes_received = 0
         self.last_activity_time = time.time()
-        self.window_size = WINDOW_SIZE
 
     def connect(self):
         try:
@@ -275,18 +269,14 @@ class UDPSync:
             print(f"  Recv error: {e}")
             return None
 
-    def _send_ack(self, ack_seq, window, bitmap):
-        """Send ACK frame: [type(1)][ack_seq(2)][window(1)][bitmap(1)]"""
-        ack = struct.pack('<BBBBB',
-                          UDP_FRAME_ACK,
-                          ack_seq & 0xFF,
-                          (ack_seq >> 8) & 0xFF,
-                          window & 0xFF,
-                          bitmap & 0xFF)
+    def _send_file_ack(self, ok: bool):
+        """Send FILE_ACK frame: [type(1)][result(1)]"""
+        result = 0x00 if ok else 0x01
+        ack = struct.pack('<BB', UDP_FRAME_FILE_ACK, result)
         try:
             self.sock.sendto(ack, (self.host, self.port))
         except Exception as e:
-            print(f"  ACK send error: {e}")
+            print(f"  FILE_ACK send error: {e}")
 
     def _send_heartbeat(self):
         ts = int(time.time() * 1000) & 0xFFFFFFFF
@@ -314,7 +304,7 @@ class UDPSync:
                         return json.loads(response)
                     except json.JSONDecodeError:
                         return {"ok": True, "raw": response}
-            # Ignore other frames (ACKs, heartbeats, etc.)
+            # Ignore other frames (heartbeats, data, etc.)
         return {"ok": False, "error": "No response"}
 
     def list_sessions(self):
@@ -349,7 +339,6 @@ class UDPSync:
         current_name = None
         current_data = bytearray()
         current_size = 0
-        expect_seq = 0
         files_received = 0
         frame_count = 0
         last_progress_time = time.time()
@@ -370,7 +359,9 @@ class UDPSync:
                 if data is None:
                     elapsed = time.time() - last_progress_time
                     if elapsed > 30:
-                        print(f"\n  Timeout after {elapsed:.0f}s")
+                        print(f"\n  Timeout after {elapsed:.0f}s (recv {frame_count} frames, {len(current_data) if current_data else 0} bytes)")
+                    elif elapsed > 3 and frame_count > 0:
+                        print(f"\n  No data for {elapsed:.1f}s (recv={frame_count} frames, {len(current_data) if current_data else 0}/{current_size} bytes)")
                         return False
                     continue
 
@@ -390,10 +381,6 @@ class UDPSync:
                 if frame_type == UDP_FRAME_HEARTBEAT:
                     continue
 
-                if frame_type == UDP_FRAME_ACK:
-                    # Server→client ACK (shouldn't happen, but ignore)
-                    continue
-
                 # ---- FILE_START ----
                 if frame_type == UDP_FRAME_FILE_START:
                     if len(data) < 3:
@@ -409,11 +396,8 @@ class UDPSync:
                     current_name = filename
                     current_size = file_size
                     current_data = bytearray()
-                    expect_seq = 0
                     file_crc = 0
 
-                    # ACK FILE_START
-                    self._send_ack(0, self.window_size, 0)
                     print(f"  <- {filename} ({_fmt_bytes(file_size)})", end="", flush=True)
                     last_progress_time = time.time()
                     continue
@@ -431,41 +415,21 @@ class UDPSync:
 
                     payload = data[UDP_DATA_HEADER_SIZE:UDP_DATA_HEADER_SIZE + data_len]
 
-                    # Per-frame CRC verification
+                    # Per-frame CRC verification (corruption detection only)
                     calc_crc = ieee_crc32(payload)
                     if calc_crc != recv_crc:
-                        # CRC mismatch — discard frame, don't ACK, wait for retransmit
-                        print("!", end="", flush=True)
+                        print(f"X(seq={seq} crc err) ", end="", flush=True)
                         continue
 
-                    # Build ACK bitmap: track up to 8 frames ahead of expect_seq
-                    bitmap = 0
-                    if seq == expect_seq:
-                        # In-order frame
-                        current_data.extend(payload)
-                        file_crc = binascii.crc32(payload, file_crc) & 0xFFFFFFFF
-                        expect_seq += 1
-                        last_progress_time = time.time()
-
-                        # Progress indicator
-                        if len(current_data) % (64 * 1024) < data_len:
-                            print(".", end="", flush=True)
-                    elif seq > expect_seq and seq < expect_seq + 8:
-                        # Out-of-order but within bitmap range — buffer it
-                        # For simplicity, just set the bitmap bit
-                        # (full reordering buffer would require more complexity)
-                        offset = seq - expect_seq
-                        bitmap |= (1 << offset)
-                        # Store out-of-order data
-                        # Extend current_data with zeros as placeholder if needed
-                        # This is a simplified implementation — retransmit fills gaps
-                    else:
-                        # Old or too-far-ahead frame — ignore
-                        bitmap = 0
-
-                    # Send ACK with cumulative seq and bitmap
-                    self._send_ack(expect_seq, self.window_size, bitmap)
+                    # Accumulate data and running file CRC
+                    current_data.extend(payload)
+                    file_crc = binascii.crc32(payload, file_crc) & 0xFFFFFFFF
                     frame_count += 1
+                    last_progress_time = time.time()
+
+                    # Progress: every 64KB or first 5 frames
+                    if frame_count < 5 or len(current_data) % (64 * 1024) < data_len:
+                        print(f".", end="", flush=True)
                     continue
 
                 # ---- FILE_END ----
@@ -475,24 +439,30 @@ class UDPSync:
                         continue
                     server_crc = struct.unpack("<I", data[1:5])[0]
 
-                    # Compare full-file CRC
+                    # Verify full-file CRC
                     crc_ok = (file_crc == server_crc)
-                    status_str = "OK" if crc_ok else f"MISMATCH (local=0x{file_crc:08x}, server=0x{server_crc:08x})"
-                    print(f"\n  FILE_END: CRC {status_str}")
 
-                    # ACK FILE_END
-                    self._send_ack(expect_seq, self.window_size, 0)
+                    if crc_ok:
+                        status_str = "OK"
+                        print(f"\n  FILE_END: CRC {status_str}")
+                        self._send_file_ack(True)
 
-                    if current_name and current_data:
-                        out_file = session_dir / current_name
-                        out_file.write_bytes(bytes(current_data))
-                        print(f"  Saved {current_name} ({_fmt_bytes(len(current_data))})")
-                        if current_name.endswith('.opus'):
-                            downloaded_files.append((current_name, session_dir / current_name))
-                        files_received += 1
+                        if current_name and current_data:
+                            out_file = session_dir / current_name
+                            out_file.write_bytes(bytes(current_data))
+                            print(f"  Saved {current_name} ({_fmt_bytes(len(current_data))})")
+                            if current_name.endswith('.opus'):
+                                downloaded_files.append((current_name, session_dir / current_name))
+                            files_received += 1
+                    else:
+                        status_str = f"MISMATCH (local=0x{file_crc:08x}, server=0x{server_crc:08x})"
+                        print(f"\n  FILE_END: CRC {status_str}")
+                        print(f"  Requesting retransmit...")
+                        self._send_file_ack(False)
+                        # Clear state — next FILE_START will begin retransmit
+                        current_name = None
+                        current_data = bytearray()
 
-                    current_name = None
-                    current_data = bytearray()
                     last_progress_time = time.time()
                     continue
 
@@ -545,7 +515,7 @@ class UDPSync:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="UDP Sync Tool for Clip (Protocol v2)")
+    parser = argparse.ArgumentParser(description="UDP Sync Tool for Clip")
     parser.add_argument("--host", default=DEFAULT_HOST)
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
     parser.add_argument("--timeout", type=float, default=30.0)

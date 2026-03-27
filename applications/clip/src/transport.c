@@ -11,11 +11,8 @@
 
 LOG_MODULE_REGISTER(transport, CONFIG_CLIP_LOG_LEVEL);
 
-/* Maximum number of transports */
-#define TRANSPORT_MAX 3
-
 /* Transport registry */
-static struct transport *transports[TRANSPORT_MAX];
+static struct transport *transports[TRANSPORT_TYPE_MAX];
 static struct k_mutex transport_lock;
 
 /* Initialize transport layer */
@@ -23,7 +20,7 @@ int transport_init(void)
 {
     k_mutex_init(&transport_lock);
 
-    for (int i = 0; i < TRANSPORT_MAX; i++) {
+    for (int i = 0; i < TRANSPORT_TYPE_MAX; i++) {
         transports[i] = NULL;
     }
 
@@ -34,7 +31,7 @@ int transport_init(void)
 /* Register transport */
 int transport_register(struct transport *tp)
 {
-    if (!tp || tp->type >= TRANSPORT_MAX) {
+    if (!tp || tp->type >= TRANSPORT_TYPE_MAX) {
         return -EINVAL;
     }
 
@@ -49,14 +46,14 @@ int transport_register(struct transport *tp)
     transports[tp->type] = tp;
     k_mutex_unlock(&transport_lock);
 
-    LOG_INF("Transport %d registered (total %d)", tp->type, TRANSPORT_MAX);
+    LOG_INF("Transport %d registered (total %d)", tp->type, TRANSPORT_TYPE_MAX);
     return 0;
 }
 
 /* Unregister transport */
 int transport_unregister(uint8_t type)
 {
-    if (type >= TRANSPORT_MAX) {
+    if (type >= TRANSPORT_TYPE_MAX) {
         return -EINVAL;
     }
 
@@ -71,7 +68,7 @@ int transport_unregister(uint8_t type)
 /* Get transport by type */
 struct transport *transport_get(uint8_t type)
 {
-    if (type >= TRANSPORT_MAX) {
+    if (type >= TRANSPORT_TYPE_MAX) {
         return NULL;
     }
 
@@ -88,7 +85,7 @@ struct transport *transport_get_active(void)
     k_mutex_lock(&transport_lock, K_FOREVER);
 
     /* Priority: UDP > BLE (UDP is better for large file transfers) */
-    for (int i = TRANSPORT_MAX - 1; i >= 0; i--) {
+    for (int i = TRANSPORT_TYPE_MAX - 1; i >= 0; i--) {
         struct transport *tp = transports[i];
         if (tp && tp->ready && tp->ops && tp->ops->is_connected()) {
             k_mutex_unlock(&transport_lock);
@@ -108,8 +105,8 @@ int transport_send_to(uint8_t type, const uint8_t *data, uint16_t len)
         return -EINVAL;
     }
 
-    if (type >= TRANSPORT_MAX) {
-        LOG_ERR("transport_send_to: type %d >= TRANSPORT_MAX %d", type, TRANSPORT_MAX);
+    if (type >= TRANSPORT_TYPE_MAX) {
+        LOG_ERR("transport_send_to: type %d >= TRANSPORT_TYPE_MAX %d", type, TRANSPORT_TYPE_MAX);
         return -EINVAL;
     }
 

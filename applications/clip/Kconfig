@@ -54,12 +54,16 @@ config CLIP_DEFAULT_CONTRAST
 # Button Configuration
 # =============================================================================
 
-config CLIP_BUTTON_WORK_STACK_SIZE
-	int "Button work queue stack size"
+# =============================================================================
+# Event Dispatcher Configuration
+# =============================================================================
+
+config CLIP_EVENT_WORK_STACK_SIZE
+	int "Event dispatcher work queue stack size"
 	default 2048
 
-config CLIP_BUTTON_WORK_PRIORITY
-	int "Button work queue priority"
+config CLIP_EVENT_WORK_PRIORITY
+	int "Event dispatcher work queue priority"
 	default 5
 
 # =============================================================================
@@ -170,9 +174,10 @@ config CLIP_TRANSFER_THREAD_PRIORITY
 
 config CLIP_TRANSFER_CHUNK_SIZE
 	int "Transfer chunk size (bytes)"
-	default 1024
+	default 4096
 	help
-	  Data chunk size for file transfer. 1024 bytes is optimal for UDP.
+	  Data chunk size for file transfer. Transport layer slices into
+	  multiple frames as needed (UDP max frame is 1024 bytes).
 	  BLE transport will split into multiple notifications automatically.
 
 # =============================================================================
@@ -202,25 +207,5 @@ config CLIP_UDP_HEARTBEAT_INTERVAL_MS
 config CLIP_UDP_CONNECTION_TIMEOUT_MS
 	int "UDP connection timeout (ms)"
 	default 30000
-
-config CLIP_UDP_INITIAL_WINDOW_SIZE
-	int "UDP initial flow control window size"
-	default 32
-
-config CLIP_UDP_MAX_WINDOW_SIZE
-	int "UDP maximum flow control window size"
-	default 256
-
-config CLIP_UDP_ACK_TIMEOUT_MS
-	int "UDP ACK timeout (ms)"
-	default 500
-
-config CLIP_UDP_MAX_RETRIES
-	int "UDP maximum retry attempts"
-	default 10
-
-config CLIP_UDP_WINDOW_ACK_INTERVAL_MS
-	int "UDP window ACK interval (ms)"
-	default 1000
 
 endif # CLIP

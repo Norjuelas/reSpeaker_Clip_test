@@ -12,13 +12,13 @@
 #include <sys/socket.h>
 
 /**
- * @brief CLIP UDP Transfer Protocol v2 Frame Types
+ * @brief CLIP UDP Transfer Protocol Frame Types
  *
- * Efficient sliding-window protocol with per-frame CRC32,
- * selective ACK, and flow control for reliable UDP file transfer.
+ * Fire-and-forget DATA frames with per-file CRC32 verification.
+ * Minimal RAM footprint — no frame buffering required.
  */
 #define UDP_FRAME_DATA          0x01  /* Server→Client: file data with seq + CRC */
-#define UDP_FRAME_ACK           0x02  /* Client→Server: cumulative ACK + bitmap + window */
+#define UDP_FRAME_FILE_ACK      0x03  /* Client→Server: file verification result (OK/NACK) */
 #define UDP_FRAME_FILE_START    0x10  /* Server→Client: begin file transfer */
 #define UDP_FRAME_FILE_END      0x11  /* Server→Client: end file (full-file CRC32) */
 #define UDP_FRAME_TRANSFER_DONE 0x12  /* Server→Client: all files complete */
@@ -29,7 +29,7 @@
  * @brief Frame header sizes
  */
 #define UDP_DATA_HEADER_SIZE    9   /* type(1) + seq(2) + len(2) + crc32(4) */
-#define UDP_ACK_FRAME_SIZE      5   /* type(1) + ack_seq(2) + window(1) + bitmap(1) */
+#define UDP_FILE_ACK_FRAME_SIZE 2   /* type(1) + result(1) */
 #define UDP_HEARTBEAT_SIZE      5   /* type(1) + timestamp(4) */
 
 /**
@@ -37,7 +37,7 @@
  */
 #define UDP_MAX_DATA_PER_FRAME  1024 /* Max data payload per UDP frame */
 #define UDP_SEQ_MODULO          4096 /* Sequence number space (12-bit effective) */
-#define UDP_MAX_RETRIES         5    /* Max retransmissions per frame before abort */
+#define UDP_MAX_RETRIES         5    /* Max file-level retransmissions before abort */
 
 /**
  * @brief DATA frame format (Server→Client)
@@ -52,14 +52,14 @@
  */
 
 /**
- * @brief ACK frame format (Client→Server)
+ * @brief FILE_ACK frame format (Client→Server)
  *
- * [type: 1][ack_seq_lo: 1][ack_seq_hi: 1][window: 1][bitmap: 1]
+ * [type: 1][result: 1]
  *
- * - type: UDP_FRAME_ACK (0x02)
- * - ack_seq: uint16 LE, cumulative ACK (all seq < ack_seq received)
- * - window: uint8, available receive window in frames (0 = pause)
- * - bitmap: uint8, bit i = 1 → frame (ack_seq + i) received
+ * - type: UDP_FRAME_FILE_ACK (0x03)
+ * - result: 0x00 = CRC OK, 0x01 = CRC mismatch (request retransmit)
+ *
+ * Sent by client after receiving FILE_END and verifying full-file CRC32.
  */
 
 /**
@@ -114,9 +114,10 @@ int transport_udp_init(void);
 int transport_udp_send(const uint8_t *data, uint16_t len);
 
 /**
- * @brief Send file data through UDP (with sliding window + CRC)
+ * @brief Send file data through UDP (fire-and-forget with pacing)
  *
- * Blocks if send window is full. Automatically handles retransmission.
+ * Sends DATA frames without waiting for per-frame ACK.
+ * Slices data > UDP_MAX_DATA_PER_FRAME into multiple frames.
  *
  * @param data Data to send
  * @param len Data length
@@ -125,7 +126,7 @@ int transport_udp_send(const uint8_t *data, uint16_t len);
 int transport_udp_send_file_data(const uint8_t *data, uint16_t len);
 
 /**
- * @brief Send file start frame (reliable, stop-and-wait)
+ * @brief Send file start frame (fire-and-forget)
  *
  * @param filename Filename
  * @param file_size File size in bytes
@@ -134,14 +135,17 @@ int transport_udp_send_file_data(const uint8_t *data, uint16_t len);
 int transport_udp_send_file_start(const char *filename, uint32_t file_size);
 
 /**
- * @brief Send file end frame with full-file CRC32 (reliable, stop-and-wait)
+ * @brief Send file end frame with full-file CRC32, wait for FILE_ACK
+ *
+ * Returns 0 on CRC OK, -EAGAIN if client requests retransmit,
+ * -ETIMEDOUT if no response received.
  *
  * @return 0 on success, negative error code on failure
  */
 int transport_udp_send_file_end(void);
 
 /**
- * @brief Send transfer done frame (reliable, stop-and-wait)
+ * @brief Send transfer done frame (fire-and-forget)
  *
  * @param session_id Session ID
  * @param file_count Number of files transferred
@@ -174,16 +178,13 @@ void transport_udp_update_active(bool active);
 void transport_udp_update_client_addr(const struct sockaddr *addr, socklen_t len);
 
 /**
- * @brief Notify ACK received (called from wifi_udp server thread)
+ * @brief Notify FILE_ACK received (called from wifi_udp server thread)
  *
- * Updates sliding window, releases flow control semaphore,
- * and triggers retransmission if needed.
+ * Signals the send thread that file verification result has arrived.
  *
- * @param ack_seq Cumulative ACK sequence number
- * @param window Available receive window size (frames)
- * @param bitmap Selective ACK bitmap (8 bits)
+ * @param result 0x00 = CRC OK, 0x01 = CRC mismatch
  */
-void transport_udp_notify_ack(uint16_t ack_seq, uint8_t window, uint8_t bitmap);
+void transport_udp_notify_file_ack(uint8_t result);
 
 /**
  * @brief Get UDP transport pointer for registration

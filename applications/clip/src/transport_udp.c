@@ -3,13 +3,11 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  *
- * UDP Transport v2 — Sliding window with selective ACK, per-frame CRC32,
- * automatic retransmission, and flow control.
+ * UDP Transport — Fire-and-forget DATA frames with per-file CRC32 verification.
  *
- * Protocol: see docs/udp_protocol.md (CLIP UDP Transfer Protocol v2)
+ * Protocol: see docs/udp_protocol.md
  *
- * Memory usage: ~17KB for send window buffer (32 frames × ~520 bytes each).
- * Retransmission reads from this buffer — no SD card re-read needed.
+ * Memory usage: ~100 bytes static state. No frame buffering.
  */
 
 #include <zephyr/kernel.h>
@@ -28,22 +26,10 @@ LOG_MODULE_REGISTER(transport_udp, CONFIG_CLIP_LOG_LEVEL);
 /* Shared socket from wifi_udp.c */
 extern int server_sock;
 
-/* ---- Sliding window configuration (from Kconfig) ---- */
-#define WINDOW_SIZE          CONFIG_CLIP_UDP_INITIAL_WINDOW_SIZE
+/* ---- Configuration ---- */
 #define MAX_FRAME_SIZE       (UDP_DATA_HEADER_SIZE + UDP_MAX_DATA_PER_FRAME)
-#define RETRANSMIT_INTERVAL  100   /* ms between retransmit checks */
-#define RETRANSMIT_TIMEOUT   200   /* ms before a frame is considered lost */
-#define ACK_WAIT_TIMEOUT     2000  /* ms to wait for control-frame ACK */
-
-/* ---- Send window slot ---- */
-struct frame_slot {
-    uint16_t seq;
-    uint16_t len;           /* total frame length (header + data) */
-    uint8_t frame[MAX_FRAME_SIZE];
-    bool valid;
-    int retries;
-    int64_t last_sent;      /* uptime ms when last sent */
-};
+#define FILE_ACK_TIMEOUT     2000  /* ms to wait for FILE_ACK after FILE_END */
+#define FILE_END_RETRIES     3     /* max FILE_END retransmissions before abort */
 
 /* ---- State ---- */
 static struct k_mutex udp_mutex;
@@ -51,21 +37,12 @@ static volatile bool udp_ready;
 static struct sockaddr_in udp_client_addr;
 static socklen_t udp_client_len;
 
-/* Sliding window */
-static struct frame_slot send_window[WINDOW_SIZE];
-static uint16_t send_base;        /* oldest unACKed seq */
-static uint16_t next_seq;         /* next seq to assign */
-static uint8_t peer_window;       /* receiver's advertised window */
+/* Sequence tracking (for frame identification, not ACK) */
+static uint16_t next_seq;
 
-/* Flow control: semaphore counts available window slots */
-static struct k_sem window_sem;
-
-/* Control frame ACK: used by wait_for_control_ack via notify_ack */
-static struct k_sem control_ack_sem;
-static volatile uint16_t control_ack_expected;
-
-/* Retransmission timer */
-static struct k_work_delayable retransmit_work;
+/* FILE_ACK signaling: recv thread notifies via notify_file_ack() */
+static struct k_sem file_ack_sem;
+static volatile int8_t file_ack_result;  /* -1=none, 0=OK, 1=NACK */
 
 /* Heartbeat */
 static int64_t last_activity_time;
@@ -73,9 +50,6 @@ static struct k_timer heartbeat_timer;
 static struct k_work heartbeat_work;
 
 /* Per-file transfer state */
-static char current_filename[64];
-static uint32_t current_file_size;
-static uint32_t current_bytes_sent;
 static uint32_t current_file_crc;
 
 /* ---- Forward declarations ---- */
@@ -86,12 +60,9 @@ static int udp_send_file_end_impl(const char *filename);
 static int udp_send_transfer_done_impl(const char *session_id, uint32_t file_count);
 static bool udp_is_connected(void);
 static void *udp_get_conn(void);
-static void retransmit_handler(struct k_work *work);
 static void send_heartbeat(struct k_work *work);
 static void update_activity(void);
 static int raw_sendto(const void *buf, size_t len);
-static int wait_for_control_ack(uint16_t expected_seq);
-static uint16_t seq_sub(uint16_t a, uint16_t b);
 
 /* Transport operations (compatible with transport.h) */
 static const struct transport_ops udp_ops = {
@@ -122,12 +93,6 @@ static struct transport udp_transport = {
 static inline uint32_t compute_crc32(const uint8_t *data, size_t len)
 {
     return crc32_ieee_update(0, data, len);
-}
-
-/** Sequence number arithmetic (handles wrap-around in 16-bit space) */
-static inline uint16_t seq_sub(uint16_t a, uint16_t b)
-{
-    return (a - b) & (UDP_SEQ_MODULO - 1);
 }
 
 static void update_activity(void)
@@ -163,33 +128,27 @@ static int raw_sendto(const void *buf, size_t len)
 }
 
 /* ========================================================================== */
-/* Control frame ACK (stop-and-wait for FILE_START/FILE_END/TRANSFER_DONE)    */
+/* FILE_ACK waiting                                                            */
 /* ========================================================================== */
 
 /**
- * Wait for ACK that acknowledges up to expected_seq.
- * Does NOT read from the socket — waits for notify_ack() to signal.
- * Called from the transfer thread (not the recv thread).
+ * Wait for FILE_ACK from client after sending FILE_END.
+ * Does NOT read from the socket — waits for notify_file_ack() to signal.
  */
-static int wait_for_control_ack(uint16_t expected_seq)
+static int wait_for_file_ack(int timeout_ms)
 {
-    control_ack_expected = expected_seq;
+    /* Reset state before waiting */
+    file_ack_result = -1;
+    k_sem_reset(&file_ack_sem);
 
-    int total_ms = 0;
-    while (total_ms < ACK_WAIT_TIMEOUT) {
-        if (k_sem_take(&control_ack_sem, K_MSEC(500)) == 0) {
-            return 0;
-        }
-        if (!udp_ready) {
-            return -ENOTCONN;
-        }
-        total_ms += 500;
-        LOG_WRN("Waiting for control ACK (seq %d, %dms/%dms)",
-                expected_seq, total_ms, ACK_WAIT_TIMEOUT);
+    if (k_sem_take(&file_ack_sem, K_MSEC(timeout_ms)) != 0) {
+        return -ETIMEDOUT;
     }
 
-    LOG_ERR("Control ACK timeout for seq %d", expected_seq);
-    return -ETIMEDOUT;
+    if (file_ack_result == 0) {
+        return 0;  /* CRC OK */
+    }
+    return -EAGAIN;  /* NACK */
 }
 
 /* ========================================================================== */
@@ -266,61 +225,6 @@ static int build_transfer_done_frame(uint8_t *buf, const char *session_id, uint3
 }
 
 /* ========================================================================== */
-/* Retransmission                                                              */
-/* ========================================================================== */
-
-static void retransmit_handler(struct k_work *work)
-{
-    ARG_UNUSED(work);
-    int64_t now = k_uptime_get();
-
-    if (!udp_ready) {
-        return;
-    }
-
-    k_mutex_lock(&udp_mutex, K_FOREVER);
-
-    for (int i = 0; i < WINDOW_SIZE; i++) {
-        struct frame_slot *slot = &send_window[i];
-        if (!slot->valid) {
-            continue;
-        }
-
-        /* Check if this slot is within the current window */
-        uint16_t dist = seq_sub(slot->seq, send_base);
-        if (dist >= WINDOW_SIZE) {
-            /* Outside window — already ACKed or stale */
-            slot->valid = false;
-            continue;
-        }
-
-        /* Check if frame needs retransmission */
-        if (now - slot->last_sent >= RETRANSMIT_TIMEOUT) {
-            if (slot->retries >= UDP_MAX_RETRIES) {
-                LOG_ERR("Max retries (%d) for seq %d, aborting", UDP_MAX_RETRIES, slot->seq);
-                k_mutex_unlock(&udp_mutex);
-                /* TODO: signal transfer error to upper layer */
-                return;
-            }
-
-            slot->retries++;
-            slot->last_sent = now;
-            LOG_WRN("Retransmit seq %d (retry %d/%d)", slot->seq, slot->retries, UDP_MAX_RETRIES);
-
-            /* Send directly (already holding mutex) */
-            zsock_sendto(server_sock, slot->frame, slot->len, 0,
-                         (struct sockaddr *)&udp_client_addr,
-                         sizeof(udp_client_addr));
-        }
-    }
-
-    k_mutex_unlock(&udp_mutex);
-
-    /* Schedule next check */
-    k_work_schedule(&retransmit_work, K_MSEC(RETRANSMIT_INTERVAL));
-}
-
-/* ========================================================================== */
 /* Heartbeat                                                                   */
 /* ========================================================================== */
 
@@ -351,55 +255,45 @@ static int udp_send(const uint8_t *data, uint16_t len)
     return raw_sendto(data, len);
 }
 
+/**
+ * Fire-and-forget DATA send with pacing.
+ *
+ * Sends all data as frames without waiting for per-frame ACK.
+ * Slices data > UDP_MAX_DATA_PER_FRAME into multiple frames.
+ * Pacing delay between frames prevents WiFi TX queue overflow.
+ */
 static int udp_send_file_data_impl(const uint8_t *data, uint16_t len)
 {
     if (!udp_ready) {
         return -ENOTCONN;
     }
 
-    /* Wait for window availability */
-    while (seq_sub(next_seq, send_base) >= peer_window || peer_window == 0) {
-        if (k_sem_take(&window_sem, K_MSEC(50)) != 0) {
-            /* Check if still connected */
+    uint16_t offset = 0;
+    while (offset < len) {
+        uint16_t data_len = len - offset;
+        if (data_len > UDP_MAX_DATA_PER_FRAME) {
+            data_len = UDP_MAX_DATA_PER_FRAME;
+        }
+
+        uint8_t frame[MAX_FRAME_SIZE];
+        uint16_t seq = next_seq;
+        int frame_len = build_data_frame(frame, seq, data + offset, data_len);
+
+        int ret = raw_sendto(frame, frame_len);
+        if (ret < 0) {
             if (!udp_ready) {
                 return -ENOTCONN;
             }
-            continue;
+            /* Transient send error — skip this frame, per-file CRC will catch it */
+            LOG_WRN("DATA seq %d send error, continuing", seq);
         }
+
+        next_seq = (seq + 1) & (UDP_SEQ_MODULO - 1);
+        current_file_crc = crc32_ieee_update(current_file_crc, data + offset, data_len);
+        offset += data_len;
     }
 
-    uint8_t frame[MAX_FRAME_SIZE];
-    uint16_t data_len = len;
-    if (data_len > UDP_MAX_DATA_PER_FRAME) {
-        data_len = UDP_MAX_DATA_PER_FRAME;
-    }
-
-    int frame_len = build_data_frame(frame, next_seq, data, data_len);
-
-    /* Store in send window buffer */
-    int slot_idx = next_seq % WINDOW_SIZE;
-    struct frame_slot *slot = &send_window[slot_idx];
-    slot->seq = next_seq;
-    slot->len = frame_len;
-    memcpy(slot->frame, frame, frame_len);
-    slot->valid = true;
-    slot->retries = 0;
-    slot->last_sent = k_uptime_get();
-
-    next_seq = (next_seq + 1) & (UDP_SEQ_MODULO - 1);
-
-    /* Send */
-    int ret = raw_sendto(frame, frame_len);
-    if (ret < 0) {
-        slot->valid = false;
-        return ret;
-    }
-
-    /* Update per-file CRC */
-    current_file_crc = crc32_ieee_update(current_file_crc, data, data_len);
-    current_bytes_sent += data_len;
-
-    return data_len;
+    return len;
 }
 
 static int udp_send_file_start_impl(const char *session_id, const char *filename, uint32_t size)
@@ -412,23 +306,21 @@ static int udp_send_file_start_impl(const char *session_id, const char *filename
 
     /* Reset file state */
     transport_udp_reset_file_state();
-    strncpy(current_filename, filename, sizeof(current_filename) - 1);
-    current_filename[sizeof(current_filename) - 1] = '\0';
-    current_file_size = size;
 
-    /* Build and send frame */
+    /* Build and send frame (fire-and-forget) */
     uint8_t frame[128];
     int frame_len = build_file_start_frame(frame, filename, size);
-    int ret = raw_sendto(frame, frame_len);
-    if (ret < 0) {
-        return ret;
-    }
-
-    /* Wait for ACK */
-    ret = wait_for_control_ack(send_base);
-    return (ret == 0) ? 0 : -1;
+    return raw_sendto(frame, frame_len);
 }
 
+/**
+ * Send FILE_END and wait for FILE_ACK from client.
+ *
+ * Returns:
+ *   0        — client confirmed CRC OK
+ *   -EAGAIN  — client reported CRC mismatch (NACK), caller should retransmit file
+ *   -ETIMEDOUT — no FILE_ACK received after retries
+ */
 static int udp_send_file_end_impl(const char *filename)
 {
     ARG_UNUSED(filename);
@@ -437,34 +329,37 @@ static int udp_send_file_end_impl(const char *filename)
         return -ENOTCONN;
     }
 
-    /* Wait for all outstanding DATA frames to be ACKed before sending FILE_END */
-    while (seq_sub(next_seq, send_base) > 0) {
-        if (k_sem_take(&window_sem, K_MSEC(100)) != 0) {
+    uint32_t final_crc = current_file_crc;
+
+    /* Build FILE_END frame */
+    uint8_t frame[8];
+    int frame_len = build_file_end_frame(frame, final_crc);
+
+    /* Retry loop: send FILE_END and wait for FILE_ACK */
+    for (int retry = 0; retry < FILE_END_RETRIES; retry++) {
+        int ret = raw_sendto(frame, frame_len);
+        if (ret < 0) {
             if (!udp_ready) {
                 return -ENOTCONN;
             }
+            k_msleep(100);
             continue;
         }
+
+        int ack_ret = wait_for_file_ack(FILE_ACK_TIMEOUT);
+        if (ack_ret == 0) {
+            return 0;  /* CRC OK */
+        }
+        if (ack_ret == -EAGAIN) {
+            LOG_WRN("FILE_ACK NACK (retry %d/%d)", retry + 1, FILE_END_RETRIES);
+            return -EAGAIN;  /* Let caller retransmit entire file */
+        }
+        /* Timeout — retry FILE_END */
+        LOG_WRN("FILE_ACK timeout (retry %d/%d)", retry + 1, FILE_END_RETRIES);
     }
 
-    /* Finalize CRC — current_file_crc already matches binascii.crc32(full_data)
-     * because crc32_ieee_update handles ~crc at both start and end,
-     * so accumulation across chunks is correct. */
-    uint32_t final_crc = current_file_crc;
-
-    /* Build and send frame */
-    uint8_t frame[8];
-    int frame_len = build_file_end_frame(frame, final_crc);
-    int ret = raw_sendto(frame, frame_len);
-    if (ret < 0) {
-        return ret;
-    }
-
-    ret = wait_for_control_ack(next_seq);
-    if (ret == 0) {
-        transport_udp_reset_file_state();
-    }
-    return (ret == 0) ? 0 : -1;
+    LOG_ERR("FILE_ACK timeout after %d retries", FILE_END_RETRIES);
+    return -ETIMEDOUT;
 }
 
 static int udp_send_transfer_done_impl(const char *session_id, uint32_t file_count)
@@ -475,13 +370,7 @@ static int udp_send_transfer_done_impl(const char *session_id, uint32_t file_cou
 
     uint8_t frame[128];
     int frame_len = build_transfer_done_frame(frame, session_id, file_count);
-    int ret = raw_sendto(frame, frame_len);
-    if (ret < 0) {
-        return ret;
-    }
-
-    ret = wait_for_control_ack(next_seq);
-    return (ret == 0) ? 0 : -1;
+    return raw_sendto(frame, frame_len);
 }
 
 static bool udp_is_connected(void)
@@ -513,17 +402,10 @@ int transport_udp_init(void)
     udp_client_len = 0;
     k_mutex_init(&udp_mutex);
 
-    /* Sliding window */
-    memset(send_window, 0, sizeof(send_window));
-    send_base = 0;
+    /* FILE_ACK signaling */
     next_seq = 0;
-    peer_window = CONFIG_CLIP_UDP_INITIAL_WINDOW_SIZE;
-    k_sem_init(&window_sem, 0, WINDOW_SIZE);
-    k_sem_init(&control_ack_sem, 0, 1);
-    control_ack_expected = 0;
-
-    /* Retransmit */
-    k_work_init_delayable(&retransmit_work, retransmit_handler);
+    file_ack_result = -1;
+    k_sem_init(&file_ack_sem, 0, 1);
 
     /* Heartbeat */
     k_timer_init(&heartbeat_timer, NULL, NULL);
@@ -531,29 +413,18 @@ int transport_udp_init(void)
     last_activity_time = k_uptime_get();
 
     /* File state */
-    memset(current_filename, 0, sizeof(current_filename));
-    current_file_size = 0;
-    current_bytes_sent = 0;
     current_file_crc = 0;
 
-    LOG_INF("UDP transport v2 initialized");
+    LOG_INF("UDP transport initialized (fire-and-forget, per-file CRC)");
     return 0;
 }
 
 void transport_udp_reset_file_state(void)
 {
-    /* Clear send window */
-    for (int i = 0; i < WINDOW_SIZE; i++) {
-        send_window[i].valid = false;
-    }
-    send_base = 0;
     next_seq = 0;
-    k_sem_reset(&window_sem);
+    file_ack_result = -1;
+    k_sem_reset(&file_ack_sem);
 
-    /* Reset file state */
-    current_filename[0] = '\0';
-    current_file_size = 0;
-    current_bytes_sent = 0;
     current_file_crc = 0;
 }
 
@@ -613,12 +484,9 @@ void transport_udp_update_active(bool active)
 
     if (!active) {
         transport_udp_reset_file_state();
-        peer_window = CONFIG_CLIP_UDP_INITIAL_WINDOW_SIZE;
-        k_work_cancel_delayable(&retransmit_work);
     } else {
-        /* Start heartbeat and retransmit when becoming active */
+        /* Start heartbeat when becoming active */
         k_timer_start(&heartbeat_timer, K_MSEC(CONFIG_CLIP_UDP_HEARTBEAT_INTERVAL_MS), K_NO_WAIT);
-        k_work_schedule(&retransmit_work, K_MSEC(RETRANSMIT_INTERVAL));
     }
     update_activity();
 }
@@ -634,57 +502,11 @@ void transport_udp_update_client_addr(const struct sockaddr *addr, socklen_t len
     }
 }
 
-void transport_udp_notify_ack(uint16_t ack_seq, uint8_t window, uint8_t bitmap)
+void transport_udp_notify_file_ack(uint8_t result)
 {
-    LOG_DBG("ACK: seq=%d, window=%d, bitmap=0x%02x", ack_seq, window, bitmap);
-
-    /* Update peer window */
-    peer_window = window;
     update_activity();
-
-    /* Signal control frame ACK waiters */
-    if (seq_sub(ack_seq, control_ack_expected) < (UDP_SEQ_MODULO / 2)) {
-        k_sem_give(&control_ack_sem);
-    }
-
-    /* Advance send_base using cumulative ACK */
-    if (seq_sub(ack_seq, send_base) > 0) {
-        uint16_t old_base = send_base;
-        send_base = ack_seq;
-
-        /* Release semaphore for newly available window slots */
-        uint16_t freed = seq_sub(send_base, old_base);
-        for (uint16_t i = 0; i < freed; i++) {
-            k_sem_give(&window_sem);
-        }
-
-        /* Invalidate ACKed slots */
-        for (int i = 0; i < WINDOW_SIZE; i++) {
-            struct frame_slot *slot = &send_window[i];
-            if (!slot->valid) {
-                continue;
-            }
-            if (seq_sub(ack_seq, slot->seq) > 0) {
-                slot->valid = false;
-            }
-        }
-    }
-
-    /* Process selective ACK bitmap */
-    if (bitmap != 0) {
-        for (int bit = 0; bit < 8; bit++) {
-            if (bitmap & (1 << bit)) {
-                uint16_t selective_seq = (ack_seq + bit) & (UDP_SEQ_MODULO - 1);
-                int slot_idx = selective_seq % WINDOW_SIZE;
-                struct frame_slot *slot = &send_window[slot_idx];
-                if (slot->valid && slot->seq == selective_seq) {
-                    slot->valid = false;
-                    /* If this fills a gap, advance send_base */
-                    /* (simplified: bitmap covers only +0 to +7 from ack_seq) */
-                }
-            }
-        }
-    }
+    file_ack_result = (result == 0x00) ? 0 : 1;
+    k_sem_give(&file_ack_sem);
 }
 
 struct transport *transport_udp_get(void)

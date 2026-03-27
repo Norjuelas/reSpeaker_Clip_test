@@ -14,6 +14,7 @@
 /* Transport Types */
 #define TRANSPORT_TYPE_BLE  0
 #define TRANSPORT_TYPE_UDP  1
+#define TRANSPORT_TYPE_MAX  2
 
 /* Transport Events */
 #define TRANSPORT_EVT_CONNECTED    0

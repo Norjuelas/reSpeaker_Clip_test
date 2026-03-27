@@ -14,6 +14,7 @@
 #include "transfer.h"
 #include "storage.h"
 #include "transport.h"
+#include "transport_udp.h"
 #include "clip.h"
 #include "ble.h"
 #include "audio.h"
@@ -56,7 +57,7 @@ static int transfer_next_file(void);
 static int transfer_send_chunk(void);
 static void transfer_cleanup(void);
 static void send_file_ready_event(const char *session_id, const char *filename, uint64_t size);
-static void send_file_complete_event(const char *filename);
+static int send_file_complete_event(const char *filename);
 static void send_transfer_complete_once(const char *session_id, int file_count);
 static void generate_filename(uint32_t file_num, char *filename);
 
@@ -529,16 +530,11 @@ static void transfer_thread_main(void *p1, void *p2, void *p3)
     transfer_thread_waiting = false;
 
     while (transfer_thread_running) {
-        LOG_DBG("Transfer loop: state=%d, file_open=%d",
-                 current_transfer.state, transfer_file_open);
-
         /* Check if paused */
         if (current_transfer.state == TRANSFER_STATE_PAUSED) {
-            LOG_DBG("Transfer paused, waiting for resume...");
             transfer_thread_waiting = true;
             k_sem_take(&transfer_trigger_sem, K_FOREVER);
             transfer_thread_waiting = false;
-            LOG_DBG("Transfer resumed");
             continue;
         }
 
@@ -551,7 +547,6 @@ process_next_file:
         if (current_transfer.state != TRANSFER_STATE_TRANSMITTING) {
             /* Not in transmitting state, wait for next transfer */
             if (current_transfer.state == TRANSFER_STATE_IDLE) {
-                LOG_DBG("Transfer thread: state=IDLE, waiting for signal...");
                 transfer_thread_waiting = true;
                 k_sem_take(&transfer_trigger_sem, K_FOREVER);
                 transfer_thread_waiting = false;
@@ -627,7 +622,7 @@ process_next_file:
             ret = transfer_send_chunk();
             if (ret != 0) {
                 if (ret == -EOF) {
-                    /* File complete */
+                    /* File complete — send FILE_END and wait for FILE_ACK */
                     int64_t elapsed_ms = k_uptime_get() - file_transfer_start_ms;
                     uint32_t rate_kbps = 0;
                     if (elapsed_ms > 0) {
@@ -642,11 +637,80 @@ process_next_file:
                            sizeof(last_transferred_file) - 1);
                     last_transferred_file[sizeof(last_transferred_file) - 1] = '\0';
 
-                    /* Update synced files counter in memory only */
-                    current_transfer.synced_files++;
+                    /* Send file_end and wait for FILE_ACK */
+                    int file_ret = send_file_complete_event(last_transferred_file);
+                    if (file_ret == -EAGAIN) {
+                        /* CRC mismatch — retransmit entire file */
+                        int file_retry = 0;
+                        bool file_ok = false;
 
-                    /* Send file_complete event */
-                    send_file_complete_event(last_transferred_file);
+                        while (!file_ok && file_retry < UDP_MAX_RETRIES &&
+                               transfer_thread_running &&
+                               current_transfer.state == TRANSFER_STATE_TRANSMITTING) {
+                            file_retry++;
+                            LOG_WRN("File NACK, retransmitting (%d/%d)", file_retry, UDP_MAX_RETRIES);
+
+                            /* Seek back to file start */
+                            fs_seek(&transfer_file, 0, FS_SEEK_SET);
+                            current_transfer.bytes_transferred = 0;
+
+                            /* Reset transport file state (CRC, seq) */
+                            transport_udp_reset_file_state();
+
+                            /* Resend FILE_START */
+                            send_file_ready_event(current_transfer.session_id,
+                                                   last_transferred_file,
+                                                   current_transfer.total_bytes);
+
+                            /* Resend all chunks */
+                            bool chunk_error = false;
+                            while (transfer_thread_running &&
+                                   current_transfer.state == TRANSFER_STATE_TRANSMITTING) {
+                                ret = transfer_send_chunk();
+                                if (ret == -EOF) {
+                                    break;
+                                } else if (ret < 0) {
+                                    chunk_error = true;
+                                    break;
+                                }
+                            }
+
+                            if (chunk_error) {
+                                break;
+                            }
+
+                            /* Resend FILE_END */
+                            file_ret = send_file_complete_event(last_transferred_file);
+                            if (file_ret == 0) {
+                                file_ok = true;
+                            } else if (file_ret != -EAGAIN) {
+                                /* -ETIMEDOUT or other fatal error */
+                                break;
+                            }
+                        }
+
+                        if (!file_ok) {
+                            LOG_ERR("File retransmit failed after %d retries", file_retry);
+                            fs_close(&transfer_file);
+                            transfer_file_open = false;
+                            current_transfer.state = TRANSFER_STATE_IDLE;
+                            transfer_cleanup();
+                            break;
+                        }
+
+                        LOG_INF("File retransmit OK on attempt %d", file_retry + 1);
+                    } else if (file_ret < 0) {
+                        /* -ETIMEDOUT or other error */
+                        LOG_ERR("FILE_END failed: %d", file_ret);
+                        fs_close(&transfer_file);
+                        transfer_file_open = false;
+                        current_transfer.state = TRANSFER_STATE_IDLE;
+                        transfer_cleanup();
+                        break;
+                    }
+
+                    /* File ACKed OK */
+                    current_transfer.synced_files++;
 
                     /* Close file */
                     fs_close(&transfer_file);
@@ -668,8 +732,14 @@ process_next_file:
                     transfer_cleanup();
                     break;
                 } else {
-                    current_transfer.state = TRANSFER_STATE_ERROR;
-                    LOG_ERR("Transfer send error: %d", ret);
+                    /* Any other error (e.g. -ETIMEDOUT): close file and exit transfer */
+                    LOG_ERR("Transfer send error: %d, aborting", ret);
+                    if (transfer_file_open) {
+                        fs_close(&transfer_file);
+                        transfer_file_open = false;
+                    }
+                    current_transfer.state = TRANSFER_STATE_IDLE;
+                    transfer_cleanup();
                     break;
                 }
             }
@@ -953,7 +1023,7 @@ static void send_file_ready_event(const char *session_id, const char *filename, 
     /* TCP: binary frame is enough, no JSON needed */
 }
 
-static void send_file_complete_event(const char *filename)
+static int send_file_complete_event(const char *filename)
 {
     char buffer[256];
     int len;
@@ -963,50 +1033,22 @@ static void send_file_complete_event(const char *filename)
 
     if (!filename || filename[0] == '\0') {
         LOG_WRN("Cannot send file_complete: empty filename");
-        return;
+        return -EINVAL;
     }
 
     if (!current_transport || !current_transport->ops) {
         LOG_WRN("No transport for file_complete event");
-        return;
+        return -ENOTCONN;
     }
 
     /* Send file_end via current transport (binary frame) */
     if (current_transport->ops->send_file_end) {
-        current_transport->ops->send_file_end(filename);
+        return current_transport->ops->send_file_end(filename);
     }
 
-    /* For BLE, also send JSON event for compatibility.
-     * For UDP, don't send JSON - binary frame is sufficient. */
-    if (current_transport->type != TRANSPORT_TYPE_BLE) {
-        return;  /* UDP: done after binary frame */
-    }
-
-    /* BLE: send JSON event */
-    len = snprintf(buffer, sizeof(buffer),
-                   "{\"ok\":true,\"event\":\"file_complete\",\"filename\":\"%s\"}",
-                   filename);
-
-    /* Retry with delay for critical file_complete notification */
-    do {
-        err = current_transport->ops->send((uint8_t *)buffer, len);
-        if (err == 0) {
-            return;
-        }
-
-        /* Retry on temporary errors */
-        if (err == -ENOMEM || err == -EAGAIN || err == -EBUSY) {
-            retry_count++;
-            if (retry_count < max_retries) {
-                k_sleep(K_MSEC(50));
-                continue;
-            }
-        }
-
-        LOG_ERR("file_complete notify failed: %d", err);
-        return;
-    } while (retry_count < max_retries);
+    return 0;
 }
+
 
 static void send_transfer_complete_once(const char *session_id, int file_count)
 {
