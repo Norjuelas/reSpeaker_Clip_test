@@ -27,7 +27,7 @@ static struct ble_context ble_ctx = {
     .notify_enabled = false,
     .file_data_notify_enabled = false,
     .audio_vis_notify_enabled = false,
-    .device_name = "Clip2",
+    .device_name = "Clip",
 };
 
 /* Command callback */
@@ -259,7 +259,7 @@ static void generate_device_name(void)
     uint32_t device_id_low = nrf_ficr_deviceid_get(NRF_FICR, 0);
     uint16_t id_suffix = device_id_low & 0xFFFF;
     snprintf(ble_ctx.device_name, sizeof(ble_ctx.device_name),
-             "CLIP_%04X", id_suffix);
+             "Clip %04X", id_suffix);
     LOG_INF("Device name: %s", ble_ctx.device_name);
 }
 
