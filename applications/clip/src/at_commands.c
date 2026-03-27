@@ -1,0 +1,2019 @@
+/*
+ * Copyright (c) 2025 Seeed Technology Co., Ltd.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+#include <zephyr/kernel.h>
+#include <zephyr/logging/log.h>
+#include <zephyr/sys/reboot.h>
+#include <zephyr/drivers/regulator.h>
+#include <time.h>
+#include <string.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include "at_commands.h"
+#include "at_server.h"
+#include "clip.h"
+#include "config.h"
+#include "app_version.h"
+#include "audio.h"
+#include "storage.h"
+#include "transfer.h"
+#include "ble.h"
+#include "display.h"
+#include "haptic.h"
+#include "wifi.h"
+
+LOG_MODULE_REGISTER(at_commands, CONFIG_CLIP2_LOG_LEVEL);
+
+/* Helper: Extract integer from string */
+static int extract_int(const char *str, int *value)
+{
+    if (!str || !value) {
+        return -EINVAL;
+    }
+    char *end;
+    long val = strtol(str, &end, 10);
+    if (end == str || *end != '\0') {
+        return -EINVAL;
+    }
+    *value = (int)val;
+    return 0;
+}
+
+/* Helper: Create JSON response */
+static int create_json_response(bool success, const char *message,
+                                const char *data, char *response, size_t len)
+{
+    int n = 0;
+    if (success) {
+        n = snprintf(response, len, "{\"ok\":true");
+    } else {
+        n = snprintf(response, len, "{\"ok\":false");
+    }
+    if (n < 0 || n >= len) {
+        return AT_ERR_NOMEM;
+    }
+    if (message) {
+        int ret = snprintf(response + n, len - n, ",\"msg\":\"%s\"", message);
+        if (ret < 0 || ret >= (len - n)) {
+            return AT_ERR_NOMEM;
+        }
+        n += ret;
+    }
+    if (data) {
+        int ret = snprintf(response + n, len - n, ",\"data\":%s", data);
+        if (ret < 0 || ret >= (len - n)) {
+            return AT_ERR_NOMEM;
+        }
+        n += ret;
+    }
+    if (n + 3 < len) {
+        response[n] = '}';
+        response[n + 1] = '\n';
+        return n + 2;
+    }
+    return AT_ERR_NOMEM;
+}
+
+/* GSTAT Command Handler - Get device status */
+static int cmd_gstat_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
+{
+    struct clip_context *c = clip_get_context();
+    struct storage_stats stats;
+    struct audio_stats audio_stats;
+    uint32_t free_space = 0;
+    uint32_t recording_duration = 0;
+    const char *session_id = NULL;
+    const char *mode_str = (c->config.mode == MODE_NORMAL) ? "normal" : "enhanced";
+    const char *device_name = ble_get_device_name();
+
+    /* Get storage statistics */
+    if (storage_get_stats(&stats) == 0) {
+        free_space = stats.free_space_mb;
+    }
+
+    /* Get recording duration and session ID if recording */
+    /* Check session_id first to handle startup window where recording is
+     * initializing but session_id is already set */
+    session_id = audio_get_session_id();
+    if (session_id != NULL && audio_get_stats(&audio_stats) == 0) {
+        recording_duration = (uint32_t)(audio_stats.recording_time_ms / 1000);
+    }
+
+    /* Build response - format matches clip for compatibility
+     * Clip wraps data in "data" field: {"ok":true,"data":{...}}
+     */
+    char data_buf[512];
+    int data_len = snprintf(data_buf, sizeof(data_buf),
+                     "{\"state\":\"%s\","
+                     "\"recording\":%s,"
+                     "\"session\":%s%s%s,"
+                     "\"duration\":%u,"
+                     "\"battery\":%u,"
+                     "\"charging\":%s,"
+                     "\"mode\":\"%s\","
+                     "\"bitrate\":%u,"
+                     "\"free_space\":%u,"
+                     "\"device\":\"%s\"}",
+                     clip_state_to_string(c->state),
+                     audio_is_recording() ? "true" : "false",
+                     session_id ? "\"" : "", session_id ? session_id : "null", session_id ? "\"" : "",
+                     recording_duration,
+                     c->status.battery_percent,
+                     c->status.battery_charging ? "true" : "false",
+                     mode_str,
+                     c->config.bitrate,
+                     free_space,
+                     device_name ? device_name : "Unknown");
+
+    if (data_len < 0 || data_len >= sizeof(data_buf)) {
+        return AT_ERR_NOMEM;
+    }
+
+    /* Wrap in {"ok":true,"data":...} format to match clip */
+    int n = snprintf(response, len, "{\"ok\":true,\"data\":%s}", data_buf);
+    if (n < 0 || n >= len - 2) {
+        return AT_ERR_NOMEM;
+    }
+    response[n] = '\n';
+
+    /* Log GSTAT response for debugging */
+    LOG_DBG("GSTAT: %s", response);
+
+    return n + 1;
+}
+
+/* DEVICE Command Handler - Get device name */
+static int cmd_device_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
+{
+    const char *device_name = ble_get_device_name();
+    char name_buf[32];
+
+    snprintf(name_buf, sizeof(name_buf), "\"%s\"", device_name ? device_name : "Unknown");
+    int n = snprintf(response, len, "{\"ok\":true,\"device\":%s}", name_buf);
+    if (n < 0 || n >= len - 2) {
+        return AT_ERR_NOMEM;
+    }
+    response[n] = '\n';
+    return n + 1;
+}
+
+/* VERSION Command Handler - Get firmware version */
+static int cmd_version_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
+{
+    char version_str[32];
+    snprintf(version_str, sizeof(version_str), "\"%s\"", APP_VERSION_STRING);
+    int n = snprintf(response, len, "{\"ok\":true,\"firmware\":%s}", version_str);
+    if (n < 0 || n >= len - 2) {
+        return AT_ERR_NOMEM;
+    }
+    response[n] = '\n';
+    return n + 1;
+}
+
+/* TIME Command Handler - Get/Set time */
+static int cmd_time_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
+{
+    struct clip_context *c = clip_get_context();
+
+    if (ctx->type == AT_CMD_TYPE_SET || ctx->type == AT_CMD_TYPE_EXEC) {
+        /* Set time: AT+TIME=<unix_timestamp> */
+        if (!ctx->args || strlen(ctx->args) == 0) {
+            return create_json_response(false, "Missing timestamp", NULL, response, len);
+        }
+
+        int64_t timestamp;
+        if (extract_int(ctx->args, (int *)&timestamp) != 0) {
+            return create_json_response(false, "Invalid timestamp", NULL, response, len);
+        }
+
+        /* Convert Unix timestamp to YMDHMS */
+        time_t ts = (time_t)timestamp;
+        struct tm *tm_info = localtime(&ts);
+        if (!tm_info) {
+            return create_json_response(false, "Invalid time", NULL, response, len);
+        }
+
+        uint16_t year = tm_info->tm_year + 1900;
+        uint8_t month = tm_info->tm_mon + 1;
+        uint8_t day = tm_info->tm_mday;
+        uint8_t hour = tm_info->tm_hour;
+        uint8_t min = tm_info->tm_min;
+        uint8_t sec = tm_info->tm_sec;
+
+        c->time.year = year;
+        c->time.month = month;
+        c->time.day = day;
+        c->time.hour = hour;
+        c->time.min = min;
+        c->time.sec = sec;
+        c->time.base_uptime_ms = k_uptime_get();
+        c->time.valid = true;
+
+        /* Save to storage */
+        config_set_time_ymd(year, month, day, hour, min, sec);
+
+        char data[64];
+        /* Manual int64 to string conversion - Zephyr snprintf doesn't support %lld */
+        char ts_str[32];
+        int64_t ts_val = timestamp;
+        int ts_idx = 0;
+        bool negative = ts_val < 0;
+        if (negative) ts_val = -ts_val;
+
+        /* Convert to string (reverse order) */
+        if (ts_val == 0) {
+            ts_str[ts_idx++] = '0';
+        } else {
+            while (ts_val > 0) {
+                ts_str[ts_idx++] = '0' + (ts_val % 10);
+                ts_val /= 10;
+            }
+        }
+        if (negative) ts_str[ts_idx++] = '-';
+
+        /* Reverse to get correct order */
+        for (int i = 0; i < ts_idx / 2; i++) {
+            char tmp = ts_str[i];
+            ts_str[i] = ts_str[ts_idx - 1 - i];
+            ts_str[ts_idx - 1 - i] = tmp;
+        }
+        ts_str[ts_idx] = '\0';
+
+        snprintf(data, sizeof(data), "{\"time\":%s}", ts_str);
+        return create_json_response(true, NULL, data, response, len);
+    } else {
+        /* Get time: AT+TIME? */
+        if (!c->time.valid) {
+            return create_json_response(false, "Time not set (use AT+TIME=<timestamp>)", NULL, response, len);
+        }
+
+        uint16_t year;
+        uint8_t month, day, hour, min, sec;
+        if (!clip_get_current_time(&year, &month, &day, &hour, &min, &sec)) {
+            return create_json_response(false, "Time error", NULL, response, len);
+        }
+
+        /* Return ISO 8601 format to be compatible with clip */
+        char time_buf[64];
+        snprintf(time_buf, sizeof(time_buf),
+                 "\"%04u-%02u-%02uT%02u:%02u:%02uZ\"",
+                 year, month, day, hour, min, sec);
+
+        char data[128];
+        snprintf(data, sizeof(data), "{\"time\":%s}", time_buf);
+        return create_json_response(true, NULL, data, response, len);
+    }
+}
+
+/* BITRATE Command Handler - Get/Set Opus bitrate */
+static int cmd_bitrate_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
+{
+    struct clip_context *c = clip_get_context();
+
+    if (ctx->type == AT_CMD_TYPE_SET) {
+        /* Set bitrate: AT+BITRATE=<bps> */
+        if (!ctx->args || strlen(ctx->args) == 0) {
+            return create_json_response(false, "Missing bitrate value", NULL, response, len);
+        }
+
+        int bitrate;
+        if (extract_int(ctx->args, &bitrate) != 0) {
+            return create_json_response(false, "Invalid bitrate", NULL, response, len);
+        }
+
+        /* Validate bitrate range */
+        if (bitrate < 6000 || bitrate > 64000) {
+            return create_json_response(false, "Bitrate must be 6000-64000", NULL, response, len);
+        }
+
+        /* Update audio encoder and save config */
+        int err = audio_set_bitrate(bitrate);
+        if (err) {
+            return create_json_response(false, "Failed to set bitrate", NULL, response, len);
+        }
+
+        char data[32];
+        snprintf(data, sizeof(data), "{\"bitrate\":%u}", bitrate);
+        return create_json_response(true, NULL, data, response, len);
+    } else {
+        /* Get bitrate: AT+BITRATE? */
+        char data[32];
+        snprintf(data, sizeof(data), "{\"bitrate\":%u}", c->config.bitrate);
+        return create_json_response(true, NULL, data, response, len);
+    }
+}
+
+/* COMPLEXITY Command Handler - Get/Set Opus complexity */
+static int cmd_complexity_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
+{
+    struct clip_context *c = clip_get_context();
+
+    if (ctx->type == AT_CMD_TYPE_SET) {
+        /* Set complexity: AT+COMPLEXITY=<0-10> */
+        if (!ctx->args || strlen(ctx->args) == 0) {
+            return create_json_response(false, "Missing complexity value", NULL, response, len);
+        }
+
+        int complexity;
+        if (extract_int(ctx->args, &complexity) != 0) {
+            return create_json_response(false, "Invalid complexity", NULL, response, len);
+        }
+
+        /* Validate complexity range */
+        if (complexity < 0 || complexity > 10) {
+            return create_json_response(false, "Complexity must be 0-10", NULL, response, len);
+        }
+
+        /* Update audio encoder and save config */
+        int err = audio_set_complexity(complexity);
+        if (err) {
+            return create_json_response(false, "Failed to set complexity", NULL, response, len);
+        }
+
+        char data[32];
+        snprintf(data, sizeof(data), "{\"complexity\":%u}", complexity);
+        return create_json_response(true, NULL, data, response, len);
+    } else {
+        /* Get complexity: AT+COMPLEXITY? */
+        char data[32];
+        snprintf(data, sizeof(data), "{\"complexity\":%u}", audio_get_complexity());
+        return create_json_response(true, NULL, data, response, len);
+    }
+}
+
+/* MODE Command Handler - Get/Set recording mode */
+static int cmd_mode_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
+{
+    struct clip_context *c = clip_get_context();
+
+    if (ctx->type == AT_CMD_TYPE_SET) {
+        /* Set mode: AT+MODE=<normal|enhanced> */
+        if (!ctx->args || strlen(ctx->args) == 0) {
+            return create_json_response(false, "Missing mode value", NULL, response, len);
+        }
+
+        /* Convert to lowercase for comparison */
+        char mode_str[32];
+        strncpy(mode_str, ctx->args, sizeof(mode_str) - 1);
+        mode_str[sizeof(mode_str) - 1] = '\0';
+        for (char *p = mode_str; *p; p++) {
+            if (*p >= 'A' && *p <= 'Z') {
+                *p = *p - 'A' + 'a';
+            }
+        }
+
+        enum recording_mode mode;
+        if (strcmp(mode_str, "normal") == 0) {
+            mode = MODE_NORMAL;
+        } else if (strcmp(mode_str, "enhanced") == 0) {
+            mode = MODE_ENHANCED;
+        } else {
+            return create_json_response(false, "Mode must be normal or enhanced", NULL, response, len);
+        }
+
+        c->config.mode = mode;
+        config_set_mode(mode);
+
+        char data[32];
+        snprintf(data, sizeof(data), "{\"mode\":\"%s\"}", mode_str);
+        return create_json_response(true, NULL, data, response, len);
+    } else {
+        /* Get mode: AT+MODE? */
+        const char *mode_str = (c->config.mode == MODE_NORMAL) ? "normal" : "enhanced";
+        char data[32];
+        snprintf(data, sizeof(data), "{\"mode\":\"%s\"}", mode_str);
+        return create_json_response(true, NULL, data, response, len);
+    }
+}
+
+/* NOISE Command Handler - Get/Set noise suppression */
+static int cmd_noise_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
+{
+    struct clip_context *c = clip_get_context();
+
+    if (ctx->type == AT_CMD_TYPE_SET) {
+        /* Set noise: AT+NOISE=<dB> */
+        if (!ctx->args || strlen(ctx->args) == 0) {
+            return create_json_response(false, "Missing noise value", NULL, response, len);
+        }
+
+        int noise;
+        if (extract_int(ctx->args, &noise) != 0) {
+            return create_json_response(false, "Invalid noise value", NULL, response, len);
+        }
+
+        /* Validate noise range */
+        if (noise < 0 || noise > 60) {
+            return create_json_response(false, "Noise must be 0-60 dB", NULL, response, len);
+        }
+
+        c->config.noise_suppress = noise;
+        config_set_noise_suppress(noise);
+
+        char data[32];
+        snprintf(data, sizeof(data), "{\"noise\":%u}", noise);
+        return create_json_response(true, NULL, data, response, len);
+    } else {
+        /* Get noise: AT+NOISE? */
+        char data[32];
+        snprintf(data, sizeof(data), "{\"noise\":%u}", c->config.noise_suppress);
+        return create_json_response(true, NULL, data, response, len);
+    }
+}
+
+/* AGC Command Handler - Get/Set AGC */
+static int cmd_agc_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
+{
+    struct clip_context *c = clip_get_context();
+
+    if (ctx->type == AT_CMD_TYPE_SET) {
+        /* Set AGC: AT+AGC=<target_level> or AT+AGC=on/off */
+        if (!ctx->args || strlen(ctx->args) == 0) {
+            return create_json_response(false, "Missing AGC value", NULL, response, len);
+        }
+
+        /* Check for on/off */
+        char agc_str[32];
+        strncpy(agc_str, ctx->args, sizeof(agc_str) - 1);
+        agc_str[sizeof(agc_str) - 1] = '\0';
+        for (char *p = agc_str; *p; p++) {
+            if (*p >= 'A' && *p <= 'Z') {
+                *p = *p - 'A' + 'a';
+            }
+        }
+
+        if (strcmp(agc_str, "on") == 0 || strcmp(agc_str, "1") == 0) {
+            c->config.agc_enabled = true;
+            config_set_agc_enabled(true);
+            return create_json_response(true, NULL, "{\"agc\":\"on\"}", response, len);
+        } else if (strcmp(agc_str, "off") == 0 || strcmp(agc_str, "0") == 0) {
+            c->config.agc_enabled = false;
+            config_set_agc_enabled(false);
+            return create_json_response(true, NULL, "{\"agc\":\"off\"}", response, len);
+        } else {
+            /* Try as integer target level */
+            int target;
+            if (extract_int(ctx->args, &target) != 0) {
+                return create_json_response(false, "Invalid AGC value (use on/off/0/1 or target level)", NULL, response, len);
+            }
+
+            if (target < 0 || target > 32000) {
+                return create_json_response(false, "AGC target must be 0-32000", NULL, response, len);
+            }
+
+            c->config.agc_target = target;
+            c->config.agc_enabled = true;
+            config_set_agc_target(target);
+            config_set_agc_enabled(true);
+
+            char data[64];
+            snprintf(data, sizeof(data), "{\"agc\":\"on\",\"target\":%u}", target);
+            return create_json_response(true, NULL, data, response, len);
+        }
+    } else {
+        /* Get AGC: AT+AGC? */
+        char data[64];
+        if (c->config.agc_enabled) {
+            snprintf(data, sizeof(data), "{\"agc\":\"on\",\"target\":%u}", c->config.agc_target);
+        } else {
+            snprintf(data, sizeof(data), "{\"agc\":\"off\"}");
+        }
+        return create_json_response(true, NULL, data, response, len);
+    }
+}
+
+/* DEREVERB Command Handler - Get/Set dereverberation */
+static int cmd_dereverb_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
+{
+    struct clip_context *c = clip_get_context();
+
+    if (ctx->type == AT_CMD_TYPE_SET) {
+        /* Set dereverb: AT+DEREVERB=on/off */
+        if (!ctx->args || strlen(ctx->args) == 0) {
+            return create_json_response(false, "Missing dereverb value", NULL, response, len);
+        }
+
+        char dereverb_str[32];
+        strncpy(dereverb_str, ctx->args, sizeof(dereverb_str) - 1);
+        dereverb_str[sizeof(dereverb_str) - 1] = '\0';
+        for (char *p = dereverb_str; *p; p++) {
+            if (*p >= 'A' && *p <= 'Z') {
+                *p = *p - 'A' + 'a';
+            }
+        }
+
+        bool enabled;
+        if (strcmp(dereverb_str, "on") == 0 || strcmp(dereverb_str, "1") == 0) {
+            enabled = true;
+        } else if (strcmp(dereverb_str, "off") == 0 || strcmp(dereverb_str, "0") == 0) {
+            enabled = false;
+        } else {
+            return create_json_response(false, "Invalid value (use on/off/1/0)", NULL, response, len);
+        }
+
+        c->config.dereverb_enabled = enabled;
+        config_set_dereverb_enabled(enabled);
+
+        char data[32];
+        snprintf(data, sizeof(data), "{\"dereverb\":\"%s\"}", enabled ? "on" : "off");
+        return create_json_response(true, NULL, data, response, len);
+    } else {
+        /* Get dereverb: AT+DEREVERB? */
+        char data[32];
+        snprintf(data, sizeof(data), "{\"dereverb\":\"%s\"}", c->config.dereverb_enabled ? "on" : "off");
+        return create_json_response(true, NULL, data, response, len);
+    }
+}
+
+/* AUTODEL Command Handler - Get/Set auto-delete policy */
+static int cmd_autodel_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
+{
+    struct clip_context *c = clip_get_context();
+
+    if (ctx->type == AT_CMD_TYPE_SET) {
+        /* Set autodel: AT+AUTODEL=<days> or AT+AUTODEL=off */
+        if (!ctx->args || strlen(ctx->args) == 0) {
+            return create_json_response(false, "Missing autodel value", NULL, response, len);
+        }
+
+        char autodel_str[32];
+        strncpy(autodel_str, ctx->args, sizeof(autodel_str) - 1);
+        autodel_str[sizeof(autodel_str) - 1] = '\0';
+        for (char *p = autodel_str; *p; p++) {
+            if (*p >= 'A' && *p <= 'Z') {
+                *p = *p - 'A' + 'a';
+            }
+        }
+
+        if (strcmp(autodel_str, "off") == 0 || strcmp(autodel_str, "-1") == 0) {
+            c->config.auto_delete_days = -1;
+            config_set_auto_delete_days(-1);
+            return create_json_response(true, NULL, "{\"autodel\":\"off\"}", response, len);
+        } else {
+            int days;
+            if (extract_int(ctx->args, &days) != 0) {
+                return create_json_response(false, "Invalid autodel value", NULL, response, len);
+            }
+
+            if (days < 0 || days > 30) {
+                return create_json_response(false, "Auto-delete must be 0-30 days or off", NULL, response, len);
+            }
+
+            c->config.auto_delete_days = days;
+            config_set_auto_delete_days(days);
+
+            char data[32];
+            snprintf(data, sizeof(data), "{\"autodel\":%d}", days);
+            return create_json_response(true, NULL, data, response, len);
+        }
+    } else {
+        /* Get autodel: AT+AUTODEL? */
+        char data[32];
+        if (c->config.auto_delete_days < 0) {
+            snprintf(data, sizeof(data), "{\"autodel\":\"off\"}");
+        } else {
+            snprintf(data, sizeof(data), "{\"autodel\":%d}", c->config.auto_delete_days);
+        }
+        return create_json_response(true, NULL, data, response, len);
+    }
+}
+
+/* BRIGHTNESS Command Handler - Get/Set OLED brightness */
+static int cmd_brightness_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
+{
+    struct clip_context *c = clip_get_context();
+
+    if (ctx->type == AT_CMD_TYPE_SET) {
+        /* Set brightness: AT+BRIGHTNESS=<0-255> */
+        if (!ctx->args || strlen(ctx->args) == 0) {
+            return create_json_response(false, "Missing brightness value", NULL, response, len);
+        }
+
+        int brightness;
+        if (extract_int(ctx->args, &brightness) != 0) {
+            return create_json_response(false, "Invalid brightness", NULL, response, len);
+        }
+
+        /* Validate brightness range */
+        if (brightness < 0 || brightness > 255) {
+            return create_json_response(false, "Brightness must be 0-255", NULL, response, len);
+        }
+
+        c->config.oled_contrast = brightness;
+        config_set_oled_contrast(brightness);
+
+        /* TODO: Apply to display hardware */
+
+        char data[32];
+        snprintf(data, sizeof(data), "{\"brightness\":%u}", brightness);
+        return create_json_response(true, NULL, data, response, len);
+    } else {
+        /* Get brightness: AT+BRIGHTNESS? */
+        char data[32];
+        snprintf(data, sizeof(data), "{\"brightness\":%u}", c->config.oled_contrast);
+        return create_json_response(true, NULL, data, response, len);
+    }
+}
+
+/* CHUNKSIZE Command Handler - Get/Set transfer chunk size */
+static int cmd_chunksize_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
+{
+    struct clip_context *c = clip_get_context();
+
+    if (ctx->type == AT_CMD_TYPE_SET) {
+        /* Set chunk size: AT+CHUNKSIZE=<bytes> */
+        if (!ctx->args || strlen(ctx->args) == 0) {
+            return create_json_response(false, "Missing chunk size value", NULL, response, len);
+        }
+
+        int chunk_size;
+        if (extract_int(ctx->args, &chunk_size) != 0) {
+            return create_json_response(false, "Invalid chunk size", NULL, response, len);
+        }
+
+        /* Validate chunk size range */
+        if (chunk_size < 100 || chunk_size > 4096) {
+            return create_json_response(false, "Chunk size must be 100-4096", NULL, response, len);
+        }
+
+        c->config.chunk_size = chunk_size;
+        config_set_chunk_size(chunk_size);
+
+        char data[32];
+        snprintf(data, sizeof(data), "{\"chunksize\":%u}", chunk_size);
+        return create_json_response(true, NULL, data, response, len);
+    } else {
+        /* Get chunk size: AT+CHUNKSIZE? */
+        char data[32];
+        snprintf(data, sizeof(data), "{\"chunksize\":%u}", c->config.chunk_size);
+        return create_json_response(true, NULL, data, response, len);
+    }
+}
+
+/* POWEROFF Command Handler - Shutdown the device */
+static int cmd_poweroff_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
+{
+    /* Send success response first */
+    int ret = create_json_response(true, NULL, "{\"poweroff\":\"shutting down\"}", response, len);
+
+    /* Wait a bit for response to be sent */
+    k_sleep(K_MSEC(500));
+
+    /* Get npm1300 regulators device */
+    const struct device *regulators = DEVICE_DT_GET(DT_NODELABEL(npm1300_regulators));
+    if (!device_is_ready(regulators)) {
+        LOG_ERR("npm1300 regulators not ready, cannot power off");
+        return create_json_response(false, "PMIC not ready", NULL, response, len);
+    }
+
+    /* Enter ship mode (power off) */
+    int ship_ret = regulator_parent_ship_mode(regulators);
+    if (ship_ret != 0) {
+        LOG_ERR("Failed to enter ship mode: %d", ship_ret);
+    }
+    /* If the write succeeded the system powers off immediately */
+
+    return ret;
+}
+
+/* FACTORY Command Handler - Factory reset */
+static int cmd_factory_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
+{
+    /* Check for confirmation parameter */
+    char confirm_str[32];
+    if (ctx->args && strlen(ctx->args) > 0) {
+        strncpy(confirm_str, ctx->args, sizeof(confirm_str) - 1);
+        confirm_str[sizeof(confirm_str) - 1] = '\0';
+        for (char *p = confirm_str; *p; p++) {
+            if (*p >= 'A' && *p <= 'Z') {
+                *p = *p - 'A' + 'a';
+            }
+        }
+
+        if (strcmp(confirm_str, "confirm") != 0 && strcmp(confirm_str, "yes") != 0) {
+            return create_json_response(false, "Add 'confirm' or 'yes' to proceed", NULL, response, len);
+        }
+    } else {
+        return create_json_response(false, "Add 'confirm' or 'yes' to proceed", NULL, response, len);
+    }
+
+    /* Perform factory reset */
+    int err = config_factory_reset();
+    if (err) {
+        return create_json_response(false, "Factory reset failed", NULL, response, len);
+    }
+
+    /* TODO: Delete all recording files */
+
+    return create_json_response(true, "Factory reset complete, rebooting...", NULL, response, len);
+}
+
+/* REBOOT Command Handler - Reboot the device */
+static int cmd_reboot_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
+{
+    /* Send success response first */
+    int ret = create_json_response(true, NULL, "{\"reboot\":\"restarting\"}", response, len);
+
+    /* Wait a bit for response to be sent */
+    k_sleep(K_MSEC(500));
+
+    /* Reboot the device */
+    sys_reboot(SYS_REBOOT_COLD);
+
+    return ret;
+}
+
+/* START Command Handler - Start recording */
+static int cmd_start_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
+{
+    struct clip_context *c = clip_get_context();
+    enum audio_mode audio_mode;
+    enum recording_mode rec_mode;
+
+    /* Parse mode parameter if provided */
+    if (ctx->args && strlen(ctx->args) > 0) {
+        char mode_str[32];
+        strncpy(mode_str, ctx->args, sizeof(mode_str) - 1);
+        mode_str[sizeof(mode_str) - 1] = '\0';
+
+        /* Convert to lowercase */
+        for (char *p = mode_str; *p; p++) {
+            if (*p >= 'A' && *p <= 'Z') {
+                *p = *p - 'A' + 'a';
+            }
+        }
+
+        if (strcmp(mode_str, "normal") == 0 || strcmp(mode_str, "stereo") == 0) {
+            rec_mode = MODE_NORMAL;
+            audio_mode = AUDIO_MODE_STEREO;
+        } else if (strcmp(mode_str, "enhanced") == 0 || strcmp(mode_str, "merge") == 0) {
+            rec_mode = MODE_ENHANCED;
+            audio_mode = AUDIO_MODE_MERGE;
+        } else {
+            return create_json_response(false, "Invalid mode (use normal/stereo or enhanced/merge)", NULL, response, len);
+        }
+    } else {
+        /* Use config default */
+        rec_mode = c->config.mode;
+        if (rec_mode == MODE_NORMAL) {
+            audio_mode = AUDIO_MODE_STEREO;
+        } else {
+            audio_mode = AUDIO_MODE_MERGE;
+        }
+    }
+
+    /* Check if already recording */
+    if (audio_is_recording()) {
+        return create_json_response(false, "Already recording", NULL, response, len);
+    }
+
+    /* Start recording */
+    int err = audio_start_recording(audio_mode);
+    if (err) {
+        return create_json_response(false, "Failed to start recording", NULL, response, len);
+    }
+
+    /* Update state */
+    c->state = CLIP_STATE_RECORDING;
+
+    /* Update UI and haptic - same as button press */
+    display_post_event(UI_EVENT_REC_START);
+    display_set_recording(true, rec_mode == MODE_ENHANCED);
+    haptic_play_pattern(HAPTIC_SHORT);
+
+    /* Get session ID */
+    const char *session_id = audio_get_session_id();
+    char data[64];
+    if (session_id) {
+        snprintf(data, sizeof(data), "{\"session\":\"%s\"}", session_id);
+    } else {
+        snprintf(data, sizeof(data), "{}");
+    }
+
+    return create_json_response(true, NULL, data, response, len);
+}
+
+/* STOP Command Handler - Stop recording */
+static int cmd_stop_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
+{
+    struct clip_context *c = clip_get_context();
+    struct audio_stats audio_stats;
+
+    /* Check if recording */
+    if (!audio_is_recording()) {
+        return create_json_response(false, "Not recording", NULL, response, len);
+    }
+
+    /* Get session ID before stopping */
+    const char *session_id = audio_get_session_id();
+    if (!session_id) {
+        return create_json_response(false, "No active session", NULL, response, len);
+    }
+
+    /* Stop recording */
+    int err = audio_stop_recording();
+    if (err) {
+        return create_json_response(false, "Failed to stop recording", NULL, response, len);
+    }
+
+    /* Update state */
+    c->state = CLIP_STATE_IDLE;
+
+    /* Update UI and haptic - same as button press */
+    display_post_event(UI_EVENT_REC_STOP);
+    display_set_recording(false, false);
+    haptic_play_pattern(HAPTIC_SHORT);
+
+    /* Get audio statistics */
+    if (audio_get_stats(&audio_stats) != 0) {
+        /* If stats not available, return minimal response */
+        char data[128];
+        snprintf(data, sizeof(data), "{\"session\":\"%s\"}", session_id);
+        return create_json_response(true, NULL, data, response, len);
+    }
+
+    /* Return full response matching clip format */
+    char data[256];
+    snprintf(data, sizeof(data),
+            "{\"session\":\"%s\","
+            "\"duration\":%u,"
+            "\"frames\":%u,"
+            "\"file_count\":1,"
+            "\"total_size\":%u}",
+            session_id,
+            (uint32_t)(audio_stats.recording_time_ms / 1000),
+            audio_stats.frames_encoded,
+            audio_stats.total_bytes);
+
+    return create_json_response(true, NULL, data, response, len);
+}
+
+/* PAUSE Command Handler - Pause recording */
+static int cmd_pause_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
+{
+    struct clip_context *c = clip_get_context();
+
+    /* Check if recording */
+    if (!audio_is_recording()) {
+        return create_json_response(false, "Not recording", NULL, response, len);
+    }
+
+    /* Pause recording */
+    int err = audio_pause_recording();
+    if (err) {
+        return create_json_response(false, "Failed to pause recording", NULL, response, len);
+    }
+
+    /* Update state */
+    c->state = CLIP_STATE_PAUSED;
+
+    /* Update UI - show paused state */
+    display_post_event(UI_EVENT_REC_PAUSE);
+    haptic_play_pattern(HAPTIC_SHORT);
+
+    return create_json_response(true, NULL, "{\"paused\":true}", response, len);
+}
+
+/* RESUME Command Handler - Resume recording */
+static int cmd_resume_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
+{
+    struct clip_context *c = clip_get_context();
+
+    /* Check if paused */
+    if (c->state != CLIP_STATE_PAUSED) {
+        return create_json_response(false, "Not paused", NULL, response, len);
+    }
+
+    /* Resume recording */
+    int err = audio_resume_recording();
+    if (err) {
+        return create_json_response(false, "Failed to resume recording", NULL, response, len);
+    }
+
+    /* Update state */
+    c->state = CLIP_STATE_RECORDING;
+
+    /* Update UI - resume recording state */
+    display_post_event(UI_EVENT_REC_RESUME);
+    haptic_play_pattern(HAPTIC_SHORT);
+
+    return create_json_response(true, NULL, "{\"resumed\":true}", response, len);
+}
+
+/* MARK Command Handler - Add bookmark */
+static int cmd_mark_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
+{
+    struct clip_context *c = clip_get_context();
+    struct audio_stats audio_stats;
+
+    /* Check if recording (including paused state) */
+    if (!audio_is_recording()) {
+        return create_json_response(false, "Not recording", NULL, response, len);
+    }
+
+    /* Add bookmark to storage */
+    const char *session_id = audio_get_session_id();
+    if (!session_id) {
+        return create_json_response(false, "No active session", NULL, response, len);
+    }
+
+    /* Get recording time from audio stats */
+    if (audio_get_stats(&audio_stats) != 0) {
+        return create_json_response(false, "Failed to get recording stats", NULL, response, len);
+    }
+
+    uint32_t recording_sec = audio_stats.recording_time_ms / 1000;
+    int err = storage_add_bookmark(session_id, recording_sec);
+    if (err) {
+        return create_json_response(false, "Failed to add bookmark", NULL, response, len);
+    }
+
+    /* Update UI - no haptic feedback for bookmark */
+    display_post_event(UI_EVENT_MARK);
+
+    /* Return success with recording time - use "offset" to match clip format */
+    char data[64];
+    snprintf(data, sizeof(data), "{\"offset\":%u}", recording_sec);
+
+    return create_json_response(true, NULL, data, response, len);
+}
+
+/* LIST Command Handler - List sessions or chunks (matches clip protocol) */
+static int cmd_list_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
+{
+    /*
+     * AT+LIST command formats:
+     * 1. AT+LIST or AT+LIST?page&per_page - List sessions with pagination
+     * 2. AT+LIST=session_id - Session details
+     * 3. AT+LIST=session_id?page&per_page - Paginated file list
+     *
+     * Response formats:
+     * 1. {"ok":true,"data":{"total":X,"page":Y,"per_page":Z,"sessions":[{"id":"...","files":X,"size":Y,"bookmarks":Z},...]}}
+     * 2. {"ok":true,"data":{"files":X,"size":Y,"synced":Z,"bookmarks":W,"channels":C,"sample_rate":R,"mode":"M"}}
+     * 3. {"ok":true,"data":{"total":X,"page":Y,"per_page":Z,"files":["0001.opus",...]}}
+     */
+
+    LOG_DBG("AT+LIST: args='%s'", ctx->args ? ctx->args : "(null)");
+
+    /* Check if SD card is mounted */
+    if (!storage_is_mounted()) {
+        LOG_WRN("SD card not mounted for AT+LIST");
+        return create_json_response(false, "SD card not mounted", NULL, response, len);
+    }
+
+    /* Static buffers to avoid stack overflow */
+    static struct storage_session_info session_buffer[20];  /* Max 20 sessions per page */
+    static char file_buffer[20][16];  /* File names: 0001.opus format */
+
+    /* Default pagination values */
+    int page = 1;
+    int per_page = 10;
+    int max_per_page = 50;
+
+    /* Parse arguments */
+    if (ctx->args && strlen(ctx->args) > 0) {
+        /* Check if starts with '?' - pagination for session list */
+        if (ctx->args[0] == '?') {
+            /* AT+LIST?page&per_page */
+            const char *query = ctx->args + 1;
+
+            /* Parse pagination */
+            char query_buf[32];
+            strncpy(query_buf, query, sizeof(query_buf) - 1);
+            query_buf[sizeof(query_buf) - 1] = '\0';
+
+            char *token = strtok(query_buf, "&");
+            if (token) {
+                page = atoi(token);
+                if (page < 1) page = 1;
+            }
+            token = strtok(NULL, "&");
+            if (token) {
+                per_page = atoi(token);
+                if (per_page < 1) per_page = 10;
+                if (per_page > max_per_page) per_page = max_per_page;
+            }
+
+            /* Limit per_page to buffer size */
+            if (per_page > 20) per_page = 20;
+
+            /* Get total count first */
+            int total_count = storage_count_sessions();
+            if (total_count < 0) {
+                return create_json_response(false, "Failed to count sessions", NULL, response, len);
+            }
+
+            /* Calculate offset */
+            int offset = (page - 1) * per_page;
+            if (offset >= total_count) {
+                /* Page beyond available data */
+                int n = snprintf(response, len,
+                    "{\"ok\":true,\"data\":{\"total\":%d,\"page\":%d,\"per_page\":%d,\"sessions\":[]}}",
+                    total_count, page, per_page);
+                if (n < 0 || n >= len - 2) return AT_ERR_NOMEM;
+                response[n] = '\n';
+                return n + 1;
+            }
+
+            /* Get paginated sessions */
+            int result_count = storage_list_sessions_paginated(session_buffer, offset, per_page);
+            if (result_count < 0) {
+                return create_json_response(false, "Failed to list sessions", NULL, response, len);
+            }
+
+            /* Build JSON response, filtering out empty sessions and deleting them */
+            char *json_data = response;
+            size_t remaining = len;
+            int total_written = 0;
+            int actual_count = 0;
+
+            int n = snprintf(json_data, remaining,
+                "{\"ok\":true,\"data\":{\"total\":%d,\"page\":%d,\"per_page\":%d,\"sessions\":[",
+                total_count, page, per_page);
+            if (n < 0 || n >= remaining) return AT_ERR_NOMEM;
+            json_data += n;
+            remaining -= n;
+            total_written += n;
+
+            for (int i = 0; i < result_count && remaining > 100; i++) {
+                /* Skip empty sessions and delete them */
+                if (session_buffer[i].file_count == 0) {
+                    LOG_INF("Deleting empty session: %s", session_buffer[i].session_id);
+                    storage_delete_session(session_buffer[i].session_id);
+                    continue;
+                }
+
+                int bookmark_count = storage_count_bookmarks(session_buffer[i].session_id);
+                if (bookmark_count < 0) bookmark_count = 0;
+
+                if (actual_count > 0) {
+                    n = snprintf(json_data, remaining, ",");
+                    if (n < 0 || n >= remaining) return AT_ERR_NOMEM;
+                    json_data += n;
+                    remaining -= n;
+                    total_written += n;
+                }
+
+                n = snprintf(json_data, remaining,
+                    "{\"id\":\"%s\",\"files\":%u,\"size\":%u,\"bookmarks\":%d}",
+                    session_buffer[i].session_id,
+                    session_buffer[i].file_count,
+                    (unsigned int)session_buffer[i].total_bytes,
+                    bookmark_count);
+                if (n < 0 || n >= remaining) return AT_ERR_NOMEM;
+                json_data += n;
+                remaining -= n;
+                total_written += n;
+                actual_count++;
+            }
+
+            n = snprintf(json_data, remaining, "]}}\n");
+            if (n < 0 || n >= remaining) return AT_ERR_NOMEM;
+            total_written += n;
+
+            return total_written;
+        }
+
+        /* Parse session_id and optional pagination */
+        char args_copy[64];
+        strncpy(args_copy, ctx->args, sizeof(args_copy) - 1);
+        args_copy[sizeof(args_copy) - 1] = '\0';
+
+        char *query = strchr(args_copy, '?');
+        char *session_id = args_copy;
+
+        if (query) {
+            *query = '\0';
+            query++;
+
+            /* Parse pagination */
+            char query_buf[32];
+            strncpy(query_buf, query, sizeof(query_buf) - 1);
+            query_buf[sizeof(query_buf) - 1] = '\0';
+
+            char *token = strtok(query_buf, "&");
+            if (token) {
+                page = atoi(token);
+                if (page < 1) page = 1;
+            }
+            token = strtok(NULL, "&");
+            if (token) {
+                per_page = atoi(token);
+                if (per_page < 1) per_page = 10;
+                if (per_page > max_per_page) per_page = max_per_page;
+            }
+
+            /* Limit per_page to buffer size */
+            if (per_page > 20) per_page = 20;
+
+            /* Get session info first */
+            struct storage_session_info info;
+            int err = storage_get_session_info(session_id, &info);
+            if (err != 0) {
+                return create_json_response(false, "Session not found", NULL, response, len);
+            }
+
+            /* List files with pagination */
+            uint32_t chunks[20];
+            int file_count = storage_list_chunks(session_id, chunks, per_page);
+            if (file_count < 0) {
+                return create_json_response(false, "Failed to list files", NULL, response, len);
+            }
+
+            /* Calculate pagination bounds */
+            int start_index = (page - 1) * per_page;
+            int end_index = start_index + per_page;
+            if (end_index > file_count) end_index = file_count;
+
+            /* Build JSON response */
+            char *json_data = response;
+            size_t remaining = len;
+            int total_written = 0;
+            int n;
+
+            n = snprintf(json_data, remaining,
+                "{\"ok\":true,\"data\":{\"total\":%d,\"page\":%d,\"per_page\":%d,\"files\":[",
+                info.file_count, page, per_page);
+            if (n < 0 || n >= remaining) return AT_ERR_NOMEM;
+            json_data += n;
+            remaining -= n;
+            total_written += n;
+
+            for (int i = start_index; i < end_index && remaining > 50; i++) {
+                if (i > start_index) {
+                    n = snprintf(json_data, remaining, ",");
+                    if (n < 0 || n >= remaining) return AT_ERR_NOMEM;
+                    json_data += n;
+                    remaining -= n;
+                    total_written += n;
+                }
+
+                n = snprintf(json_data, remaining, "\"%04u.opus\"", (unsigned int)chunks[i]);
+                if (n < 0 || n >= remaining) return AT_ERR_NOMEM;
+                json_data += n;
+                remaining -= n;
+                total_written += n;
+            }
+
+            n = snprintf(json_data, remaining, "]}}\n");
+            if (n < 0 || n >= remaining) return AT_ERR_NOMEM;
+            total_written += n;
+
+            return total_written;
+        }
+
+        /* No pagination - get session details */
+        struct storage_session_info info;
+        int err = storage_get_session_info(session_id, &info);
+        if (err != 0) {
+            return create_json_response(false, "Session not found", NULL, response, len);
+        }
+
+        int bookmark_count = storage_count_bookmarks(session_id);
+        if (bookmark_count < 0) bookmark_count = 0;
+
+        /* Build response */
+        char data[256];
+        int n = snprintf(data, sizeof(data),
+            "{\"files\":%u,\"size\":%u,\"synced\":%u,\"bookmarks\":%d,\"channels\":%u,\"sample_rate\":%u,\"mode\":\"%s\"}",
+            info.file_count,
+            (unsigned int)info.total_bytes,
+            info.synced_files,
+            bookmark_count,
+            info.channels,
+            info.sample_rate_khz * 1000,
+            info.mode);
+        if (n < 0 || n >= (int)sizeof(data)) {
+            return create_json_response(false, "Response too large", NULL, response, len);
+        }
+
+        return create_json_response(true, NULL, data, response, len);
+    }
+
+    /* No arguments - list first page of sessions */
+    /* First pass: get all sessions and delete empty ones */
+    static struct storage_session_info all_sessions[50];  /* Temp buffer for cleanup */
+    int all_count = storage_list_sessions(all_sessions, 50);
+    if (all_count > 0) {
+        for (int i = 0; i < all_count; i++) {
+            if (all_sessions[i].file_count == 0) {
+                LOG_INF("Deleting empty session: %s", all_sessions[i].session_id);
+                storage_delete_session(all_sessions[i].session_id);
+            }
+        }
+    }
+
+    /* Now count sessions after cleanup */
+    int total_count = storage_count_sessions();
+    if (total_count < 0) {
+        return create_json_response(false, "Failed to count sessions", NULL, response, len);
+    }
+
+    /* Use default pagination: page=1, per_page=10 */
+    per_page = 10;
+    if (per_page > 20) per_page = 20;
+
+    int offset = 0;
+    int result_count = storage_list_sessions_paginated(session_buffer, offset, per_page);
+    if (result_count < 0) {
+        return create_json_response(false, "Failed to list sessions", NULL, response, len);
+    }
+
+    /* Build JSON response */
+    char *json_data = response;
+    size_t remaining = len;
+    int total_written = 0;
+
+    int n = snprintf(json_data, remaining,
+        "{\"ok\":true,\"data\":{\"total\":%d,\"page\":%d,\"per_page\":%d,\"sessions\":[",
+        total_count, page, per_page);
+    if (n < 0 || n >= remaining) return AT_ERR_NOMEM;
+    json_data += n;
+    remaining -= n;
+    total_written += n;
+
+    for (int i = 0; i < result_count && remaining > 100; i++) {
+        int bookmark_count = storage_count_bookmarks(session_buffer[i].session_id);
+        if (bookmark_count < 0) bookmark_count = 0;
+
+        if (i > 0) {
+            n = snprintf(json_data, remaining, ",");
+            if (n < 0 || n >= remaining) return AT_ERR_NOMEM;
+            json_data += n;
+            remaining -= n;
+            total_written += n;
+        }
+
+        n = snprintf(json_data, remaining,
+            "{\"id\":\"%s\",\"files\":%u,\"size\":%u,\"bookmarks\":%d}",
+            session_buffer[i].session_id,
+            session_buffer[i].file_count,
+            (unsigned int)session_buffer[i].total_bytes,
+            bookmark_count);
+        if (n < 0 || n >= remaining) return AT_ERR_NOMEM;
+        json_data += n;
+        remaining -= n;
+        total_written += n;
+    }
+
+    n = snprintf(json_data, remaining, "]}}\n");
+    if (n < 0 || n >= remaining) return AT_ERR_NOMEM;
+    total_written += n;
+
+    return total_written;
+}
+
+/* MARKS Command Handler - List bookmarks */
+static int cmd_marks_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
+{
+    /* Format: AT+MARKS=<session_id>?page&per_page */
+    /* Without query: return summary (total count) */
+    /* With query: return paginated bookmark list */
+
+    if (!ctx->args || strlen(ctx->args) == 0) {
+        return create_json_response(false, "Missing session_id", NULL, response, len);
+    }
+
+    /* Check if SD card is mounted */
+    if (!storage_is_mounted()) {
+        return create_json_response(false, "SD card not mounted", NULL, response, len);
+    }
+
+    char args_copy[128];
+    strncpy(args_copy, ctx->args, sizeof(args_copy) - 1);
+    args_copy[sizeof(args_copy) - 1] = '\0';
+
+    /* Split by '?' to get session_id and query */
+    char *question_mark = strchr(args_copy, '?');
+    char *session_id = args_copy;
+    char *query = NULL;
+    int page = 1;
+    int per_page = 20;
+
+    if (question_mark) {
+        *question_mark = '\0';
+        session_id = args_copy;
+        query = question_mark + 1;
+
+        /* Parse pagination: page&per_page */
+        char *token = strtok(query, "&");
+        if (token) {
+            page = atoi(token);
+            if (page < 1) page = 1;
+        }
+        token = strtok(NULL, "&");
+        if (token) {
+            per_page = atoi(token);
+            if (per_page < 1) per_page = 20;
+            if (per_page > 100) per_page = 100;
+        }
+    }
+
+    /* If no query, return summary */
+    if (!query) {
+        int count = storage_count_bookmarks(session_id);
+        if (count < 0) {
+            return create_json_response(false, "Failed to get bookmark count", NULL, response, len);
+        }
+
+        char data[64];
+        snprintf(data, sizeof(data), "{\"session\":\"%s\",\"total\":%d}", session_id, count);
+        return create_json_response(true, NULL, data, response, len);
+    }
+
+    /* Get bookmarks with pagination */
+    struct storage_bookmark bookmarks[per_page];
+    int count = storage_get_bookmarks(session_id, page, per_page, bookmarks, per_page);
+    if (count < 0) {
+        return create_json_response(false, "Failed to get bookmarks", NULL, response, len);
+    }
+
+    /* Get total count */
+    int total = storage_count_bookmarks(session_id);
+    if (total < 0) {
+        total = count;  /* Fallback */
+    }
+
+    /* Build JSON response - wrap in data field to match clip format */
+    char *json_data = response;
+    size_t remaining = len;
+    int total_written = 0;
+
+    int n = snprintf(json_data, remaining,
+        "{\"ok\":true,\"data\":{\"total\":%d,\"page\":%d,\"per_page\":%d,\"bookmarks\":[",
+        total, page, per_page);
+    if (n < 0 || n >= (int)remaining) {
+        return AT_ERR_NOMEM;
+    }
+    json_data += n;
+    remaining -= n;
+    total_written += n;
+
+    for (int i = 0; i < count; i++) {
+        if (i > 0) {
+            n = snprintf(json_data, remaining, ",");
+            if (n < 0 || n >= (int)remaining) {
+                return AT_ERR_NOMEM;
+            }
+            json_data += n;
+            remaining -= n;
+            total_written += n;
+        }
+
+        n = snprintf(json_data, remaining, "{\"offset\":%u}", bookmarks[i].offset_sec);
+        if (n < 0 || n >= (int)remaining) {
+            return AT_ERR_NOMEM;
+        }
+        json_data += n;
+        remaining -= n;
+        total_written += n;
+    }
+
+    n = snprintf(json_data, remaining, "]}}\n");
+    if (n < 0 || n >= (int)remaining) {
+        return AT_ERR_NOMEM;
+    }
+    total_written += n;
+
+    return total_written;
+}
+
+/* DOWNLOAD Command Handler - Start file transfer */
+static int cmd_download_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
+{
+    /*
+     * AT+DOWNLOAD command formats:
+     * 1. AT+DOWNLOAD=<session_id> - Transfer entire session
+     * 2. AT+DOWNLOAD=<session_id>:<filename> - Transfer single file
+     *
+     * Response: {"ok":true,"data":{"state":"transmitting","session":"...","file":"...","total":X}}
+     */
+
+    struct transport *tp = NULL;
+
+    if (!ctx->args || strlen(ctx->args) == 0) {
+        return create_json_response(false, "Missing session_id", NULL, response, len);
+    }
+
+    /* Check if SD card is mounted */
+    if (!storage_is_mounted()) {
+        return create_json_response(false, "SD card not mounted", NULL, response, len);
+    }
+
+    /* Check if file data notify is enabled (required for BLE transfer only) */
+    if (ctx->transport_type == TRANSPORT_TYPE_BLE && !ble_is_file_data_notify_enabled()) {
+        return create_json_response(false, "File data notification not enabled", NULL, response, len);
+    }
+
+    /* Get transport based on where the command came from */
+    tp = transport_get(ctx->transport_type);
+    if (!tp) {
+        return create_json_response(false, "Transport not available", NULL, response, len);
+    }
+
+    /* Parse args: session_id or session_id:filename */
+    char args_copy[128];
+    strncpy(args_copy, ctx->args, sizeof(args_copy) - 1);
+    args_copy[sizeof(args_copy) - 1] = '\0';
+
+    char *colon = strchr(args_copy, ':');
+    char *session_id = args_copy;
+    char *filename = NULL;
+
+    if (colon) {
+        *colon = '\0';
+        filename = colon + 1;
+    }
+
+    /* Start transfer using the transport that received the command */
+    int err = transfer_start(session_id, filename, tp);
+    if (err) {
+        const char *msg = "Failed to start transfer";
+        if (err == -ENOENT) msg = "Session or file not found";
+        if (err == -EBUSY) msg = "Transfer already in progress";
+        if (err == -ENOTCONN) msg = "No transport available";
+        return create_json_response(false, msg, NULL, response, len);
+    }
+
+    /* Get transfer info for response */
+    struct transfer_info info;
+    transfer_get_progress(&info);
+
+    char data[256];
+    if (filename) {
+        snprintf(data, sizeof(data),
+                 "{\"state\":\"transmitting\",\"session\":\"%s\",\"file\":\"%s\",\"total\":%u}",
+                 info.session_id, info.current_file, (unsigned int)info.total_files);
+    } else {
+        snprintf(data, sizeof(data),
+                 "{\"state\":\"transmitting\",\"session\":\"%s\",\"total\":%u}",
+                 info.session_id, (unsigned int)info.total_files);
+    }
+
+    return create_json_response(true, NULL, data, response, len);
+}
+
+/* PROGRESS Command Handler - Query transfer progress */
+static int cmd_progress_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
+{
+    /*
+     * AT+PROGRESS - Get transfer progress
+     *
+     * Response: {"ok":true,"data":{"state":"...","file":"...","index":X,"total":Y,"percent":Z}}
+     */
+
+    if (!transfer_is_active()) {
+        return create_json_response(false, "No active transfer", NULL, response, len);
+    }
+
+    struct transfer_info info;
+    transfer_get_progress(&info);
+
+    const char *state_str = "idle";
+    switch (info.state) {
+    case TRANSFER_STATE_IDLE: state_str = "idle"; break;
+    case TRANSFER_STATE_TRANSMITTING: state_str = "transmitting"; break;
+    case TRANSFER_STATE_PAUSED: state_str = "paused"; break;
+    case TRANSFER_STATE_COMPLETED: state_str = "completed"; break;
+    case TRANSFER_STATE_ERROR: state_str = "error"; break;
+    }
+
+    char data[256];
+    snprintf(data, sizeof(data),
+             "{\"state\":\"%s\",\"file\":\"%s\",\"index\":%u,\"total\":%u,\"percent\":%u}",
+             state_str, info.current_file, info.file_index, info.total_files, info.progress_percent);
+
+    return create_json_response(true, NULL, data, response, len);
+}
+
+/* CANCEL Command Handler - Cancel transfer */
+static int cmd_cancel_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
+{
+    /*
+     * AT+CANCEL - Cancel ongoing transfer
+     *
+     * Response: {"ok":true,"data":{"canceled":true}}
+     */
+
+    if (!transfer_is_active()) {
+        return create_json_response(false, "No active transfer", NULL, response, len);
+    }
+
+    int err = transfer_cancel();
+    if (err) {
+        return create_json_response(false, "Failed to cancel transfer", NULL, response, len);
+    }
+
+    return create_json_response(true, NULL, "{\"canceled\":true}", response, len);
+}
+
+/* DELETE Command Handler - Delete a session */
+static int cmd_delete_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
+{
+    /*
+     * AT+DELETE=<session_id> - Delete a recording session
+     *
+     * Response: {"ok":true,"data":{"deleted":true}}
+     * Error: {"ok":false,"error":"..."}
+     */
+
+    if (!ctx->args || strlen(ctx->args) == 0) {
+        return create_json_response(false, "Missing session_id", NULL, response, len);
+    }
+
+    /* Check if SD card is mounted */
+    if (!storage_is_mounted()) {
+        return create_json_response(false, "SD card not mounted", NULL, response, len);
+    }
+
+    /* Parse session_id */
+    char session_id[32];
+    strncpy(session_id, ctx->args, sizeof(session_id) - 1);
+    session_id[sizeof(session_id) - 1] = '\0';
+
+    /* Trim whitespace */
+    char *end = session_id + strlen(session_id) - 1;
+    while (end > session_id && (*end == ' ' || *end == '\t' || *end == '\r' || *end == '\n')) {
+        *end-- = '\0';
+    }
+
+    int err = storage_delete_session(session_id);
+    if (err == -EBUSY) {
+        return create_json_response(false, "Cannot delete current recording session", NULL, response, len);
+    } else if (err == -ENOENT) {
+        return create_json_response(false, "Session not found", NULL, response, len);
+    } else if (err != 0) {
+        return create_json_response(false, "Failed to delete session", NULL, response, len);
+    }
+
+    return create_json_response(true, NULL, "{\"deleted\":true}", response, len);
+}
+
+/* PURGE Command Handler - Delete all sessions */
+static int cmd_purge_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
+{
+    /*
+     * AT+PURGE - Delete all recording sessions
+     *
+     * Response: {"ok":true,"data":{"purged":X}}
+     * Error: {"ok":false,"error":"..."}
+     */
+
+    /* Check if SD card is mounted */
+    if (!storage_is_mounted()) {
+        return create_json_response(false, "SD card not mounted", NULL, response, len);
+    }
+
+    /* Get all sessions */
+    static struct storage_session_info sessions[50];
+    int count = storage_list_sessions(sessions, 50);
+    if (count < 0) {
+        return create_json_response(false, "Failed to list sessions", NULL, response, len);
+    }
+
+    /* Delete each session */
+    int deleted = 0;
+    int failed = 0;
+    for (int i = 0; i < count; i++) {
+        int err = storage_delete_session(sessions[i].session_id);
+        if (err == 0) {
+            deleted++;
+        } else {
+            failed++;
+            LOG_WRN("Failed to delete session %s: %d", sessions[i].session_id, err);
+        }
+    }
+
+    char data[64];
+    snprintf(data, sizeof(data), "{\"purged\":%d,\"failed\":%d}", deleted, failed);
+    return create_json_response(true, NULL, data, response, len);
+}
+
+/* TPAUSE Command Handler - Pause transfer */
+static int cmd_tpause_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
+{
+    /*
+     * AT+TPAUSE - Pause transfer
+     *
+     * Response: {"ok":true,"data":{"paused":true}}
+     */
+
+    if (!transfer_is_active()) {
+        return create_json_response(false, "No active transfer", NULL, response, len);
+    }
+
+    int err = transfer_pause();
+    if (err) {
+        return create_json_response(false, "Failed to pause transfer", NULL, response, len);
+    }
+
+    return create_json_response(true, NULL, "{\"paused\":true}", response, len);
+}
+
+/* TRESUME Command Handler - Resume transfer */
+static int cmd_tresume_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
+{
+    /*
+     * AT+TRESUME - Resume paused transfer
+     *
+     * Response: {"ok":true,"data":{"resumed":true}}
+     */
+
+    if (transfer_get_state() != TRANSFER_STATE_PAUSED) {
+        return create_json_response(false, "Transfer not paused", NULL, response, len);
+    }
+
+    int err = transfer_resume_transfer();
+    if (err) {
+        return create_json_response(false, "Failed to resume transfer", NULL, response, len);
+    }
+
+    return create_json_response(true, NULL, "{\"resumed\":true}", response, len);
+}
+
+/* WIFI Command Handler - Control WiFi AP */
+static int cmd_wifi_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
+{
+    /*
+     * AT+WIFI=on  - Start WiFi AP
+     * AT+WIFI=off - Stop WiFi AP
+     * AT+WIFI?    - Query WiFi AP status
+     *
+     * Response (on success):
+     * {"ok":true,"data":{"ssid":"ClipAP_xxxx","password":"12345678","ip":"192.168.4.1","port":8080}}
+     */
+
+    struct clip_context *c = clip_get_context();
+
+    if (ctx->type == AT_CMD_TYPE_SET || ctx->type == AT_CMD_TYPE_EXEC) {
+        if (!ctx->args || strlen(ctx->args) == 0) {
+            return create_json_response(false, "Missing argument (on/off)", NULL, response, len);
+        }
+
+        /* Parse argument */
+        char arg[16];
+        strncpy(arg, ctx->args, sizeof(arg) - 1);
+        arg[sizeof(arg) - 1] = '\0';
+        for (char *p = arg; *p; p++) {
+            if (*p >= 'A' && *p <= 'Z') {
+                *p = *p - 'A' + 'a';
+            }
+        }
+
+        if (strcmp(arg, "on") == 0 || strcmp(arg, "1") == 0) {
+            /* Check state - can't start WiFi while recording or transmitting */
+            if (c->state == CLIP_STATE_RECORDING || c->state == CLIP_STATE_PAUSED) {
+                return create_json_response(false, "Cannot start WiFi while recording", NULL, response, len);
+            }
+            if (c->state == CLIP_STATE_TRANSMITTING) {
+                return create_json_response(false, "Cannot start WiFi while transmitting", NULL, response, len);
+            }
+
+            /* Check if already running */
+            if (wifi_ap_is_running()) {
+                char data[256];
+                snprintf(data, sizeof(data),
+                         "{\"ssid\":\"%s\",\"password\":\"%s\",\"ip\":\"%s\",\"port\":%d}",
+                         wifi_get_ssid(), wifi_get_password(), wifi_get_ip_address(), WIFI_AP_UDP_PORT);
+                return create_json_response(true, NULL, data, response, len);
+            }
+
+            /* Start WiFi AP */
+            int err = wifi_on();
+            if (err) {
+                LOG_ERR("Failed to start WiFi AP: %d", err);
+                return create_json_response(false, "Failed to start WiFi AP", NULL, response, len);
+            }
+
+            /* Update state */
+            c->state = CLIP_STATE_WIFI_SYNC;
+
+            char data[256];
+            snprintf(data, sizeof(data),
+                     "{\"ssid\":\"%s\",\"password\":\"%s\",\"ip\":\"%s\",\"port\":%d}",
+                     wifi_get_ssid(), wifi_get_password(), wifi_get_ip_address(), WIFI_AP_UDP_PORT);
+            return create_json_response(true, NULL, data, response, len);
+
+        } else if (strcmp(arg, "off") == 0 || strcmp(arg, "0") == 0) {
+            /* Stop WiFi AP */
+            int err = wifi_off();
+            if (err) {
+                LOG_ERR("Failed to stop WiFi AP: %d", err);
+                return create_json_response(false, "Failed to stop WiFi AP", NULL, response, len);
+            }
+
+            /* Update state back to idle */
+            if (c->state == CLIP_STATE_WIFI_SYNC) {
+                c->state = CLIP_STATE_IDLE;
+            }
+
+            return create_json_response(true, NULL, "{\"wifi\":\"off\"}", response, len);
+
+        } else {
+            return create_json_response(false, "Invalid argument (use on/off)", NULL, response, len);
+        }
+    } else {
+        /* Query status */
+        char data[256];
+        if (wifi_ap_is_running()) {
+            snprintf(data, sizeof(data),
+                     "{\"running\":true,\"ssid\":\"%s\",\"password\":\"%s\",\"ip\":\"%s\",\"port\":%d,\"connected\":%s}",
+                     wifi_get_ssid(), wifi_get_password(), wifi_get_ip_address(), WIFI_AP_UDP_PORT,
+                     wifi_is_sta_connected() ? "true" : "false");
+        } else {
+            snprintf(data, sizeof(data), "{\"running\":false}");
+        }
+        return create_json_response(true, NULL, data, response, len);
+    }
+}
+
+/* Register all AT commands */
+int at_commands_register(void)
+{
+    int err;
+
+    /* GSTAT - Get device status */
+    static const struct at_command gstat_cmd = {
+        .name = "GSTAT",
+        .flags = AT_CMD_EXEC,
+        .handler = cmd_gstat_handler,
+    };
+    err = at_server_register_cmd(&gstat_cmd);
+    if (err) return err;
+
+    /* DEVICE - Get device name */
+    static const struct at_command device_cmd = {
+        .name = "DEVICE",
+        .flags = AT_CMD_QUERY | AT_CMD_EXEC,
+        .handler = cmd_device_handler,
+    };
+    err = at_server_register_cmd(&device_cmd);
+    if (err) return err;
+
+    /* VERSION - Get firmware version */
+    static const struct at_command version_cmd = {
+        .name = "VERSION",
+        .flags = AT_CMD_EXEC,
+        .handler = cmd_version_handler,
+    };
+    err = at_server_register_cmd(&version_cmd);
+    if (err) return err;
+
+    /* TIME - Get/Set time */
+    static const struct at_command time_cmd = {
+        .name = "TIME",
+        .flags = AT_CMD_SET | AT_CMD_QUERY | AT_CMD_EXEC,
+        .handler = cmd_time_handler,
+    };
+    err = at_server_register_cmd(&time_cmd);
+    if (err) return err;
+
+    /* BITRATE - Get/Set Opus bitrate */
+    static const struct at_command bitrate_cmd = {
+        .name = "BITRATE",
+        .flags = AT_CMD_SET | AT_CMD_QUERY | AT_CMD_EXEC,
+        .handler = cmd_bitrate_handler,
+    };
+    err = at_server_register_cmd(&bitrate_cmd);
+    if (err) return err;
+
+    /* COMPLEXITY - Get/Set Opus complexity */
+    static const struct at_command complexity_cmd = {
+        .name = "COMPLEXITY",
+        .flags = AT_CMD_SET | AT_CMD_QUERY | AT_CMD_EXEC,
+        .handler = cmd_complexity_handler,
+    };
+    err = at_server_register_cmd(&complexity_cmd);
+    if (err) return err;
+
+    /* MODE - Get/Set recording mode */
+    static const struct at_command mode_cmd = {
+        .name = "MODE",
+        .flags = AT_CMD_SET | AT_CMD_QUERY | AT_CMD_EXEC,
+        .handler = cmd_mode_handler,
+    };
+    err = at_server_register_cmd(&mode_cmd);
+    if (err) return err;
+
+    /* NOISE - Get/Set noise suppression */
+    static const struct at_command noise_cmd = {
+        .name = "NOISE",
+        .flags = AT_CMD_SET | AT_CMD_QUERY | AT_CMD_EXEC,
+        .handler = cmd_noise_handler,
+    };
+    err = at_server_register_cmd(&noise_cmd);
+    if (err) return err;
+
+    /* AGC - Get/Set AGC */
+    static const struct at_command agc_cmd = {
+        .name = "AGC",
+        .flags = AT_CMD_SET | AT_CMD_QUERY | AT_CMD_EXEC,
+        .handler = cmd_agc_handler,
+    };
+    err = at_server_register_cmd(&agc_cmd);
+    if (err) return err;
+
+    /* DEREVERB - Get/Set dereverberation */
+    static const struct at_command dereverb_cmd = {
+        .name = "DEREVERB",
+        .flags = AT_CMD_SET | AT_CMD_QUERY | AT_CMD_EXEC,
+        .handler = cmd_dereverb_handler,
+    };
+    err = at_server_register_cmd(&dereverb_cmd);
+    if (err) return err;
+
+    /* AUTODEL - Get/Set auto-delete policy */
+    static const struct at_command autodel_cmd = {
+        .name = "AUTODEL",
+        .flags = AT_CMD_SET | AT_CMD_QUERY | AT_CMD_EXEC,
+        .handler = cmd_autodel_handler,
+    };
+    err = at_server_register_cmd(&autodel_cmd);
+    if (err) return err;
+
+    /* BRIGHTNESS - Get/Set OLED brightness */
+    static const struct at_command brightness_cmd = {
+        .name = "BRIGHTNESS",
+        .flags = AT_CMD_SET | AT_CMD_QUERY | AT_CMD_EXEC,
+        .handler = cmd_brightness_handler,
+    };
+    err = at_server_register_cmd(&brightness_cmd);
+    if (err) return err;
+
+    /* CHUNKSIZE - Get/Set transfer chunk size */
+    static const struct at_command chunksize_cmd = {
+        .name = "CHUNKSIZE",
+        .flags = AT_CMD_SET | AT_CMD_QUERY | AT_CMD_EXEC,
+        .handler = cmd_chunksize_handler,
+    };
+    err = at_server_register_cmd(&chunksize_cmd);
+    if (err) return err;
+
+    /* POWEROFF - Shutdown the device */
+    static const struct at_command poweroff_cmd = {
+        .name = "POWEROFF",
+        .flags = AT_CMD_EXEC,
+        .handler = cmd_poweroff_handler,
+    };
+    err = at_server_register_cmd(&poweroff_cmd);
+    if (err) return err;
+
+    /* FACTORY - Factory reset (requires confirmation) */
+    static const struct at_command factory_cmd = {
+        .name = "FACTORY",
+        .flags = AT_CMD_SET | AT_CMD_EXEC,
+        .handler = cmd_factory_handler,
+    };
+    err = at_server_register_cmd(&factory_cmd);
+    if (err) return err;
+
+    /* REBOOT - Reboot the device */
+    static const struct at_command reboot_cmd = {
+        .name = "REBOOT",
+        .flags = AT_CMD_EXEC,
+        .handler = cmd_reboot_handler,
+    };
+    err = at_server_register_cmd(&reboot_cmd);
+    if (err) return err;
+
+    /* START - Start recording */
+    static const struct at_command start_cmd = {
+        .name = "START",
+        .flags = AT_CMD_EXEC | AT_CMD_SET,
+        .handler = cmd_start_handler,
+    };
+    err = at_server_register_cmd(&start_cmd);
+    if (err) return err;
+
+    /* STOP - Stop recording */
+    static const struct at_command stop_cmd = {
+        .name = "STOP",
+        .flags = AT_CMD_EXEC,
+        .handler = cmd_stop_handler,
+    };
+    err = at_server_register_cmd(&stop_cmd);
+    if (err) return err;
+
+    /* PAUSE - Pause recording */
+    static const struct at_command pause_cmd = {
+        .name = "PAUSE",
+        .flags = AT_CMD_EXEC,
+        .handler = cmd_pause_handler,
+    };
+    err = at_server_register_cmd(&pause_cmd);
+    if (err) return err;
+
+    /* RESUME - Resume recording */
+    static const struct at_command resume_cmd = {
+        .name = "RESUME",
+        .flags = AT_CMD_EXEC,
+        .handler = cmd_resume_handler,
+    };
+    err = at_server_register_cmd(&resume_cmd);
+    if (err) return err;
+
+    /* MARK - Add bookmark */
+    static const struct at_command mark_cmd = {
+        .name = "MARK",
+        .flags = AT_CMD_EXEC,
+        .handler = cmd_mark_handler,
+    };
+    err = at_server_register_cmd(&mark_cmd);
+    if (err) return err;
+
+    /* LIST - List sessions or chunks */
+    static const struct at_command list_cmd = {
+        .name = "LIST",
+        .flags = AT_CMD_SET | AT_CMD_QUERY | AT_CMD_EXEC,
+        .handler = cmd_list_handler,
+    };
+    err = at_server_register_cmd(&list_cmd);
+    if (err) return err;
+
+    /* MARKS - List bookmarks */
+    static const struct at_command marks_cmd = {
+        .name = "MARKS",
+        .flags = AT_CMD_SET | AT_CMD_QUERY | AT_CMD_EXEC,
+        .handler = cmd_marks_handler,
+    };
+    err = at_server_register_cmd(&marks_cmd);
+    if (err) return err;
+
+    /* DOWNLOAD - Start file transfer */
+    static const struct at_command download_cmd = {
+        .name = "DOWNLOAD",
+        .flags = AT_CMD_SET | AT_CMD_EXEC,
+        .handler = cmd_download_handler,
+    };
+    err = at_server_register_cmd(&download_cmd);
+    if (err) return err;
+
+    /* PROGRESS - Query transfer progress */
+    static const struct at_command progress_cmd = {
+        .name = "PROGRESS",
+        .flags = AT_CMD_EXEC | AT_CMD_QUERY,
+        .handler = cmd_progress_handler,
+    };
+    err = at_server_register_cmd(&progress_cmd);
+    if (err) return err;
+
+    /* CANCEL - Cancel transfer */
+    static const struct at_command cancel_cmd = {
+        .name = "CANCEL",
+        .flags = AT_CMD_EXEC,
+        .handler = cmd_cancel_handler,
+    };
+    err = at_server_register_cmd(&cancel_cmd);
+    if (err) return err;
+
+    /* DELETE - Delete a session */
+    static const struct at_command delete_cmd = {
+        .name = "DELETE",
+        .flags = AT_CMD_SET,
+        .handler = cmd_delete_handler,
+    };
+    err = at_server_register_cmd(&delete_cmd);
+    if (err) return err;
+
+    /* PURGE - Delete all sessions */
+    static const struct at_command purge_cmd = {
+        .name = "PURGE",
+        .flags = AT_CMD_EXEC,
+        .handler = cmd_purge_handler,
+    };
+    err = at_server_register_cmd(&purge_cmd);
+    if (err) return err;
+
+    /* TPAUSE - Pause transfer */
+    static const struct at_command tpause_cmd = {
+        .name = "TPAUSE",
+        .flags = AT_CMD_EXEC,
+        .handler = cmd_tpause_handler,
+    };
+    err = at_server_register_cmd(&tpause_cmd);
+    if (err) return err;
+
+    /* TRESUME - Resume transfer */
+    static const struct at_command tresume_cmd = {
+        .name = "TRESUME",
+        .flags = AT_CMD_EXEC,
+        .handler = cmd_tresume_handler,
+    };
+    err = at_server_register_cmd(&tresume_cmd);
+    if (err) return err;
+
+    /* WIFI - Control WiFi AP */
+    static const struct at_command wifi_cmd = {
+        .name = "WIFI",
+        .flags = AT_CMD_SET | AT_CMD_QUERY | AT_CMD_EXEC,
+        .handler = cmd_wifi_handler,
+    };
+    err = at_server_register_cmd(&wifi_cmd);
+    if (err) return err;
+
+    LOG_INF("AT commands registered");
+    return 0;
+}

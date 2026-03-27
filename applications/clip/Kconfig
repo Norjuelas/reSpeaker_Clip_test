@@ -1,0 +1,166 @@
+#
+# Copyright (c) 2025 Seeed Technology Co., Ltd.
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+
+source "Kconfig.zephyr"
+
+# Main application
+menuconfig CLIP2
+	bool "Clip2 Application"
+	default y
+
+if CLIP2
+
+module = CLIP2
+module-str = Clip2 Application
+source "subsys/logging/Kconfig.template.log_config"
+
+# =============================================================================
+# Configuration Defaults
+# =============================================================================
+
+config CLIP2_DEFAULT_BITRATE
+	int "Default Opus bitrate (bps)"
+	default 24000
+
+config CLIP2_DEFAULT_COMPLEXITY
+	int "Default Opus complexity (0-10)"
+	range 0 10
+	default 0
+
+config CLIP2_DEFAULT_NOISE
+	int "Default noise suppression level (dB)"
+	default 15
+
+config CLIP2_DEFAULT_CHUNK_SIZE
+	int "Default transfer chunk size (bytes)"
+	default 4096
+
+config CLIP2_DEFAULT_AGC_ENABLED
+	bool "Default AGC enabled"
+	default y
+
+config CLIP2_DEFAULT_AGC_TARGET
+	int "Default AGC target level"
+	default 8000
+
+config CLIP2_DEFAULT_CONTRAST
+	int "Default OLED contrast (0-255)"
+	default 128
+
+# =============================================================================
+# Button Configuration
+# =============================================================================
+
+config CLIP2_BUTTON_WORK_STACK_SIZE
+	int "Button work queue stack size"
+	default 2048
+
+config CLIP2_BUTTON_WORK_PRIORITY
+	int "Button work queue priority"
+	default 5
+
+# =============================================================================
+# AT Server Configuration
+# =============================================================================
+
+config CLIP_AT_SERVER_QUEUE_SIZE
+	int "AT command queue size"
+	default 10
+
+config CLIP_AT_SERVER_STACK_SIZE
+	int "AT server thread stack size"
+	default 4096
+
+config CLIP_AT_SERVER_PRIORITY
+	int "AT server thread priority"
+	default 7
+
+config CLIP_AT_MAX_CMD_LEN
+	int "Maximum AT command length"
+	default 256
+
+config CLIP_AT_MAX_RESPONSE_LEN
+	int "Maximum AT response length"
+	default 1024
+
+# =============================================================================
+# Audio Configuration
+# =============================================================================
+
+config CLIP_AUDIO_STACK_SIZE
+	int "Audio thread stack size"
+	default 32768
+
+config CLIP_AUDIO_THREAD_PRIORITY
+	int "Audio thread priority"
+	default 0
+
+config CLIP_AUDIO_ENABLED
+	bool "Enable audio recording"
+	default y
+
+# =============================================================================
+# Storage Configuration
+# =============================================================================
+
+config CLIP_STORAGE_ENABLED
+	bool "Enable SD card storage"
+	default y
+
+config CLIP_STORAGE_MAX_SESSIONS
+	int "Maximum number of sessions to list"
+	default 100
+
+config CLIP_STORAGE_SESSIONS_PER_PAGE
+	int "Sessions per page for LIST command"
+	default 20
+
+config CLIP_STORAGE_MAX_CHUNKS
+	int "Maximum chunks per session"
+	default 9999
+
+config CLIP_STORAGE_CHUNK_SIZE
+	int "Storage chunk buffer size (bytes)"
+	default 4096
+
+# =============================================================================
+# Audio Segment Configuration
+# =============================================================================
+
+config CLIP_AUDIO_SEGMENT_DURATION_SYNC
+	int "Audio segment duration during sync (seconds)"
+	range 10 600
+	default 60
+
+config CLIP_AUDIO_SEGMENT_DURATION_NO_SYNC
+	int "Audio segment duration without sync (seconds)"
+	range 20 3600
+	default 300
+
+# =============================================================================
+# Transfer Configuration
+# =============================================================================
+
+config CLIP_TRANSFER_ENABLED
+	bool "Enable file transfer"
+	default y
+
+config CLIP_TRANSFER_STACK_SIZE
+	int "Transfer thread stack size"
+	default 16384
+
+config CLIP_TRANSFER_THREAD_PRIORITY
+	int "Transfer thread priority"
+	default 5
+
+config CLIP_TRANSFER_CHUNK_SIZE
+	int "Transfer chunk size (bytes)"
+	default 240
+	help
+	  Default: 240 bytes = 1 BLE notification (MTU 247 - 3 ATT header)
+	  for optimal throughput.
+
+endif # CLIP2

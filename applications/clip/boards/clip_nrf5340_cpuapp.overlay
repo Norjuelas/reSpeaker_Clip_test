@@ -1,0 +1,24 @@
+/*
+ * Copyright (c) 2025 Seeed Technology Co., Ltd.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+/* Device tree overlay for Clip2 application */
+
+/ {
+    /* Reserved for future use */
+};
+
+/* Enable display for UI module */
+&ch1115 {
+    status = "okay";
+};
+
+&i2c2 {
+    status = "okay";
+};
+
+&uart0 {
+    current-speed = <921600>;
+};

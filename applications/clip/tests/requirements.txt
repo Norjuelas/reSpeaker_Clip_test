@@ -1,0 +1,3 @@
+# Python requirements for Clip2 AT command tests
+
+bleak>=0.20.0

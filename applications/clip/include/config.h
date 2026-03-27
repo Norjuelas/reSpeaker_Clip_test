@@ -1,0 +1,195 @@
+/*
+ * Copyright (c) 2025 Seeed Technology Co., Ltd.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+#ifndef CLIP2_CONFIG_H
+#define CLIP2_CONFIG_H
+
+#include <stdint.h>
+#include <stddef.h>
+
+/* Configuration keys */
+#define CONFIG_KEY_BITRATE       0x01
+#define CONFIG_KEY_COMPLEXITY    0x02
+#define CONFIG_KEY_MODE          0x03
+#define CONFIG_KEY_NOISE         0x04
+#define CONFIG_KEY_CHUNK_SIZE    0x05
+#define CONFIG_KEY_AUTODEL       0x06
+#define CONFIG_KEY_AGC_ENABLE    0x07
+#define CONFIG_KEY_AGC_TARGET    0x08
+#define CONFIG_KEY_DEREVERB      0x09
+#define CONFIG_KEY_CONTRAST      0x0A
+
+/* Default values */
+#define CONFIG_DEFAULT_BITRATE       24000
+#define CONFIG_DEFAULT_COMPLEXITY    5
+#define CONFIG_DEFAULT_MODE          0  /* MODE_NORMAL */
+#define CONFIG_DEFAULT_NOISE         15
+#define CONFIG_DEFAULT_CHUNK_SIZE    4096
+#define CONFIG_DEFAULT_AUTODEL       -1
+#define CONFIG_DEFAULT_AGC_TARGET    8000
+#define CONFIG_DEFAULT_AGC_ENABLED   true
+#define CONFIG_DEFAULT_DEREVERB      false
+#define CONFIG_DEFAULT_CONTRAST      128
+
+/**
+ * @brief Initialize configuration system
+ *
+ * @return 0 on success, negative error code on failure
+ */
+int config_init(void);
+
+/**
+ * @brief Load configuration from storage
+ *
+ * @return 0 on success, negative error code on failure
+ */
+int config_load(void);
+
+/**
+ * @brief Save configuration to storage
+ *
+ * @return 0 on success, negative error code on failure
+ */
+int config_save(void);
+
+/**
+ * @brief Reset configuration to factory defaults
+ *
+ * @return 0 on success, negative error code on failure
+ */
+int config_factory_reset(void);
+
+/**
+ * @brief Set configuration value
+ *
+ * @param key   Configuration key
+ * @param value Pointer to value
+ * @param len   Length of value
+ * @return 0 on success, negative error code on failure
+ */
+int config_set(uint16_t key, const void *value, size_t len);
+
+/**
+ * @brief Get configuration value
+ *
+ * @param key    Configuration key
+ * @param value  Output buffer
+ * @param len    Length of buffer
+ * @return 0 on success, negative error code on failure
+ */
+int config_get(uint16_t key, void *value, size_t len);
+
+/**
+ * @brief Save Unix timestamp to storage
+ *
+ * @param unix_time Unix timestamp
+ * @return 0 on success, negative error code on failure
+ */
+int config_set_time(int64_t unix_time);
+
+/**
+ * @brief Get Unix timestamp from storage
+ *
+ * @param unix_time Output buffer for Unix timestamp
+ * @return 0 on success, negative error code if time not set
+ */
+int config_get_time(int64_t *unix_time);
+
+/**
+ * @brief Set time values (YMDHMS)
+ *
+ * @param year Year
+ * @param month Month (1-12)
+ * @param day Day (1-31)
+ * @param hour Hour (0-23)
+ * @param min Minute (0-59)
+ * @param sec Second (0-59)
+ * @return 0 on success, negative error code on failure
+ */
+int config_set_time_ymd(uint16_t year, uint8_t month, uint8_t day,
+                        uint8_t hour, uint8_t min, uint8_t sec);
+
+/**
+ * @brief Set Opus bitrate
+ *
+ * @param bitrate Bitrate in bps
+ * @return 0 on success, negative error code on failure
+ */
+int config_set_bitrate(uint16_t bitrate);
+
+/**
+ * @brief Set Opus complexity
+ *
+ * @param complexity Complexity (0-10)
+ * @return 0 on success, negative error code on failure
+ */
+int config_set_complexity(uint8_t complexity);
+
+/**
+ * @brief Set recording mode
+ *
+ * @param mode Recording mode
+ * @return 0 on success, negative error code on failure
+ */
+int config_set_mode(enum recording_mode mode);
+
+/**
+ * @brief Set noise suppression level
+ *
+ * @param noise Noise suppression in dB
+ * @return 0 on success, negative error code on failure
+ */
+int config_set_noise_suppress(uint8_t noise);
+
+/**
+ * @brief Set chunk size
+ *
+ * @param chunk_size Chunk size in bytes
+ * @return 0 on success, negative error code on failure
+ */
+int config_set_chunk_size(uint16_t chunk_size);
+
+/**
+ * @brief Set auto-delete days
+ *
+ * @param days Days (0-30) or -1 for off
+ * @return 0 on success, negative error code on failure
+ */
+int config_set_auto_delete_days(int8_t days);
+
+/**
+ * @brief Set AGC enabled
+ *
+ * @param enabled true to enable, false to disable
+ * @return 0 on success, negative error code on failure
+ */
+int config_set_agc_enabled(bool enabled);
+
+/**
+ * @brief Set AGC target level
+ *
+ * @param target Target level
+ * @return 0 on success, negative error code on failure
+ */
+int config_set_agc_target(uint16_t target);
+
+/**
+ * @brief Set dereverb enabled
+ *
+ * @param enabled true to enable, false to disable
+ * @return 0 on success, negative error code on failure
+ */
+int config_set_dereverb_enabled(bool enabled);
+
+/**
+ * @brief Set OLED contrast
+ *
+ * @param contrast Contrast (0-255)
+ * @return 0 on success, negative error code on failure
+ */
+int config_set_oled_contrast(uint8_t contrast);
+
+#endif /* CLIP2_CONFIG_H */

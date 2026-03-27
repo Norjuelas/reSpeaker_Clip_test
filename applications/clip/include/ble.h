@@ -1,0 +1,164 @@
+/*
+ * Copyright (c) 2025 Seeed Technology Co., Ltd.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+#ifndef CLIP2_BLE_H
+#define CLIP2_BLE_H
+
+#include <zephyr/bluetooth/bluetooth.h>
+#include <zephyr/bluetooth/conn.h>
+#include <zephyr/bluetooth/gatt.h>
+#include <zephyr/bluetooth/uuid.h>
+
+/* Service UUID: 6E400001-B5A3-F393-E0A9-E50E24DCCA9E */
+#define BT_UUID_CLIP_SVC \
+    BT_UUID_DECLARE_128(BT_UUID_128_ENCODE(0x6E400001, 0xB5A3, 0xF393, 0xE0A9, 0xE50E24DCCA9E))
+
+/* Characteristic UUID: Command Receive (Write) */
+#define BT_UUID_CLIP_CMD_RECV \
+    BT_UUID_DECLARE_128(BT_UUID_128_ENCODE(0x6E400002, 0xB5A3, 0xF393, 0xE0A9, 0xE50E24DCCA9E))
+
+/* Characteristic UUID: Response Send (Notify) */
+#define BT_UUID_CLIP_RESP_SEND \
+    BT_UUID_DECLARE_128(BT_UUID_128_ENCODE(0x6E400003, 0xB5A3, 0xF393, 0xE0A9, 0xE50E24DCCA9E))
+
+/* Characteristic UUID: File Data (Notify) */
+#define BT_UUID_CLIP_FILE_DATA \
+    BT_UUID_DECLARE_128(BT_UUID_128_ENCODE(0x6E400004, 0xB5A3, 0xF393, 0xE0A9, 0xE50E24DCCA9E))
+
+/* Characteristic UUID: Audio Visualization (Notify) */
+#define BT_UUID_CLIP_AUDIO_VIS \
+    BT_UUID_DECLARE_128(BT_UUID_128_ENCODE(0x6E400005, 0xB5A3, 0xF393, 0xE0A9, 0xE50E24DCCA9E))
+
+/**
+ * @brief BLE context structure
+ */
+struct ble_context {
+    struct bt_conn *conn;
+    bool notify_enabled;
+    bool file_data_notify_enabled;
+    bool audio_vis_notify_enabled;
+    char device_name[16];
+};
+
+/**
+ * @brief Command received callback type
+ *
+ * @param data Command data
+ * @param len Length of data
+ * @return 0 on success, negative error code on failure
+ */
+typedef int (*ble_cmd_callback_t)(const uint8_t *data, uint16_t len);
+
+/**
+ * @brief Initialize BLE service
+ *
+ * @return 0 on success, negative error code on failure
+ */
+int ble_init(void);
+
+/**
+ * @brief Register command callback
+ *
+ * @param callback Callback function for received commands
+ * @return 0 on success, negative error code on failure
+ */
+int ble_register_cmd_callback(ble_cmd_callback_t callback);
+
+/**
+ * @brief Send data via BLE notification (for AT command responses)
+ *
+ * @param data Data to send
+ * @param len Length of data
+ * @return 0 on success, negative error code on failure
+ */
+int ble_send(const uint8_t *data, uint16_t len);
+
+/**
+ * @brief Send file data via BLE notification (uses FILE_DATA characteristic)
+ *
+ * @param data Data to send
+ * @param len Length of data
+ * @return 0 on success, negative error code on failure
+ */
+int ble_send_file_data(const uint8_t *data, uint16_t len);
+
+/**
+ * @brief Check if BLE is connected
+ *
+ * @return true if connected, false otherwise
+ */
+bool ble_is_connected(void);
+
+/**
+ * @brief Check if BLE notify is enabled
+ *
+ * @return true if notify enabled, false otherwise
+ */
+bool ble_is_notify_enabled(void);
+
+/**
+ * @brief Check if file data notify is enabled
+ *
+ * @return true if file data notify enabled, false otherwise
+ */
+bool ble_is_file_data_notify_enabled(void);
+
+/**
+ * @brief Check if BLE has any bonded devices
+ *
+ * @return true if at least one bond exists, false otherwise
+ */
+bool ble_is_bonded(void);
+
+/**
+ * @brief Get BLE connection
+ *
+ * @return Connection pointer or NULL if not connected
+ */
+struct bt_conn *ble_get_connection(void);
+
+/**
+ * @brief Get device name
+ *
+ * @return Device name string
+ */
+const char *ble_get_device_name(void);
+
+/* Zero-copy response buffer size */
+#define BLE_RESPONSE_BUFFER_SIZE 1024
+
+/**
+ * @brief Get zero-copy response buffer
+ *
+ * @return Pointer to buffer
+ */
+char *ble_get_response_buffer(void);
+
+/**
+ * @brief Get response buffer size
+ *
+ * @return Buffer size in bytes
+ */
+size_t ble_get_response_buffer_size(void);
+
+/**
+ * @brief Send response from buffer
+ *
+ * @param len Length of data to send
+ * @return 0 on success, negative error code on failure
+ */
+int ble_send_response_buffer(size_t len);
+
+/**
+ * @brief Send audio visualization data via BLE notification
+ *
+ * @param data Audio visualization data to send
+ * @param len Length of data
+ * @return 0 on success, negative error code on failure
+ */
+int ble_send_audio_vis(const uint8_t *data, uint16_t len);
+
+#endif /* CLIP2_BLE_H */
