@@ -69,14 +69,16 @@ int storage_init(void)
 
     /* Initialize SD card */
     rc = disk_access_init("SD");
-    if (rc != 0) {
+    if (rc != 0)
+    {
         LOG_WRN("SD init failed: %d", rc);
         return rc;
     }
 
     /* Mount filesystem */
     rc = fs_mount(&mp);
-    if (rc != 0) {
+    if (rc != 0)
+    {
         LOG_WRN("SD mount failed: %d", rc);
         sd_mounted = false;
         return rc;
@@ -87,9 +89,11 @@ int storage_init(void)
 
     /* Create base REC directory if not exists */
     rc = fs_stat(STORAGE_BASE_PATH, &entry);
-    if (rc != 0 || entry.type != FS_DIR_ENTRY_DIR) {
+    if (rc != 0 || entry.type != FS_DIR_ENTRY_DIR)
+    {
         rc = fs_mkdir(STORAGE_BASE_PATH);
-        if (rc != 0 && rc != -EEXIST) {
+        if (rc != 0 && rc != -EEXIST)
+        {
             LOG_ERR("Failed to create REC directory: %d", rc);
             return rc;
         }
@@ -102,7 +106,8 @@ int storage_init(void)
 
 void storage_cleanup(void)
 {
-    if (sd_mounted) {
+    if (sd_mounted)
+    {
         fs_unmount(&mp);
         sd_mounted = false;
     }
@@ -115,7 +120,8 @@ bool storage_is_mounted(void)
 
 int storage_get_stats(struct storage_stats *stats)
 {
-    if (!stats) {
+    if (!stats)
+    {
         return -EINVAL;
     }
 
@@ -124,7 +130,8 @@ int storage_get_stats(struct storage_stats *stats)
     stats->total_chunks = total_chunks;
     stats->total_bytes = total_bytes;
 
-    if (sd_mounted) {
+    if (sd_mounted)
+    {
         update_free_space();
         stats->free_space_mb = free_space_mb;
     }
@@ -133,17 +140,19 @@ int storage_get_stats(struct storage_stats *stats)
 }
 
 int storage_create_session(const char *session_id, uint8_t channels,
-                          uint32_t sample_rate, const char *mode)
+                           uint32_t sample_rate, const char *mode)
 {
     char dir_path[128];
     struct fs_dirent entry;
     int rc;
 
-    if (!sd_mounted) {
+    if (!sd_mounted)
+    {
         return -ENODEV;
     }
 
-    if (!session_id) {
+    if (!session_id)
+    {
         return -EINVAL;
     }
 
@@ -152,9 +161,11 @@ int storage_create_session(const char *session_id, uint8_t channels,
     LOG_INF("Creating session: %s", session_id);
 
     rc = fs_stat(dir_path, &entry);
-    if (rc != 0 || entry.type != FS_DIR_ENTRY_DIR) {
+    if (rc != 0 || entry.type != FS_DIR_ENTRY_DIR)
+    {
         rc = fs_mkdir(dir_path);
-        if (rc != 0 && rc != -EEXIST) {
+        if (rc != 0 && rc != -EEXIST)
+        {
             LOG_ERR("Failed to create session directory: %d", rc);
             return rc;
         }
@@ -174,9 +185,10 @@ int storage_create_session(const char *session_id, uint8_t channels,
 }
 
 int storage_close_session(const char *session_id, uint32_t duration_sec,
-                         uint32_t chunk_count)
+                          uint32_t chunk_count)
 {
-    if (!session_id) {
+    if (!session_id)
+    {
         return -EINVAL;
     }
 
@@ -187,7 +199,8 @@ int storage_close_session(const char *session_id, uint32_t duration_sec,
     update_session_json(session_id, duration_sec, chunk_count);
 
     /* Clear current session if matching */
-    if (strcmp(current_session_id, session_id) == 0) {
+    if (strcmp(current_session_id, session_id) == 0)
+    {
         current_session_id[0] = '\0';
     }
 
@@ -195,29 +208,32 @@ int storage_close_session(const char *session_id, uint32_t duration_sec,
 }
 
 int storage_write_chunk(const char *session_id, uint32_t chunk_index,
-                       const uint8_t *data, uint32_t len)
+                        const uint8_t *data, uint32_t len)
 {
     char filepath[128];
     struct fs_file_t file;
     int rc;
     ssize_t written;
 
-    if (!sd_mounted || !session_id || !data) {
+    if (!sd_mounted || !session_id || !data)
+    {
         return -EINVAL;
     }
 
-    if (len == 0) {
+    if (len == 0)
+    {
         return 0;
     }
 
     /* Generate chunk filename: 0001.opus, 0002.opus, ... */
     snprintf(filepath, sizeof(filepath), "%s/%s/%04u.opus",
-            STORAGE_BASE_PATH, session_id, chunk_index);
+             STORAGE_BASE_PATH, session_id, chunk_index);
 
     /* Open file for writing */
     fs_file_t_init(&file);
     rc = fs_open(&file, filepath, FS_O_CREATE | FS_O_WRITE);
-    if (rc != 0) {
+    if (rc != 0)
+    {
         LOG_ERR("Failed to create chunk file %s: %d", filepath, rc);
         return rc;
     }
@@ -226,7 +242,8 @@ int storage_write_chunk(const char *session_id, uint32_t chunk_index,
     written = fs_write(&file, data, len);
     fs_close(&file);
 
-    if (written != len) {
+    if (written != len)
+    {
         LOG_ERR("Write incomplete: %zd != %u", written, len);
         return -EIO;
     }
@@ -244,12 +261,14 @@ static int flush_write_buffer(void)
     int rc;
     ssize_t written;
 
-    if (buffer_pos == 0 || !current_file_ptr) {
+    if (buffer_pos == 0 || !current_file_ptr)
+    {
         return 0;
     }
 
     written = fs_write(current_file_ptr, write_buffer, buffer_pos);
-    if (written != buffer_pos) {
+    if (written != buffer_pos)
+    {
         LOG_ERR("Buffer flush incomplete: %zd != %u", written, buffer_pos);
         return -EIO;
     }
@@ -261,17 +280,20 @@ static int flush_write_buffer(void)
 int storage_create_file(struct storage_file *file, const char *session_id, uint32_t chunk_index)
 {
     char filepath[128];
-    char filename[32];  /* Just the filename, not full path */
+    char filename[32]; /* Just the filename, not full path */
     int rc;
 
-    if (!sd_mounted || !file || !session_id) {
+    if (!sd_mounted || !file || !session_id)
+    {
         return -EINVAL;
     }
 
     /* Flush any existing buffer */
-    if (current_file_ptr) {
+    if (current_file_ptr)
+    {
         rc = flush_write_buffer();
-        if (rc != 0) {
+        if (rc != 0)
+        {
             return rc;
         }
         fs_close(current_file_ptr);
@@ -286,14 +308,15 @@ int storage_create_file(struct storage_file *file, const char *session_id, uint3
     /* Generate filename: 0001.opus (4-digit format) */
     snprintf(filename, sizeof(filename), "%04u.opus", chunk_index);
     snprintf(filepath, sizeof(filepath), "%s/%s/%s",
-            STORAGE_BASE_PATH, session_id, filename);
+             STORAGE_BASE_PATH, session_id, filename);
     strncpy(file->filename, filename, sizeof(file->filename) - 1);
 
     /* Open file */
     fs_file_t_init(&file->internal_file);
     LOG_INF("Opening file: %s...", filepath);
     rc = fs_open(&file->internal_file, filepath, FS_O_CREATE | FS_O_WRITE);
-    if (rc != 0) {
+    if (rc != 0)
+    {
         LOG_ERR("Failed to create file %s: %d", filepath, rc);
         return rc;
     }
@@ -314,11 +337,13 @@ int storage_write_frame(struct storage_file *file, const uint8_t *data, uint32_t
     int rc;
     uint8_t frame_len[2];
 
-    if (!sd_mounted || !file || !file->is_open) {
+    if (!sd_mounted || !file || !file->is_open)
+    {
         return -EINVAL;
     }
 
-    if (len > 65535) {
+    if (len > 65535)
+    {
         LOG_ERR("Frame too large: %u", len);
         return -EINVAL;
     }
@@ -328,9 +353,11 @@ int storage_write_frame(struct storage_file *file, const uint8_t *data, uint32_t
     frame_len[1] = (len >> 8) & 0xFF;
 
     /* Write length to buffer */
-    if (buffer_pos + 2 > CONFIG_CLIP_STORAGE_CHUNK_SIZE) {
+    if (buffer_pos + 2 > CONFIG_CLIP_STORAGE_CHUNK_SIZE)
+    {
         rc = flush_write_buffer();
-        if (rc != 0) {
+        if (rc != 0)
+        {
             return rc;
         }
     }
@@ -342,7 +369,8 @@ int storage_write_frame(struct storage_file *file, const uint8_t *data, uint32_t
     uint32_t remaining = len;
     uint32_t offset = 0;
 
-    while (remaining > 0) {
+    while (remaining > 0)
+    {
         uint32_t space = CONFIG_CLIP_STORAGE_CHUNK_SIZE - buffer_pos;
         uint32_t to_copy = (remaining < space) ? remaining : space;
 
@@ -352,15 +380,17 @@ int storage_write_frame(struct storage_file *file, const uint8_t *data, uint32_t
         remaining -= to_copy;
 
         /* Flush buffer when full */
-        if (buffer_pos >= CONFIG_CLIP_STORAGE_CHUNK_SIZE) {
+        if (buffer_pos >= CONFIG_CLIP_STORAGE_CHUNK_SIZE)
+        {
             rc = flush_write_buffer();
-            if (rc != 0) {
+            if (rc != 0)
+            {
                 return rc;
             }
         }
     }
 
-    file->bytes_written += len + 2;  /* +2 for length header */
+    file->bytes_written += len + 2; /* +2 for length header */
     file->frames_written++;
 
     return 0;
@@ -370,23 +400,28 @@ int storage_close_file(struct storage_file *file)
 {
     int rc;
 
-    if (!file || !file->is_open) {
+    if (!file || !file->is_open)
+    {
         return -EINVAL;
     }
 
     /* Flush any remaining data in buffer */
-    if (buffer_pos > 0) {
+    if (buffer_pos > 0)
+    {
         rc = flush_write_buffer();
-        if (rc != 0) {
+        if (rc != 0)
+        {
             LOG_ERR("Failed to flush buffer: %d", rc);
         }
     }
 
     /* Sync file to ensure data is written to disk
      * Important for transfer-while-recording: files must be available immediately */
-    if (current_file_ptr) {
+    if (current_file_ptr)
+    {
         rc = fs_sync(current_file_ptr);
-        if (rc != 0) {
+        if (rc != 0)
+        {
             LOG_WRN("File sync failed: %d", rc);
         }
 
@@ -411,25 +446,27 @@ int storage_close_file(struct storage_file *file)
 }
 
 int storage_read_chunk(const char *session_id, uint32_t chunk_index,
-                      uint8_t *data, uint32_t len)
+                       uint8_t *data, uint32_t len)
 {
     char filepath[128];
     struct fs_file_t file;
     int rc;
     ssize_t bytes_read;
 
-    if (!sd_mounted || !session_id || !data) {
+    if (!sd_mounted || !session_id || !data)
+    {
         return -EINVAL;
     }
 
     /* Generate chunk filename */
     snprintf(filepath, sizeof(filepath), "%s/%s/%04u.opus",
-            STORAGE_BASE_PATH, session_id, chunk_index);
+             STORAGE_BASE_PATH, session_id, chunk_index);
 
     /* Open file for reading */
     fs_file_t_init(&file);
     rc = fs_open(&file, filepath, FS_O_READ);
-    if (rc != 0) {
+    if (rc != 0)
+    {
         LOG_ERR("Failed to open chunk file %s: %d", filepath, rc);
         return rc;
     }
@@ -438,7 +475,8 @@ int storage_read_chunk(const char *session_id, uint32_t chunk_index,
     bytes_read = fs_read(&file, data, len);
     fs_close(&file);
 
-    if (bytes_read < 0) {
+    if (bytes_read < 0)
+    {
         LOG_ERR("Read error: %zd", bytes_read);
         return (int)bytes_read;
     }
@@ -451,16 +489,18 @@ int storage_delete_chunk(const char *session_id, uint32_t chunk_index)
     char filepath[128];
     int rc;
 
-    if (!sd_mounted || !session_id) {
+    if (!sd_mounted || !session_id)
+    {
         return -EINVAL;
     }
 
     /* Generate chunk filename */
     snprintf(filepath, sizeof(filepath), "%s/%s/%04u.opus",
-            STORAGE_BASE_PATH, session_id, chunk_index);
+             STORAGE_BASE_PATH, session_id, chunk_index);
 
     rc = fs_unlink(filepath);
-    if (rc != 0) {
+    if (rc != 0)
+    {
         LOG_WRN("Failed to delete chunk %s: %d", filepath, rc);
     }
 
@@ -474,7 +514,8 @@ int storage_list_sessions(struct storage_session_info *sessions, int max_session
     int count = 0;
     int rc;
 
-    if (!sd_mounted || !sessions) {
+    if (!sd_mounted || !sessions)
+    {
         return -EINVAL;
     }
 
@@ -483,26 +524,31 @@ int storage_list_sessions(struct storage_session_info *sessions, int max_session
     /* Open REC directory */
     fs_dir_t_init(&dirp);
     rc = fs_opendir(&dirp, STORAGE_BASE_PATH);
-    if (rc != 0) {
+    if (rc != 0)
+    {
         LOG_ERR("Failed to open REC directory: %d", rc);
         return rc;
     }
 
     /* Read directory entries */
-    while (count < max_sessions) {
+    while (count < max_sessions)
+    {
         rc = fs_readdir(&dirp, &entry);
-        if (rc != 0 || entry.name[0] == '\0') {
+        if (rc != 0 || entry.name[0] == '\0')
+        {
             break;
         }
 
         /* Skip non-directories */
-        if (entry.type != FS_DIR_ENTRY_DIR) {
+        if (entry.type != FS_DIR_ENTRY_DIR)
+        {
             continue;
         }
 
         /* Validate session_id format: should be 14 digits (YYYYMMDDHHMMSS) */
         size_t len = strlen(entry.name);
-        if (len != 14) {
+        if (len != 14)
+        {
             LOG_DBG("Skipping invalid session dir (wrong length): %s (len=%u)",
                     entry.name, (unsigned int)len);
             continue;
@@ -510,13 +556,16 @@ int storage_list_sessions(struct storage_session_info *sessions, int max_session
 
         /* Check if all digits */
         bool valid = true;
-        for (size_t i = 0; i < len; i++) {
-            if (entry.name[i] < '0' || entry.name[i] > '9') {
+        for (size_t i = 0; i < len; i++)
+        {
+            if (entry.name[i] < '0' || entry.name[i] > '9')
+            {
                 valid = false;
                 break;
             }
         }
-        if (!valid) {
+        if (!valid)
+        {
             LOG_DBG("Skipping invalid session dir (not all digits): %s", entry.name);
             continue;
         }
@@ -525,15 +574,19 @@ int storage_list_sessions(struct storage_session_info *sessions, int max_session
 
         /* Get session info (skip counting chunks for speed) */
         rc = storage_get_session_info(entry.name, &sessions[count]);
-        if (rc == 0) {
+        if (rc == 0)
+        {
             count++;
             LOG_DBG("Added session %d: %s", count, entry.name);
-        } else {
+        }
+        else
+        {
             LOG_WRN("Failed to get info for %s: %d", entry.name, rc);
         }
 
         /* Yield to prevent blocking other operations */
-        if (count % 5 == 0) {
+        if (count % 5 == 0)
+        {
             k_yield();
         }
     }
@@ -551,45 +604,54 @@ int storage_count_sessions(void)
     int count = 0;
     int rc;
 
-    if (!sd_mounted) {
+    if (!sd_mounted)
+    {
         return -EINVAL;
     }
 
     /* Open REC directory */
     fs_dir_t_init(&dirp);
     rc = fs_opendir(&dirp, STORAGE_BASE_PATH);
-    if (rc != 0) {
+    if (rc != 0)
+    {
         LOG_ERR("Failed to open REC directory: %d", rc);
         return rc;
     }
 
     /* Count valid session directories */
-    while (true) {
+    while (true)
+    {
         rc = fs_readdir(&dirp, &entry);
-        if (rc != 0 || entry.name[0] == '\0') {
+        if (rc != 0 || entry.name[0] == '\0')
+        {
             break;
         }
 
         /* Skip non-directories */
-        if (entry.type != FS_DIR_ENTRY_DIR) {
+        if (entry.type != FS_DIR_ENTRY_DIR)
+        {
             continue;
         }
 
         /* Validate session_id format: should be 14 digits */
         size_t len = strlen(entry.name);
-        if (len != 14) {
+        if (len != 14)
+        {
             continue;
         }
 
         /* Check if all digits */
         bool valid = true;
-        for (size_t i = 0; i < len; i++) {
-            if (entry.name[i] < '0' || entry.name[i] > '9') {
+        for (size_t i = 0; i < len; i++)
+        {
+            if (entry.name[i] < '0' || entry.name[i] > '9')
+            {
                 valid = false;
                 break;
             }
         }
-        if (valid) {
+        if (valid)
+        {
             count++;
         }
     }
@@ -600,7 +662,7 @@ int storage_count_sessions(void)
 }
 
 int storage_list_sessions_paginated(struct storage_session_info *sessions,
-                                   int offset, int limit)
+                                    int offset, int limit)
 {
     struct fs_dir_t dirp;
     struct fs_dirent entry;
@@ -608,62 +670,74 @@ int storage_list_sessions_paginated(struct storage_session_info *sessions,
     int skipped = 0;
     int rc;
 
-    if (!sd_mounted || !sessions) {
+    if (!sd_mounted || !sessions)
+    {
         return -EINVAL;
     }
 
     /* Open REC directory */
     fs_dir_t_init(&dirp);
     rc = fs_opendir(&dirp, STORAGE_BASE_PATH);
-    if (rc != 0) {
+    if (rc != 0)
+    {
         LOG_ERR("Failed to open REC directory: %d", rc);
         return rc;
     }
 
     /* Read directory entries, skip first 'offset' entries */
-    while (count < limit) {
+    while (count < limit)
+    {
         rc = fs_readdir(&dirp, &entry);
-        if (rc != 0 || entry.name[0] == '\0') {
+        if (rc != 0 || entry.name[0] == '\0')
+        {
             break;
         }
 
         /* Skip non-directories */
-        if (entry.type != FS_DIR_ENTRY_DIR) {
+        if (entry.type != FS_DIR_ENTRY_DIR)
+        {
             continue;
         }
 
         /* Validate session_id format: should be 14 digits */
         size_t len = strlen(entry.name);
-        if (len != 14) {
+        if (len != 14)
+        {
             continue;
         }
 
         /* Check if all digits */
         bool valid = true;
-        for (size_t i = 0; i < len; i++) {
-            if (entry.name[i] < '0' || entry.name[i] > '9') {
+        for (size_t i = 0; i < len; i++)
+        {
+            if (entry.name[i] < '0' || entry.name[i] > '9')
+            {
                 valid = false;
                 break;
             }
         }
-        if (!valid) {
+        if (!valid)
+        {
             continue;
         }
 
         /* Skip first 'offset' valid entries */
-        if (skipped < offset) {
+        if (skipped < offset)
+        {
             skipped++;
             continue;
         }
 
         /* Get session info */
         rc = storage_get_session_info(entry.name, &sessions[count]);
-        if (rc == 0) {
+        if (rc == 0)
+        {
             count++;
         }
 
         /* Yield periodically */
-        if (count % 5 == 0) {
+        if (count % 5 == 0)
+        {
             k_yield();
         }
     }
@@ -681,7 +755,8 @@ int storage_get_session_info(const char *session_id, struct storage_session_info
     int rc;
     ssize_t bytes_read;
 
-    if (!info || !session_id) {
+    if (!info || !session_id)
+    {
         return -EINVAL;
     }
 
@@ -691,15 +766,17 @@ int storage_get_session_info(const char *session_id, struct storage_session_info
 
     /* Try to read session.json */
     snprintf(filepath, sizeof(filepath), "%s/%s/session.json",
-            STORAGE_BASE_PATH, session_id);
+             STORAGE_BASE_PATH, session_id);
 
     fs_file_t_init(&file);
     rc = fs_open(&file, filepath, FS_O_READ);
-    if (rc == 0) {
+    if (rc == 0)
+    {
         bytes_read = fs_read(&file, json_buf, sizeof(json_buf) - 1);
         fs_close(&file);
 
-        if (bytes_read > 0) {
+        if (bytes_read > 0)
+        {
             json_buf[bytes_read] = '\0';
 
             /* Simple JSON parsing */
@@ -707,26 +784,34 @@ int storage_get_session_info(const char *session_id, struct storage_session_info
 
             /* Parse duration */
             p = strstr(json_buf, "\"duration\":");
-            if (p) {
+            if (p)
+            {
                 info->duration_sec = atoi(p + 11);
             }
 
             /* Parse files (chunk_count) */
             p = strstr(json_buf, "\"files\":");
-            if (p) {
+            if (p)
+            {
                 info->file_count = atoi(p + 8);
             }
 
             /* Parse synced files */
             p = strstr(json_buf, "\"synced\":");
-            if (p) {
+            if (p)
+            {
                 info->synced_files = atoi(p + 9);
-            } else {
+            }
+            else
+            {
                 /* For backward compatibility, if no synced field, check recording flag */
                 p = strstr(json_buf, "\"recording\":");
-                if (p && strncmp(p + 12, "true", 4) == 0) {
-                    info->synced_files = 0;  /* Still recording, nothing synced yet */
-                } else {
+                if (p && strncmp(p + 12, "true", 4) == 0)
+                {
+                    info->synced_files = 0; /* Still recording, nothing synced yet */
+                }
+                else
+                {
                     /* Recording completed, all files are synced */
                     info->synced_files = info->file_count;
                 }
@@ -734,25 +819,29 @@ int storage_get_session_info(const char *session_id, struct storage_session_info
 
             /* Parse channels */
             p = strstr(json_buf, "\"channels\":");
-            if (p) {
+            if (p)
+            {
                 info->channels = atoi(p + 11);
             }
 
             /* Parse sample_rate and convert to kHz */
             p = strstr(json_buf, "\"sample_rate\":");
-            if (p) {
+            if (p)
+            {
                 uint32_t sample_rate_hz = atoi(p + 14);
                 info->sample_rate_khz = (uint8_t)(sample_rate_hz / 1000);
             }
 
             /* Parse mode */
             p = strstr(json_buf, "\"mode\": \"");
-            if (p) {
+            if (p)
+            {
                 char mode_start[16];
                 strncpy(mode_start, p + 9, sizeof(mode_start) - 1);
                 mode_start[sizeof(mode_start) - 1] = '\0';
                 char *end = strchr(mode_start, '"');
-                if (end) {
+                if (end)
+                {
                     *end = '\0';
                     strncpy(info->mode, mode_start, sizeof(info->mode) - 1);
                 }
@@ -760,9 +849,12 @@ int storage_get_session_info(const char *session_id, struct storage_session_info
 
             /* Parse recording flag - if recording, set synced_files = 0 */
             p = strstr(json_buf, "\"recording\":");
-            if (p && strncmp(p + 12, "true", 4) == 0) {
-                info->synced_files = 0;  /* Still recording, nothing synced yet */
-            } else {
+            if (p && strncmp(p + 12, "true", 4) == 0)
+            {
+                info->synced_files = 0; /* Still recording, nothing synced yet */
+            }
+            else
+            {
                 /* Recording completed, all files are synced */
                 info->synced_files = info->file_count;
             }
@@ -770,10 +862,11 @@ int storage_get_session_info(const char *session_id, struct storage_session_info
     }
 
     /* Calculate total bytes from file count (approximate: ~3KB per 20s at 24kbps) */
-    if (info->file_count > 0 && info->total_bytes == 0) {
+    if (info->file_count > 0 && info->total_bytes == 0)
+    {
         /* Approximate: each file is roughly duration/20 * (bitrate/8) bytes */
         /* For simplicity, estimate based on file_count */
-        info->total_bytes = (uint64_t)info->file_count * 3000;  /* Rough estimate */
+        info->total_bytes = (uint64_t)info->file_count * 3000; /* Rough estimate */
     }
 
     return 0;
@@ -787,7 +880,8 @@ int storage_list_chunks(const char *session_id, uint32_t *chunks, int max_chunks
     int count = 0;
     int rc;
 
-    if (!sd_mounted || !session_id || !chunks) {
+    if (!sd_mounted || !session_id || !chunks)
+    {
         return -EINVAL;
     }
 
@@ -797,25 +891,29 @@ int storage_list_chunks(const char *session_id, uint32_t *chunks, int max_chunks
 
     fs_dir_t_init(&dirp);
     rc = fs_opendir(&dirp, dir_path);
-    if (rc != 0) {
+    if (rc != 0)
+    {
         LOG_ERR("Failed to open session directory %s: %d", dir_path, rc);
         return rc;
     }
 
     /* Read directory entries */
-    while (count < max_chunks) {
+    while (count < max_chunks)
+    {
         rc = fs_readdir(&dirp, &entry);
-        if (rc != 0 || entry.name[0] == '\0') {
+        if (rc != 0 || entry.name[0] == '\0')
+        {
             break;
         }
 
         /* Check if it's a .opus file with 4-digit prefix (0001.opus) */
         size_t len = strlen(entry.name);
-        if (len == 9 && strcmp(entry.name + 4, ".opus") == 0) {
+        if (len == 9 && strcmp(entry.name + 4, ".opus") == 0)
+        {
             /* Extract chunk number from filename (0001.opus -> 1) */
             chunks[count] = (uint32_t)atoi(entry.name);
             count++;
-            LOG_DBG("Found chunk: %s -> %u", entry.name, chunks[count-1]);
+            LOG_DBG("Found chunk: %s -> %u", entry.name, chunks[count - 1]);
         }
     }
 
@@ -832,12 +930,14 @@ int storage_delete_session(const char *session_id)
     struct fs_dirent entry;
     int rc;
 
-    if (!sd_mounted || !session_id) {
+    if (!sd_mounted || !session_id)
+    {
         return -EINVAL;
     }
 
     /* Don't delete current recording session */
-    if (strcmp(current_session_id, session_id) == 0) {
+    if (strcmp(current_session_id, session_id) == 0)
+    {
         return -EBUSY;
     }
 
@@ -845,14 +945,17 @@ int storage_delete_session(const char *session_id)
     snprintf(dir_path, sizeof(dir_path), "%s/%s", STORAGE_BASE_PATH, session_id);
     fs_dir_t_init(&dirp);
     rc = fs_opendir(&dirp, dir_path);
-    if (rc != 0) {
+    if (rc != 0)
+    {
         return rc;
     }
 
     /* Delete all files in directory */
-    while (true) {
+    while (true)
+    {
         rc = fs_readdir(&dirp, &entry);
-        if (rc != 0 || entry.name[0] == '\0') {
+        if (rc != 0 || entry.name[0] == '\0')
+        {
             break;
         }
 
@@ -865,7 +968,8 @@ int storage_delete_session(const char *session_id)
 
     /* Remove directory */
     rc = fs_unlink(dir_path);
-    if (rc != 0) {
+    if (rc != 0)
+    {
         LOG_WRN("Failed to remove session directory: %d", rc);
     }
 
@@ -874,20 +978,49 @@ int storage_delete_session(const char *session_id)
 
 int storage_format_card(void)
 {
-    struct storage_session_info sessions[100];
-    int count = storage_list_sessions(sessions, 100);
-    int deleted = 0;
+    int rc;
 
-    for (int i = 0; i < count; i++) {
-        int err = storage_delete_session(sessions[i].session_id);
-        if (err == 0) {
-            deleted++;
-        } else {
-            LOG_WRN("Failed to delete session %s: %d", sessions[i].session_id, err);
-        }
+    if (!sd_mounted)
+    {
+        return -ENODEV;
     }
 
-    LOG_INF("Format complete: %d/%d sessions deleted", deleted, count);
+    /* 1. Unmount */
+    fs_unmount(&mp);
+    sd_mounted = false;
+
+    /* 2. Format */
+    static uint8_t workbuf[4096];
+
+    MKFS_PARM opt = {
+        .fmt = FM_FAT32,
+        .n_fat = 1,
+        .align = 0,
+        .n_root = 0,
+        .au_size = 0};
+
+    rc = f_mkfs("SD:", &opt, workbuf, sizeof(workbuf));
+
+    if (rc != FR_OK)
+    {
+        LOG_ERR("f_mkfs failed: %d", rc);
+        return -EIO;
+    }
+
+    /* 3. Remount */
+    rc = fs_mount(&mp);
+    if (rc != 0)
+    {
+        LOG_ERR("Remount failed after format: %d", rc);
+        return rc;
+    }
+
+    sd_mounted = true;
+
+    /* 4. Recreate REC directory */
+    fs_mkdir(STORAGE_BASE_PATH);
+
+    LOG_INF("SD card formatted and remounted");
     return 0;
 }
 
@@ -899,13 +1032,15 @@ static int update_free_space(void)
     FATFS *fat_fs_ptr;
     int rc;
 
-    if (!sd_mounted) {
+    if (!sd_mounted)
+    {
         return -ENODEV;
     }
 
     /* Get free space from FatFS - use FatFS native path */
     rc = f_getfree("0:", &free_sectors, &fat_fs_ptr);
-    if (rc != 0) {
+    if (rc != 0)
+    {
         LOG_WRN("Failed to get free space: %d", rc);
         free_space_mb = 0;
         return rc;
@@ -929,7 +1064,8 @@ static int create_marks_file(const char *dir_path)
 
     fs_file_t_init(&file);
     rc = fs_open(&file, marks_path, FS_O_CREATE | FS_O_WRITE);
-    if (rc != 0) {
+    if (rc != 0)
+    {
         LOG_ERR("Failed to create marks.bin: %d", rc);
         return rc;
     }
@@ -937,7 +1073,8 @@ static int create_marks_file(const char *dir_path)
     /* Write empty bookmark header */
     uint8_t header[6] = {'B', 'M', 'R', 'K', 0, 0};
     written = fs_write(&file, header, 6);
-    if (written != 6) {
+    if (written != 6)
+    {
         LOG_ERR("Failed to write marks.bin header: %zd", written);
         fs_close(&file);
         return -EIO;
@@ -964,32 +1101,35 @@ static int create_session_json(const char *dir_path, const char *session_id,
 
     fs_file_t_init(&file);
     rc = fs_open(&file, json_path, FS_O_CREATE | FS_O_WRITE);
-    if (rc != 0) {
+    if (rc != 0)
+    {
         LOG_ERR("Failed to create session.json: %d", rc);
         return rc;
     }
 
     len = snprintf(json_buf, sizeof(json_buf),
-        "{\n"
-        "  \"id\": \"%s\",\n"
-        "  \"duration\": 0,\n"
-        "  \"files\": 0,\n"
-        "  \"synced\": 0,\n"
-        "  \"channels\": %u,\n"
-        "  \"sample_rate\": %u,\n"
-        "  \"mode\": \"%s\",\n"
-        "  \"recording\": true\n"
-        "}\n",
-        session_id, channels, sample_rate, mode ? mode : "normal");
+                   "{\n"
+                   "  \"id\": \"%s\",\n"
+                   "  \"duration\": 0,\n"
+                   "  \"files\": 0,\n"
+                   "  \"synced\": 0,\n"
+                   "  \"channels\": %u,\n"
+                   "  \"sample_rate\": %u,\n"
+                   "  \"mode\": \"%s\",\n"
+                   "  \"recording\": true\n"
+                   "}\n",
+                   session_id, channels, sample_rate, mode ? mode : "normal");
 
-    if (len < 0 || len >= (int)sizeof(json_buf)) {
+    if (len < 0 || len >= (int)sizeof(json_buf))
+    {
         LOG_ERR("Failed to format session.json");
         fs_close(&file);
         return -ENOMEM;
     }
 
     written = fs_write(&file, json_buf, len);
-    if (written != len) {
+    if (written != len)
+    {
         LOG_ERR("Failed to write session.json: %zd != %d", written, len);
         fs_close(&file);
         return -EIO;
@@ -1015,45 +1155,52 @@ static int update_session_json(const char *session_id, uint32_t duration_sec,
     ssize_t bytes_read, written;
 
     snprintf(json_path, sizeof(json_path), "%s/%s/session.json",
-            STORAGE_BASE_PATH, session_id);
+             STORAGE_BASE_PATH, session_id);
 
     /* Read existing JSON to preserve other fields including synced */
     fs_file_t_init(&file);
-    char synced_str[16] = "0";  /* Default: no files synced */
+    char synced_str[16] = "0"; /* Default: no files synced */
     rc = fs_open(&file, json_path, FS_O_READ);
-    if (rc == 0) {
+    if (rc == 0)
+    {
         bytes_read = fs_read(&file, json_buf, sizeof(json_buf) - 1);
         fs_close(&file);
 
-        if (bytes_read > 0) {
+        if (bytes_read > 0)
+        {
             json_buf[bytes_read] = '\0';
 
             /* Parse and preserve channels, sample_rate, mode, synced */
             char *p;
             p = strstr(json_buf, "\"channels\":");
-            if (p) {
+            if (p)
+            {
                 unsigned int val = atoi(p + 11);
                 snprintf(channels_str, sizeof(channels_str), "%u", val);
             }
             p = strstr(json_buf, "\"sample_rate\":");
-            if (p) {
+            if (p)
+            {
                 unsigned int val = atoi(p + 14);
                 snprintf(sample_rate_str, sizeof(sample_rate_str), "%u", val);
             }
             p = strstr(json_buf, "\"mode\": \"");
-            if (p) {
+            if (p)
+            {
                 char temp[16];
                 strncpy(temp, p + 9, sizeof(temp) - 1);
                 temp[sizeof(temp) - 1] = '\0';
                 char *end = strchr(temp, '"');
-                if (end) {
+                if (end)
+                {
                     *end = '\0';
                     strncpy(mode_str, temp, sizeof(mode_str) - 1);
                 }
             }
             /* Preserve synced count - don't assume all files are synced */
             p = strstr(json_buf, "\"synced\":");
-            if (p) {
+            if (p)
+            {
                 unsigned int val = atoi(p + 9);
                 snprintf(synced_str, sizeof(synced_str), "%u", val);
             }
@@ -1064,33 +1211,36 @@ static int update_session_json(const char *session_id, uint32_t duration_sec,
      * Keep synced count unchanged - only transfer should update it */
     fs_file_t_init(&file);
     rc = fs_open(&file, json_path, FS_O_WRITE | FS_O_TRUNC);
-    if (rc != 0) {
+    if (rc != 0)
+    {
         LOG_ERR("Failed to open session.json for update: %d", rc);
         return rc;
     }
 
     len = snprintf(json_buf, sizeof(json_buf),
-        "{\n"
-        "  \"id\": \"%s\",\n"
-        "  \"duration\": %u,\n"
-        "  \"files\": %u,\n"
-        "  \"synced\": %s,\n"
-        "  \"channels\": %s,\n"
-        "  \"sample_rate\": %s,\n"
-        "  \"mode\": \"%s\",\n"
-        "  \"recording\": false\n"
-        "}\n",
-        session_id, duration_sec, chunk_count, synced_str,
-        channels_str, sample_rate_str, mode_str);
+                   "{\n"
+                   "  \"id\": \"%s\",\n"
+                   "  \"duration\": %u,\n"
+                   "  \"files\": %u,\n"
+                   "  \"synced\": %s,\n"
+                   "  \"channels\": %s,\n"
+                   "  \"sample_rate\": %s,\n"
+                   "  \"mode\": \"%s\",\n"
+                   "  \"recording\": false\n"
+                   "}\n",
+                   session_id, duration_sec, chunk_count, synced_str,
+                   channels_str, sample_rate_str, mode_str);
 
-    if (len < 0 || len >= (int)sizeof(json_buf)) {
+    if (len < 0 || len >= (int)sizeof(json_buf))
+    {
         LOG_ERR("Failed to format session.json");
         fs_close(&file);
         return -ENOMEM;
     }
 
     written = fs_write(&file, json_buf, len);
-    if (written != len) {
+    if (written != len)
+    {
         LOG_ERR("Failed to write session.json: %zd != %d", written, len);
         fs_close(&file);
         return -EIO;
@@ -1109,7 +1259,8 @@ static int update_session_json(const char *session_id, uint32_t duration_sec,
 
 static int get_bookmark_filepath(const char *session_id, char *filepath, size_t size)
 {
-    if (!session_id || !filepath) {
+    if (!session_id || !filepath)
+    {
         return -EINVAL;
     }
 
@@ -1125,13 +1276,15 @@ int storage_add_bookmark(const char *session_id, uint32_t offset_sec)
     int rc;
     ssize_t ret;
 
-    if (!sd_mounted || !session_id) {
+    if (!sd_mounted || !session_id)
+    {
         return -EINVAL;
     }
 
     /* Get file path */
     rc = get_bookmark_filepath(session_id, filepath, sizeof(filepath));
-    if (rc != 0) {
+    if (rc != 0)
+    {
         return rc;
     }
 
@@ -1139,11 +1292,13 @@ int storage_add_bookmark(const char *session_id, uint32_t offset_sec)
     struct fs_dirent entry;
     bool file_exists = (fs_stat(filepath, &entry) == 0);
 
-    if (file_exists) {
+    if (file_exists)
+    {
         /* Read current header and count */
         fs_file_t_init(&file);
         rc = fs_open(&file, filepath, FS_O_READ | FS_O_WRITE);
-        if (rc != 0) {
+        if (rc != 0)
+        {
             LOG_ERR("Failed to open bookmarks file: %d", rc);
             return rc;
         }
@@ -1151,14 +1306,16 @@ int storage_add_bookmark(const char *session_id, uint32_t offset_sec)
         /* Read header */
         uint8_t header[6];
         ret = fs_read(&file, header, sizeof(header));
-        if (ret != sizeof(header)) {
+        if (ret != sizeof(header))
+        {
             LOG_ERR("Failed to read bookmark header: %zd", ret);
             fs_close(&file);
             return -EIO;
         }
 
         /* Verify magic */
-        if (memcmp(header, BOOKMARK_MAGIC, 4) != 0) {
+        if (memcmp(header, BOOKMARK_MAGIC, 4) != 0)
+        {
             LOG_ERR("Invalid bookmark magic");
             fs_close(&file);
             return -EIO;
@@ -1171,7 +1328,8 @@ int storage_add_bookmark(const char *session_id, uint32_t offset_sec)
 
         /* Seek back to count position */
         rc = fs_seek(&file, 4, FS_SEEK_SET);
-        if (rc != 0) {
+        if (rc != 0)
+        {
             LOG_ERR("Failed to seek to count position: %d", rc);
             fs_close(&file);
             return rc;
@@ -1179,7 +1337,8 @@ int storage_add_bookmark(const char *session_id, uint32_t offset_sec)
 
         /* Write updated count */
         ret = fs_write(&file, &count, 2);
-        if (ret != 2) {
+        if (ret != 2)
+        {
             LOG_ERR("Failed to write bookmark count: %zd", ret);
             fs_close(&file);
             return -EIO;
@@ -1187,7 +1346,8 @@ int storage_add_bookmark(const char *session_id, uint32_t offset_sec)
 
         /* Seek to end to append bookmark */
         rc = fs_seek(&file, 0, FS_SEEK_END);
-        if (rc != 0) {
+        if (rc != 0)
+        {
             LOG_ERR("Failed to seek to end: %d", rc);
             fs_close(&file);
             return rc;
@@ -1195,7 +1355,8 @@ int storage_add_bookmark(const char *session_id, uint32_t offset_sec)
 
         /* Write bookmark */
         ret = fs_write(&file, &offset_sec, sizeof(uint32_t));
-        if (ret != sizeof(uint32_t)) {
+        if (ret != sizeof(uint32_t))
+        {
             LOG_ERR("Failed to write bookmark: %zd", ret);
             fs_close(&file);
             return -EIO;
@@ -1204,11 +1365,14 @@ int storage_add_bookmark(const char *session_id, uint32_t offset_sec)
         fs_close(&file);
 
         LOG_DBG("Added bookmark %u at %u seconds", count, offset_sec);
-    } else {
+    }
+    else
+    {
         /* Create new file with header */
         fs_file_t_init(&file);
         rc = fs_open(&file, filepath, FS_O_CREATE | FS_O_WRITE);
-        if (rc != 0) {
+        if (rc != 0)
+        {
             LOG_ERR("Failed to create bookmarks file: %d", rc);
             return rc;
         }
@@ -1219,7 +1383,8 @@ int storage_add_bookmark(const char *session_id, uint32_t offset_sec)
         uint16_t count = 1;
         memcpy(&header[4], &count, 2);
         ret = fs_write(&file, header, sizeof(header));
-        if (ret != sizeof(header)) {
+        if (ret != sizeof(header))
+        {
             LOG_ERR("Failed to write bookmark header: %zd", ret);
             fs_close(&file);
             return -EIO;
@@ -1227,7 +1392,8 @@ int storage_add_bookmark(const char *session_id, uint32_t offset_sec)
 
         /* Write first bookmark */
         ret = fs_write(&file, &offset_sec, sizeof(uint32_t));
-        if (ret != sizeof(uint32_t)) {
+        if (ret != sizeof(uint32_t))
+        {
             LOG_ERR("Failed to write first bookmark: %zd", ret);
             fs_close(&file);
             return -EIO;
@@ -1252,38 +1418,44 @@ int storage_get_bookmarks(const char *session_id, int page, int per_page,
     int start_index, end_index;
     int rc;
 
-    if (!sd_mounted || !session_id || !bookmarks || max_count <= 0) {
+    if (!sd_mounted || !session_id || !bookmarks || max_count <= 0)
+    {
         return -EINVAL;
     }
 
-    if (page < 1 || per_page < 1) {
+    if (page < 1 || per_page < 1)
+    {
         return -EINVAL;
     }
 
     /* Get file path */
     rc = get_bookmark_filepath(session_id, filepath, sizeof(filepath));
-    if (rc != 0) {
+    if (rc != 0)
+    {
         return rc;
     }
 
     /* Open file */
     fs_file_t_init(&file);
     rc = fs_open(&file, filepath, FS_O_READ);
-    if (rc != 0) {
+    if (rc != 0)
+    {
         /* File doesn't exist yet - no bookmarks */
         return 0;
     }
 
     /* Read header */
     ret = fs_read(&file, header, sizeof(header));
-    if (ret != sizeof(header)) {
+    if (ret != sizeof(header))
+    {
         LOG_ERR("Invalid bookmark file");
         fs_close(&file);
         return -EIO;
     }
 
     /* Verify magic */
-    if (memcmp(header, BOOKMARK_MAGIC, 4) != 0) {
+    if (memcmp(header, BOOKMARK_MAGIC, 4) != 0)
+    {
         LOG_ERR("Invalid bookmark magic");
         fs_close(&file);
         return -EIO;
@@ -1291,33 +1463,38 @@ int storage_get_bookmarks(const char *session_id, int page, int per_page,
 
     /* Get count */
     memcpy(&count, &header[4], 2);
-    if (count > 10000) {  /* Sanity check */
+    if (count > 10000)
+    { /* Sanity check */
         LOG_WRN("Bookmark count too large: %u", count);
         count = 0;
     }
 
     /* Calculate pagination bounds */
     start_index = (page - 1) * per_page;
-    if (start_index >= count) {
+    if (start_index >= count)
+    {
         /* Page beyond available data */
         fs_close(&file);
         return 0;
     }
 
     end_index = start_index + per_page;
-    if (end_index > (int)count) {
+    if (end_index > (int)count)
+    {
         end_index = count;
     }
 
     /* Adjust max_count */
-    if (max_count < (end_index - start_index)) {
+    if (max_count < (end_index - start_index))
+    {
         end_index = start_index + max_count;
     }
 
     /* Seek to first bookmark in page */
     off_t seek_pos = sizeof(header) + (start_index * sizeof(uint32_t));
     ret = fs_seek(&file, seek_pos, FS_SEEK_SET);
-    if (ret < 0) {
+    if (ret < 0)
+    {
         LOG_ERR("Failed to seek to bookmark position");
         fs_close(&file);
         return ret;
@@ -1325,10 +1502,12 @@ int storage_get_bookmarks(const char *session_id, int page, int per_page,
 
     /* Read bookmarks */
     int read_count = 0;
-    for (int i = start_index; i < end_index; i++) {
+    for (int i = start_index; i < end_index; i++)
+    {
         uint32_t offset_sec;
         ret = fs_read(&file, (uint8_t *)&offset_sec, sizeof(uint32_t));
-        if (ret != sizeof(uint32_t)) {
+        if (ret != sizeof(uint32_t))
+        {
             break;
         }
         bookmarks[read_count].offset_sec = offset_sec;
@@ -1349,29 +1528,34 @@ int storage_count_bookmarks(const char *session_id)
     uint16_t count = 0;
     int rc;
 
-    if (!sd_mounted || !session_id) {
+    if (!sd_mounted || !session_id)
+    {
         return -EINVAL;
     }
 
     /* Get file path */
     rc = get_bookmark_filepath(session_id, filepath, sizeof(filepath));
-    if (rc != 0) {
+    if (rc != 0)
+    {
         return rc;
     }
 
     /* Open file */
     fs_file_t_init(&file);
     rc = fs_open(&file, filepath, FS_O_READ);
-    if (rc != 0) {
+    if (rc != 0)
+    {
         /* File doesn't exist yet - no bookmarks */
         return 0;
     }
 
     /* Read header */
     ret = fs_read(&file, header, sizeof(header));
-    if (ret == sizeof(header)) {
+    if (ret == sizeof(header))
+    {
         /* Verify magic */
-        if (memcmp(header, BOOKMARK_MAGIC, 4) == 0) {
+        if (memcmp(header, BOOKMARK_MAGIC, 4) == 0)
+        {
             /* Get count */
             memcpy(&count, &header[4], 2);
         }
@@ -1395,13 +1579,16 @@ int storage_count_bookmarks(const char *session_id)
  */
 void storage_set_writing_file(const char *session_id, const char *filename)
 {
-    if (session_id && filename) {
+    if (session_id && filename)
+    {
         strncpy(writing_session, session_id, sizeof(writing_session) - 1);
         writing_session[sizeof(writing_session) - 1] = '\0';
         strncpy(writing_filename, filename, sizeof(writing_filename) - 1);
         writing_filename[sizeof(writing_filename) - 1] = '\0';
         LOG_DBG("Writing: %s/%s", writing_session, writing_filename);
-    } else {
+    }
+    else
+    {
         /* Clear writing file info */
         writing_session[0] = '\0';
         writing_filename[0] = '\0';
@@ -1418,7 +1605,8 @@ void storage_set_writing_file(const char *session_id, const char *filename)
  */
 bool storage_file_is_writing(const char *session_id, const char *filename)
 {
-    if (!session_id || !filename) {
+    if (!session_id || !filename)
+    {
         return false;
     }
 
@@ -1446,12 +1634,15 @@ bool storage_get_writing_file(char *out_session, char *out_filename,
 {
     bool is_writing = (writing_session[0] != '\0');
 
-    if (is_writing) {
-        if (out_session && session_size > 0) {
+    if (is_writing)
+    {
+        if (out_session && session_size > 0)
+        {
             strncpy(out_session, writing_session, session_size - 1);
             out_session[session_size - 1] = '\0';
         }
-        if (out_filename && filename_size > 0) {
+        if (out_filename && filename_size > 0)
+        {
             strncpy(out_filename, writing_filename, filename_size - 1);
             out_filename[filename_size - 1] = '\0';
         }
