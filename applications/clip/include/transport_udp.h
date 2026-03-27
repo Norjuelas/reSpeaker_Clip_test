@@ -35,7 +35,7 @@
 /**
  * @brief Protocol limits
  */
-#define UDP_MAX_DATA_PER_FRAME  486  /* Max data payload (512 - 9 header - 17 UDP/IP overhead) */
+#define UDP_MAX_DATA_PER_FRAME  1024 /* Max data payload per UDP frame */
 #define UDP_SEQ_MODULO          4096 /* Sequence number space (12-bit effective) */
 #define UDP_MAX_RETRIES         5    /* Max retransmissions per frame before abort */
 
