@@ -78,6 +78,9 @@ static K_MUTEX_DEFINE(audio_state_mutex);
 /* Stop request flag */
 static volatile bool stop_requested = false;
 
+/* Semaphore: audio thread signals when stop cleanup is done */
+static struct k_sem stop_done_sem;
+
 /* Pause state */
 static volatile bool pause_requested = false;
 static volatile bool is_paused = false;
@@ -197,6 +200,9 @@ int audio_init(void)
     nrf_pdm_gain_set(NRF_PDM0_NS, 0x50, 0x50);
 #endif
 
+    /* Initialize stop-done semaphore */
+    k_sem_init(&stop_done_sem, 0, 1);
+
     /* Start audio recording thread */
     audio_thread_id = k_thread_create(&audio_thread_data,
                       audio_thread_stack,
@@ -263,6 +269,7 @@ int audio_start_recording(enum audio_mode mode)
     /* Reset counters */
     recording_frame_count = 0;
     stop_requested = false;
+    k_sem_reset(&stop_done_sem);
 
     /* Wake up audio thread by giving semaphore */
     k_sem_give(&audio_start_sem);
@@ -289,12 +296,14 @@ int audio_stop_recording(void)
         k_mutex_unlock(&audio_state_mutex);
         k_sem_give(&audio_start_sem);
         LOG_INF("Recording stop requested (was paused, woke audio thread)");
-        return 0;
+    } else {
+        k_mutex_unlock(&audio_state_mutex);
+        LOG_INF("Recording stop requested");
     }
 
-    k_mutex_unlock(&audio_state_mutex);
+    /* Wait for audio thread to finish cleanup */
+    k_sem_take(&stop_done_sem, K_MSEC(2000));
 
-    LOG_INF("Recording stop requested");
     return 0;
 }
 
@@ -789,11 +798,6 @@ void audio_recording_thread(void *p1, void *p2, void *p3)
                         stats.frames_encoded);
             }
 
-            /* Warn if encoding takes too long (should be < 15ms for 20ms frame) */
-            if (encode_time > 15) {
-                LOG_WRN("Encode time too high: %lld ms", encode_time);
-            }
-
             /* Calculate energy level from PCM data */
             calculate_energy_level(pcm_data, AUDIO_OPUS_FRAME_SIZE);
 
@@ -878,6 +882,9 @@ create_new_segment:
         audio_stop_recording_internal();
         stop_requested = false;
         pause_requested = false;
+
+        /* Signal that stop is complete */
+        k_sem_give(&stop_done_sem);
 
         LOG_INF("Recording stopped: %u frames, %llu sec, %u KB",
             stats.frames_encoded,
