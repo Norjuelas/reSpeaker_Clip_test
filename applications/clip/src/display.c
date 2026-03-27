@@ -69,7 +69,7 @@ LOG_MODULE_REGISTER(display, CONFIG_CLIP_LOG_LEVEL);
 #define DOT_CIRCLE_ANIM_FRAMES    8
 
 /* Mark Animation */
-#define MARK_ANIM_FRAMES          15
+#define MARK_ANIM_FRAMES          10
 #define MARK_WHITE_CIRCLE_MAX_RADIUS   6
 #define MARK_WHITE_CIRCLE_STABLE_RADIUS 4
 #define MARK_BLACK_CIRCLE_MAX_RADIUS   4
@@ -1032,7 +1032,7 @@ static void render_current_state(void)
 			for (int f = 0; f < DOT_CIRCLE_ANIM_FRAMES; f++) {
 				render_dot_circle(display_buffer, f);
 				flush_display();
-				k_sleep(K_MSEC(60));
+				k_sleep(K_MSEC(35));
 			}
 			g_dot_animation_played = true;
 			/* Last frame is already the stable frame, no need to re-render */
@@ -1045,16 +1045,21 @@ static void render_current_state(void)
 
 	case UI_STATE_MARKING:
 		if (g_mark_frame == 0) {
-			/* Play mark animation synchronously (15 frames @ 10ms = 150ms) */
+			/* Play mark animation synchronously (10 frames @ 6ms = 60ms) */
 			for (int f = 0; f < MARK_ANIM_FRAMES; f++) {
 				render_mark_animation(display_buffer, f);
 				flush_display();
-				k_sleep(K_MSEC(10));
+				k_sleep(K_MSEC(6));
 			}
 			g_mark_frame = MARK_ANIM_FRAMES;
 			/* Transition back to recording */
 			if (g_recording) {
 				set_ui_state(UI_STATE_REC_DOT);
+				g_dot_animation_played = true;
+				k_work_cancel_delayable(&display_timeout_work);
+				/* Render stable dot frame since we won't re-enter render_current_state */
+				render_dot_circle(display_buffer, DOT_CIRCLE_ANIM_FRAMES - 1);
+				flush_display();
 			} else {
 				set_ui_state(UI_STATE_STATUS_BAR);
 				k_work_schedule(&display_timeout_work, K_MSEC(DISPLAY_STATUS_TIMEOUT_MS));
@@ -1092,10 +1097,10 @@ static void display_anim_work_handler(struct k_work *work)
 {
 	render_current_state();
 
-	/* Reschedule animation */
-	if (g_ui_state == UI_STATE_REC_WAVE ||
-	    g_ui_state == UI_STATE_REC_DOT ||
-	    g_ui_state == UI_STATE_MARKING) {
+	/* Only REC_WAVE needs continuous animation reschedule.
+	 * REC_DOT is static after initial animation, MARKING runs synchronously.
+	 */
+	if (g_ui_state == UI_STATE_REC_WAVE) {
 		k_work_schedule(&display_anim_work, DISPLAY_ANIMATION_PERIOD);
 	}
 }
@@ -1123,9 +1128,7 @@ static void display_thread_fn(void *p1, void *p2, void *p3)
 			render_current_state();
 
 			/* Start/stop animation work */
-			if (g_ui_state == UI_STATE_REC_WAVE ||
-			    g_ui_state == UI_STATE_REC_DOT ||
-			    g_ui_state == UI_STATE_MARKING) {
+			if (g_ui_state == UI_STATE_REC_WAVE) {
 				k_work_schedule(&display_anim_work, DISPLAY_ANIMATION_PERIOD);
 			} else {
 				k_work_cancel_delayable(&display_anim_work);
