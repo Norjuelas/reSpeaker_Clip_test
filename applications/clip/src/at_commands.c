@@ -26,6 +26,19 @@
 
 LOG_MODULE_REGISTER(at_commands, CONFIG_CLIP_LOG_LEVEL);
 
+/* Delayed reboot work — allows response to be sent before rebooting */
+static struct k_work_delayable reboot_work;
+
+static void reboot_work_handler(struct k_work *work)
+{
+    sys_reboot(SYS_REBOOT_COLD);
+}
+
+static void schedule_reboot(int delay_ms)
+{
+    k_work_schedule(&reboot_work, K_MSEC(delay_ms));
+}
+
 /* Helper: Extract integer from string */
 static int extract_int(const char *str, int *value)
 {
@@ -687,15 +700,28 @@ static int cmd_factory_handler(struct at_cmd_ctx *ctx, char *response, size_t le
         return create_json_response(false, "Add 'confirm' or 'yes' to proceed", NULL, response, len);
     }
 
-    /* Perform factory reset */
+    /* Perform factory reset (clear LittleFS config) */
     int err = config_factory_reset();
     if (err) {
         return create_json_response(false, "Factory reset failed", NULL, response, len);
     }
 
-    /* TODO: Delete all recording files */
+    /* Format SD card (clear FATFS recordings) */
+    err = storage_format_card();
+    if (err) {
+        LOG_WRN("SD format failed during factory reset: %d", err);
+    }
 
-    return create_json_response(true, "Factory reset complete, rebooting...", NULL, response, len);
+    /* Clear BLE bonds */
+    ble_clear_bonds();
+
+    /* Send response before rebooting */
+    int ret = create_json_response(true, "Factory reset complete, rebooting...", NULL, response, len);
+
+    /* Schedule reboot after response is sent */
+    schedule_reboot(500);
+
+    return ret;
 }
 
 /* REBOOT Command Handler - Reboot the device */
@@ -704,11 +730,8 @@ static int cmd_reboot_handler(struct at_cmd_ctx *ctx, char *response, size_t len
     /* Send success response first */
     int ret = create_json_response(true, NULL, "{\"reboot\":\"restarting\"}", response, len);
 
-    /* Wait a bit for response to be sent */
-    k_sleep(K_MSEC(500));
-
-    /* Reboot the device */
-    sys_reboot(SYS_REBOOT_COLD);
+    /* Schedule reboot after response is sent */
+    schedule_reboot(500);
 
     return ret;
 }
@@ -728,8 +751,7 @@ static int cmd_pair_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
         }
 
         int ret = create_json_response(true, NULL, "{\"rebooting\":true}", response, len);
-        k_sleep(K_MSEC(500));
-        sys_reboot(SYS_REBOOT_COLD);
+        schedule_reboot(500);
         return ret;
     } else {
         /* AT+PAIR? - Query pairing status */
@@ -1704,6 +1726,8 @@ static int cmd_wifi_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
 int at_commands_register(void)
 {
     int err;
+
+    k_work_init_delayable(&reboot_work, reboot_work_handler);
 
     /* GSTAT - Get device status */
     static const struct at_command gstat_cmd = {
