@@ -25,6 +25,7 @@
 #include "wifi.h"
 #include "wifi_udp.h"
 #include "transport_udp.h"
+#include "clip_event.h"
 
 LOG_MODULE_REGISTER(main, CONFIG_CLIP_LOG_LEVEL);
 
@@ -249,6 +250,19 @@ int clip_init(void)
         /* Continue anyway - display is optional */
     }
 
+    /* Initialize event dispatcher (depends on audio, haptic, display, wifi) */
+    err = clip_event_init();
+    if (err) {
+        LOG_ERR("Event dispatcher init failed: %d", err);
+        return err;
+    }
+    
+    err = wifi_on();
+    if (err) {
+        LOG_ERR("WiFi on failed: %d", err);
+        /* Continue anyway - WiFi is optional */
+    }
+
     /* Clear status */
     g_ctx.status.battery_percent = 0;
     g_ctx.status.battery_charging = false;
@@ -257,9 +271,9 @@ int clip_init(void)
     g_ctx.status.session_count = 0;
 
     /* Transition to idle state */
-    g_ctx.state = CLIP_STATE_IDLE;
+    clip_event_get_state();  /* Already set by clip_event_init */
 
-    LOG_INF("Clip2 initialized successfully");
+    LOG_INF("Clip initialized successfully");
     LOG_INF("Device ready, config: bitrate=%u, complexity=%u",
            g_ctx.config.bitrate, g_ctx.config.complexity);
 
@@ -275,7 +289,7 @@ void clip_main_loop(void)
         k_sleep(K_MSEC(1000));
 
         /* Update recording time if recording */
-        if (g_ctx.state == CLIP_STATE_RECORDING) {
+        if (clip_event_get_state() == CLIP_STATE_RECORDING) {
             g_ctx.status.recording_time++;
         }
     }

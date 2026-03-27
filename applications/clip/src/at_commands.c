@@ -15,14 +15,13 @@
 #include "at_commands.h"
 #include "at_server.h"
 #include "clip.h"
+#include "clip_event.h"
 #include "config.h"
 #include "app_version.h"
 #include "audio.h"
 #include "storage.h"
 #include "transfer.h"
 #include "ble.h"
-#include "display.h"
-#include "haptic.h"
 #include "wifi.h"
 
 LOG_MODULE_REGISTER(at_commands, CONFIG_CLIP_LOG_LEVEL);
@@ -117,7 +116,7 @@ static int cmd_gstat_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
                      "\"bitrate\":%u,"
                      "\"free_space\":%u,"
                      "\"device\":\"%s\"}",
-                     clip_state_to_string(c->state),
+                     clip_state_to_string(clip_event_get_state()),
                      audio_is_recording() ? "true" : "false",
                      session_id ? "\"" : "", session_id ? session_id : "null", session_id ? "\"" : "",
                      recording_duration,
@@ -659,22 +658,10 @@ static int cmd_poweroff_handler(struct at_cmd_ctx *ctx, char *response, size_t l
     /* Send success response first */
     int ret = create_json_response(true, NULL, "{\"poweroff\":\"shutting down\"}", response, len);
 
-    /* Wait a bit for response to be sent */
     k_sleep(K_MSEC(500));
 
-    /* Get npm1300 regulators device */
-    const struct device *regulators = DEVICE_DT_GET(DT_NODELABEL(npm1300_regulators));
-    if (!device_is_ready(regulators)) {
-        LOG_ERR("npm1300 regulators not ready, cannot power off");
-        return create_json_response(false, "PMIC not ready", NULL, response, len);
-    }
-
-    /* Enter ship mode (power off) */
-    int ship_ret = regulator_parent_ship_mode(regulators);
-    if (ship_ret != 0) {
-        LOG_ERR("Failed to enter ship mode: %d", ship_ret);
-    }
-    /* If the write succeeded the system powers off immediately */
+    struct clip_event_result_info info;
+    clip_post_event_sync(CLIP_EVENT_POWER_OFF_EXEC, &info);
 
     return ret;
 }
@@ -730,7 +717,6 @@ static int cmd_reboot_handler(struct at_cmd_ctx *ctx, char *response, size_t len
 static int cmd_start_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
 {
     struct clip_context *c = clip_get_context();
-    enum audio_mode audio_mode;
     enum recording_mode rec_mode;
 
     /* Parse mode parameter if provided */
@@ -739,7 +725,6 @@ static int cmd_start_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
         strncpy(mode_str, ctx->args, sizeof(mode_str) - 1);
         mode_str[sizeof(mode_str) - 1] = '\0';
 
-        /* Convert to lowercase */
         for (char *p = mode_str; *p; p++) {
             if (*p >= 'A' && *p <= 'Z') {
                 *p = *p - 'A' + 'a';
@@ -748,43 +733,34 @@ static int cmd_start_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
 
         if (strcmp(mode_str, "normal") == 0 || strcmp(mode_str, "stereo") == 0) {
             rec_mode = MODE_NORMAL;
-            audio_mode = AUDIO_MODE_STEREO;
         } else if (strcmp(mode_str, "enhanced") == 0 || strcmp(mode_str, "merge") == 0) {
             rec_mode = MODE_ENHANCED;
-            audio_mode = AUDIO_MODE_MERGE;
         } else {
             return create_json_response(false, "Invalid mode (use normal/stereo or enhanced/merge)", NULL, response, len);
         }
+
+        /* Apply mode for this session */
+        c->config.mode = rec_mode;
     } else {
-        /* Use config default */
         rec_mode = c->config.mode;
-        if (rec_mode == MODE_NORMAL) {
-            audio_mode = AUDIO_MODE_STEREO;
-        } else {
-            audio_mode = AUDIO_MODE_MERGE;
+    }
+
+    struct clip_event_result_info info;
+    int ret = clip_post_event_sync(CLIP_EVENT_START, &info);
+
+    if (ret != 0 || info.result != CLIP_EVENT_OK) {
+        if (info.result == CLIP_EVENT_INVALID) {
+            return create_json_response(false, "Already recording or invalid state",
+                                       NULL, response, len);
         }
+        if (info.result == CLIP_EVENT_BUSY) {
+            return create_json_response(false, "Audio module busy",
+                                       NULL, response, len);
+        }
+        return create_json_response(false, "Failed to start recording",
+                                   NULL, response, len);
     }
 
-    /* Check if already recording */
-    if (audio_is_recording()) {
-        return create_json_response(false, "Already recording", NULL, response, len);
-    }
-
-    /* Start recording */
-    int err = audio_start_recording(audio_mode);
-    if (err) {
-        return create_json_response(false, "Failed to start recording", NULL, response, len);
-    }
-
-    /* Update state */
-    c->state = CLIP_STATE_RECORDING;
-
-    /* Update UI and haptic - same as button press */
-    display_post_event(UI_EVENT_REC_START);
-    display_set_recording(true, rec_mode == MODE_ENHANCED);
-    haptic_play_pattern(HAPTIC_SHORT);
-
-    /* Get session ID */
     const char *session_id = audio_get_session_id();
     char data[64];
     if (session_id) {
@@ -799,43 +775,29 @@ static int cmd_start_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
 /* STOP Command Handler - Stop recording */
 static int cmd_stop_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
 {
-    struct clip_context *c = clip_get_context();
-    struct audio_stats audio_stats;
-
-    /* Check if recording */
-    if (!audio_is_recording()) {
-        return create_json_response(false, "Not recording", NULL, response, len);
-    }
-
-    /* Get session ID before stopping */
     const char *session_id = audio_get_session_id();
     if (!session_id) {
         return create_json_response(false, "No active session", NULL, response, len);
     }
 
-    /* Stop recording */
-    int err = audio_stop_recording();
-    if (err) {
-        return create_json_response(false, "Failed to stop recording", NULL, response, len);
+    struct clip_event_result_info info;
+    int ret = clip_post_event_sync(CLIP_EVENT_STOP, &info);
+
+    if (ret != 0 || info.result != CLIP_EVENT_OK) {
+        if (info.result == CLIP_EVENT_INVALID) {
+            return create_json_response(false, "Not recording", NULL, response, len);
+        }
+        return create_json_response(false, "Failed to stop recording",
+                                   NULL, response, len);
     }
 
-    /* Update state */
-    c->state = CLIP_STATE_IDLE;
-
-    /* Update UI and haptic - same as button press */
-    display_post_event(UI_EVENT_REC_STOP);
-    display_set_recording(false, false);
-    haptic_play_pattern(HAPTIC_SHORT);
-
-    /* Get audio statistics */
+    struct audio_stats audio_stats;
     if (audio_get_stats(&audio_stats) != 0) {
-        /* If stats not available, return minimal response */
         char data[128];
         snprintf(data, sizeof(data), "{\"session\":\"%s\"}", session_id);
         return create_json_response(true, NULL, data, response, len);
     }
 
-    /* Return full response matching clip format */
     char data[256];
     snprintf(data, sizeof(data),
             "{\"session\":\"%s\","
@@ -854,25 +816,16 @@ static int cmd_stop_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
 /* PAUSE Command Handler - Pause recording */
 static int cmd_pause_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
 {
-    struct clip_context *c = clip_get_context();
+    struct clip_event_result_info info;
+    int ret = clip_post_event_sync(CLIP_EVENT_PAUSE, &info);
 
-    /* Check if recording */
-    if (!audio_is_recording()) {
-        return create_json_response(false, "Not recording", NULL, response, len);
+    if (ret != 0 || info.result != CLIP_EVENT_OK) {
+        if (info.result == CLIP_EVENT_INVALID) {
+            return create_json_response(false, "Not recording", NULL, response, len);
+        }
+        return create_json_response(false, "Failed to pause recording",
+                                   NULL, response, len);
     }
-
-    /* Pause recording */
-    int err = audio_pause_recording();
-    if (err) {
-        return create_json_response(false, "Failed to pause recording", NULL, response, len);
-    }
-
-    /* Update state */
-    c->state = CLIP_STATE_PAUSED;
-
-    /* Update UI - show paused state */
-    display_post_event(UI_EVENT_REC_PAUSE);
-    haptic_play_pattern(HAPTIC_SHORT);
 
     return create_json_response(true, NULL, "{\"paused\":true}", response, len);
 }
@@ -880,25 +833,16 @@ static int cmd_pause_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
 /* RESUME Command Handler - Resume recording */
 static int cmd_resume_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
 {
-    struct clip_context *c = clip_get_context();
+    struct clip_event_result_info info;
+    int ret = clip_post_event_sync(CLIP_EVENT_RESUME, &info);
 
-    /* Check if paused */
-    if (c->state != CLIP_STATE_PAUSED) {
-        return create_json_response(false, "Not paused", NULL, response, len);
+    if (ret != 0 || info.result != CLIP_EVENT_OK) {
+        if (info.result == CLIP_EVENT_INVALID) {
+            return create_json_response(false, "Not paused", NULL, response, len);
+        }
+        return create_json_response(false, "Failed to resume recording",
+                                   NULL, response, len);
     }
-
-    /* Resume recording */
-    int err = audio_resume_recording();
-    if (err) {
-        return create_json_response(false, "Failed to resume recording", NULL, response, len);
-    }
-
-    /* Update state */
-    c->state = CLIP_STATE_RECORDING;
-
-    /* Update UI - resume recording state */
-    display_post_event(UI_EVENT_REC_RESUME);
-    haptic_play_pattern(HAPTIC_SHORT);
 
     return create_json_response(true, NULL, "{\"resumed\":true}", response, len);
 }
@@ -906,23 +850,15 @@ static int cmd_resume_handler(struct at_cmd_ctx *ctx, char *response, size_t len
 /* MARK Command Handler - Add bookmark */
 static int cmd_mark_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
 {
-    struct clip_context *c = clip_get_context();
-    struct audio_stats audio_stats;
-
-    /* Check if recording (including paused state) */
-    if (!audio_is_recording()) {
-        return create_json_response(false, "Not recording", NULL, response, len);
-    }
-
-    /* Add bookmark to storage */
     const char *session_id = audio_get_session_id();
     if (!session_id) {
         return create_json_response(false, "No active session", NULL, response, len);
     }
 
-    /* Get recording time from audio stats */
+    struct audio_stats audio_stats;
     if (audio_get_stats(&audio_stats) != 0) {
-        return create_json_response(false, "Failed to get recording stats", NULL, response, len);
+        return create_json_response(false, "Failed to get recording stats",
+                                   NULL, response, len);
     }
 
     uint32_t recording_sec = audio_stats.recording_time_ms / 1000;
@@ -931,10 +867,9 @@ static int cmd_mark_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
         return create_json_response(false, "Failed to add bookmark", NULL, response, len);
     }
 
-    /* Update UI - no haptic feedback for bookmark */
-    display_post_event(UI_EVENT_MARK);
+    /* Trigger display update (non-blocking) */
+    clip_post_event(CLIP_EVENT_MARK);
 
-    /* Return success with recording time - use "offset" to match clip format */
     char data[64];
     snprintf(data, sizeof(data), "{\"offset\":%u}", recording_sec);
 
@@ -1646,14 +1581,11 @@ static int cmd_wifi_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
      * {"ok":true,"data":{"ssid":"ClipAP_xxxx","password":"12345678","ip":"192.168.4.1","port":8080}}
      */
 
-    struct clip_context *c = clip_get_context();
-
     if (ctx->type == AT_CMD_TYPE_SET || ctx->type == AT_CMD_TYPE_EXEC) {
         if (!ctx->args || strlen(ctx->args) == 0) {
             return create_json_response(false, "Missing argument (on/off)", NULL, response, len);
         }
 
-        /* Parse argument */
         char arg[16];
         strncpy(arg, ctx->args, sizeof(arg) - 1);
         arg[sizeof(arg) - 1] = '\0';
@@ -1664,32 +1596,17 @@ static int cmd_wifi_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
         }
 
         if (strcmp(arg, "on") == 0 || strcmp(arg, "1") == 0) {
-            /* Check state - can't start WiFi while recording or transmitting */
-            if (c->state == CLIP_STATE_RECORDING || c->state == CLIP_STATE_PAUSED) {
-                return create_json_response(false, "Cannot start WiFi while recording", NULL, response, len);
-            }
-            if (c->state == CLIP_STATE_TRANSMITTING) {
-                return create_json_response(false, "Cannot start WiFi while transmitting", NULL, response, len);
-            }
+            struct clip_event_result_info info;
+            int ret = clip_post_event_sync(CLIP_EVENT_WIFI_ON, &info);
 
-            /* Check if already running */
-            if (wifi_ap_is_running()) {
-                char data[256];
-                snprintf(data, sizeof(data),
-                         "{\"ssid\":\"%s\",\"password\":\"%s\",\"ip\":\"%s\",\"port\":%d}",
-                         wifi_get_ssid(), wifi_get_password(), wifi_get_ip_address(), WIFI_AP_UDP_PORT);
-                return create_json_response(true, NULL, data, response, len);
+            if (ret != 0 || info.result != CLIP_EVENT_OK) {
+                if (info.result == CLIP_EVENT_INVALID) {
+                    return create_json_response(false, "Cannot start WiFi in current state",
+                                               NULL, response, len);
+                }
+                return create_json_response(false, "Failed to start WiFi AP",
+                                           NULL, response, len);
             }
-
-            /* Start WiFi AP */
-            int err = wifi_on();
-            if (err) {
-                LOG_ERR("Failed to start WiFi AP: %d", err);
-                return create_json_response(false, "Failed to start WiFi AP", NULL, response, len);
-            }
-
-            /* Update state */
-            c->state = CLIP_STATE_WIFI_SYNC;
 
             char data[256];
             snprintf(data, sizeof(data),
@@ -1698,16 +1615,12 @@ static int cmd_wifi_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
             return create_json_response(true, NULL, data, response, len);
 
         } else if (strcmp(arg, "off") == 0 || strcmp(arg, "0") == 0) {
-            /* Stop WiFi AP */
-            int err = wifi_off();
-            if (err) {
-                LOG_ERR("Failed to stop WiFi AP: %d", err);
-                return create_json_response(false, "Failed to stop WiFi AP", NULL, response, len);
-            }
+            struct clip_event_result_info info;
+            int ret = clip_post_event_sync(CLIP_EVENT_WIFI_OFF, &info);
 
-            /* Update state back to idle */
-            if (c->state == CLIP_STATE_WIFI_SYNC) {
-                c->state = CLIP_STATE_IDLE;
+            if (ret != 0 || info.result != CLIP_EVENT_OK) {
+                return create_json_response(false, "Failed to stop WiFi AP",
+                                           NULL, response, len);
             }
 
             return create_json_response(true, NULL, "{\"wifi\":\"off\"}", response, len);

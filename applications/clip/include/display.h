@@ -34,6 +34,8 @@ enum ui_state {
 	UI_STATE_MARKING,              /**< Bookmark animation */
 	UI_STATE_PAUSED,               /**< Paused recording */
 	UI_STATE_POWER_OFF,            /**< Power-off confirmation */
+	UI_STATE_USB_CONNECTED,        /**< USB plugged in */
+	UI_STATE_OTA,                  /**< OTA update in progress */
 };
 
 /* =============================================================================
@@ -52,6 +54,9 @@ enum ui_event {
 	UI_EVENT_STATUS_SHOW,          /**< Show status bar */
 	UI_EVENT_BONDED,               /**< BLE bonded */
 	UI_EVENT_POWER_OFF_SHOW,       /**< Show power-off screen */
+	UI_EVENT_USB_CONNECTED,        /**< USB cable plugged in */
+	UI_EVENT_OTA_START,            /**< OTA update started */
+	UI_EVENT_OTA_DONE,             /**< OTA update completed */
 	UI_EVENT_TIMEOUT,              /**< State timeout */
 };
 

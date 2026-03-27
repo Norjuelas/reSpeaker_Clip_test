@@ -11,6 +11,7 @@ target_include_directories(app PRIVATE include)
 # Source files
 target_sources(app PRIVATE
     src/main.c
+    src/clip_event.c
     src/config.c
     src/ble.c
     src/transport.c
