@@ -16,6 +16,7 @@
 #include "audio.h"
 #include "ble.h"
 #include "clip.h"
+#include "config.h"
 #include "transfer.h"
 
 LOG_MODULE_REGISTER(display, CONFIG_CLIP_LOG_LEVEL);
@@ -972,6 +973,7 @@ static void handle_event(enum ui_event event)
 
 	case UI_EVENT_STATUS_SHOW:
 		set_ui_state(UI_STATE_STATUS_BAR);
+		g_status_bar_start_ms = k_uptime_get();
 		k_work_schedule(&display_timeout_work, K_MSEC(DISPLAY_STATUS_TIMEOUT_MS));
 		break;
 
@@ -1163,6 +1165,11 @@ int display_init(void)
 	/* Ensure display is unblanked on init */
 	display_blanking_off(display_dev);
 
+	/* Apply saved brightness from config */
+	struct clip_context *ctx = clip_get_context();
+	LOG_INF("Brightness: %d", ctx->config.oled_brightness);
+	clip_display_set_brightness(ctx->config.oled_brightness);
+
 	/* Initialize work items */
 	k_work_init_delayable(&display_anim_work, display_anim_work_handler);
 	k_work_init_delayable(&display_timeout_work, display_timeout_work_handler);
@@ -1235,4 +1242,12 @@ int display_turn_off(void)
 	flush_display();
 	set_ui_state(UI_STATE_OFF);
 	return 0;
+}
+
+int clip_display_set_brightness(uint8_t brightness)
+{
+	if (!display_dev) {
+		return -ENODEV;
+	}
+	return display_set_brightness(display_dev, brightness);
 }

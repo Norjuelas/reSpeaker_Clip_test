@@ -28,7 +28,7 @@ LOG_MODULE_REGISTER(config, CONFIG_CLIP_LOG_LEVEL);
 #define SETTING_AGC_ENABLED     "config/agc_enabled"
 #define SETTING_AGC_TARGET      "config/agc_target"
 #define SETTING_DEREVERB        "config/dereverb_enabled"
-#define SETTING_CONTRAST        "config/oled_contrast"
+#define SETTING_BRIGHTNESS        "config/oled_brightness"
 #define SETTING_TIME_UNIX       "time/unix_timestamp"
 
 /* Config entry for settings handler */
@@ -49,7 +49,7 @@ static const struct config_entry config_table[] = {
     { SETTING_AGC_ENABLED,    offsetof(struct clip_config, agc_enabled),    sizeof(bool) },
     { SETTING_AGC_TARGET,     offsetof(struct clip_config, agc_target),     sizeof(uint16_t) },
     { SETTING_DEREVERB,       offsetof(struct clip_config, dereverb_enabled), sizeof(bool) },
-    { SETTING_CONTRAST,       offsetof(struct clip_config, oled_contrast),  sizeof(uint8_t) },
+    { SETTING_BRIGHTNESS,       offsetof(struct clip_config, oled_brightness),  sizeof(uint8_t) },
 };
 
 #define CONFIG_TABLE_SIZE (sizeof(config_table) / sizeof(config_table[0]))
@@ -162,7 +162,7 @@ static void config_set_defaults(struct clip_context *ctx)
     ctx->config.agc_target = CONFIG_DEFAULT_AGC_TARGET;
     ctx->config.agc_enabled = CONFIG_DEFAULT_AGC_ENABLED;
     ctx->config.dereverb_enabled = false;
-    ctx->config.oled_contrast = CONFIG_DEFAULT_CONTRAST;
+    ctx->config.oled_brightness = CONFIG_DEFAULT_BRIGHTNESS;
 }
 
 int config_init(void)
@@ -270,7 +270,7 @@ static const char *key_to_setting(uint16_t key)
     case CONFIG_KEY_AGC_ENABLE: return SETTING_AGC_ENABLED;
     case CONFIG_KEY_AGC_TARGET: return SETTING_AGC_TARGET;
     case CONFIG_KEY_DEREVERB:   return SETTING_DEREVERB;
-    case CONFIG_KEY_CONTRAST:   return SETTING_CONTRAST;
+    case CONFIG_KEY_BRIGHTNESS:   return SETTING_BRIGHTNESS;
     default:                    return NULL;
     }
 }
@@ -345,9 +345,9 @@ int config_set(uint16_t key, const void *value, size_t len)
             ret = -EINVAL;
         }
         break;
-    case CONFIG_KEY_CONTRAST:
+    case CONFIG_KEY_BRIGHTNESS:
         if (len == sizeof(uint8_t)) {
-            ctx->config.oled_contrast = *(const uint8_t *)value;
+            ctx->config.oled_brightness = *(const uint8_t *)value;
         } else {
             ret = -EINVAL;
         }
@@ -428,9 +428,9 @@ int config_get(uint16_t key, void *value, size_t len)
             return 0;
         }
         break;
-    case CONFIG_KEY_CONTRAST:
+    case CONFIG_KEY_BRIGHTNESS:
         if (len == sizeof(uint8_t)) {
-            *(uint8_t *)value = ctx->config.oled_contrast;
+            *(uint8_t *)value = ctx->config.oled_brightness;
             return 0;
         }
         break;
@@ -570,7 +570,7 @@ int config_set_dereverb_enabled(bool enabled)
     return config_set(CONFIG_KEY_DEREVERB, &enabled, sizeof(enabled));
 }
 
-int config_set_oled_contrast(uint8_t contrast)
+int config_set_oled_brightness(uint8_t brightness)
 {
-    return config_set(CONFIG_KEY_CONTRAST, &contrast, sizeof(contrast));
+    return config_set(CONFIG_KEY_BRIGHTNESS, &brightness, sizeof(brightness));
 }

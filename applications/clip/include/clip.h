@@ -70,7 +70,7 @@ struct clip_context {
         uint16_t agc_target;        /* AGC target level */
         bool agc_enabled;           /* AGC enabled */
         bool dereverb_enabled;      /* Dereverberation enabled */
-        uint8_t oled_contrast;      /* OLED contrast/brightness (0-255) */
+        uint8_t oled_brightness;      /* OLED contrast/brightness (0-255) */
     } config;
 
     /* Status */

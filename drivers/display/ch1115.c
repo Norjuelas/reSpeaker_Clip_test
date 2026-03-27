@@ -419,7 +419,7 @@ static const struct display_driver_api ch1115_driver_api = {
     .blanking_off = ch1115_blanking_off,
     .get_capabilities = ch1115_get_capabilities,
     .set_pixel_format = ch1115_set_pixel_format,
-    .set_contrast = ch1115_set_contrast,
+    .set_brightness = ch1115_set_contrast,
 };
 
 #define CH1115_DEVICE(inst)                                                                      \

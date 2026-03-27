@@ -23,19 +23,25 @@
 #include "transfer.h"
 #include "ble.h"
 #include "wifi.h"
+#include "display.h"
 
 LOG_MODULE_REGISTER(at_commands, CONFIG_CLIP_LOG_LEVEL);
 
 /* Delayed reboot work — allows response to be sent before rebooting */
 static struct k_work_delayable reboot_work;
+static bool reboot_clear_bonds;
 
 static void reboot_work_handler(struct k_work *work)
 {
+    if (reboot_clear_bonds) {
+        ble_clear_bonds();
+    }
     sys_reboot(SYS_REBOOT_COLD);
 }
 
-static void schedule_reboot(int delay_ms)
+static void schedule_reboot(int delay_ms, bool clear_bonds)
 {
+    reboot_clear_bonds = clear_bonds;
     k_work_schedule(&reboot_work, K_MSEC(delay_ms));
 }
 
@@ -614,10 +620,12 @@ static int cmd_brightness_handler(struct at_cmd_ctx *ctx, char *response, size_t
             return create_json_response(false, "Brightness must be 0-255", NULL, response, len);
         }
 
-        c->config.oled_contrast = brightness;
-        config_set_oled_contrast(brightness);
+        c->config.oled_brightness = brightness;
+        config_set_oled_brightness(brightness);
+        clip_display_set_brightness((uint8_t)brightness);
 
-        /* TODO: Apply to display hardware */
+        /* Show status bar briefly to confirm brightness change */
+        clip_post_event(CLIP_EVENT_STATUS_SHOW);
 
         char data[32];
         snprintf(data, sizeof(data), "{\"brightness\":%u}", brightness);
@@ -625,7 +633,7 @@ static int cmd_brightness_handler(struct at_cmd_ctx *ctx, char *response, size_t
     } else {
         /* Get brightness: AT+BRIGHTNESS? */
         char data[32];
-        snprintf(data, sizeof(data), "{\"brightness\":%u}", c->config.oled_contrast);
+        snprintf(data, sizeof(data), "{\"brightness\":%u}", c->config.oled_brightness);
         return create_json_response(true, NULL, data, response, len);
     }
 }
@@ -712,14 +720,11 @@ static int cmd_factory_handler(struct at_cmd_ctx *ctx, char *response, size_t le
         LOG_WRN("SD format failed during factory reset: %d", err);
     }
 
-    /* Clear BLE bonds */
-    ble_clear_bonds();
-
-    /* Send response before rebooting */
+    /* Send response before clearing bonds (which may drop BLE link) */
     int ret = create_json_response(true, "Factory reset complete, rebooting...", NULL, response, len);
 
-    /* Schedule reboot after response is sent */
-    schedule_reboot(500);
+    /* Schedule: clear bonds then reboot */
+    schedule_reboot(500, true);
 
     return ret;
 }
@@ -731,7 +736,7 @@ static int cmd_reboot_handler(struct at_cmd_ctx *ctx, char *response, size_t len
     int ret = create_json_response(true, NULL, "{\"reboot\":\"restarting\"}", response, len);
 
     /* Schedule reboot after response is sent */
-    schedule_reboot(500);
+    schedule_reboot(500, false);
 
     return ret;
 }
@@ -745,13 +750,9 @@ static int cmd_pair_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
             return create_json_response(false, "Use AT+PAIR=reset", NULL, response, len);
         }
 
-        int err = ble_clear_bonds();
-        if (err) {
-            LOG_WRN("Failed to clear bonds: %d", err);
-        }
-
+        /* Send response before clearing bonds (which drops BLE link) */
         int ret = create_json_response(true, NULL, "{\"rebooting\":true}", response, len);
-        schedule_reboot(500);
+        schedule_reboot(500, true);
         return ret;
     } else {
         /* AT+PAIR? - Query pairing status */

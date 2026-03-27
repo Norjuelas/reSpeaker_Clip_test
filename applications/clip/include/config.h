@@ -20,7 +20,7 @@
 #define CONFIG_KEY_AGC_ENABLE    0x07
 #define CONFIG_KEY_AGC_TARGET    0x08
 #define CONFIG_KEY_DEREVERB      0x09
-#define CONFIG_KEY_CONTRAST      0x0A
+#define CONFIG_KEY_BRIGHTNESS      0x0A
 
 /* Default values */
 #define CONFIG_DEFAULT_BITRATE       24000
@@ -32,7 +32,7 @@
 #define CONFIG_DEFAULT_AGC_TARGET    8000
 #define CONFIG_DEFAULT_AGC_ENABLED   true
 #define CONFIG_DEFAULT_DEREVERB      false
-#define CONFIG_DEFAULT_CONTRAST      128
+#define CONFIG_DEFAULT_BRIGHTNESS      128
 
 /**
  * @brief Initialize configuration system
@@ -185,11 +185,11 @@ int config_set_agc_target(uint16_t target);
 int config_set_dereverb_enabled(bool enabled);
 
 /**
- * @brief Set OLED contrast
+ * @brief Set OLED brightness
  *
- * @param contrast Contrast (0-255)
+ * @param brightness Brightness (0-255)
  * @return 0 on success, negative error code on failure
  */
-int config_set_oled_contrast(uint8_t contrast);
+int config_set_oled_brightness(uint8_t brightness);
 
 #endif /* CLIP_CONFIG_H */

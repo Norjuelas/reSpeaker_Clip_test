@@ -118,4 +118,11 @@ int display_set_recording(bool recording, bool enhanced_mode);
  */
 int display_turn_off(void);
 
+/**
+ * @brief Set display brightness
+ * @param brightness Brightness value (0-255)
+ * @return 0 on success, negative errno on failure
+ */
+int clip_display_set_brightness(uint8_t brightness);
+
 #endif /* CLIP_DISPLAY_H */
