@@ -2,6 +2,10 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Commit Rules
+
+- Do not add `Co-Authored-By` lines to commit messages.
+
 ## Project Overview
 
 ReSpeaker Clip is a Zephyr RTOS firmware project for the Seeed ReSpeaker Clip board, based on the Nordic nRF5340 dual-core MCU. It is designed for voice recognition, audio processing, and embedded IoT applications.

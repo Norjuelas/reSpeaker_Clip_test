@@ -941,7 +941,7 @@ static int init_opus_encoder(void)
 
     /* Create Opus encoder */
     opus_encoder = opus_encoder_create(AUDIO_SAMPLE_RATE, opus_channels,
-                       OPUS_APPLICATION_VOIP, &err);
+                       OPUS_APPLICATION_AUDIO, &err);
     if (!opus_encoder) {
         LOG_ERR("Failed to create Opus encoder: %d", err);
         return err;
@@ -949,6 +949,10 @@ static int init_opus_encoder(void)
 
     /* Set bitrate */
     opus_encoder_ctl(opus_encoder, OPUS_SET_BITRATE((opus_int32)actual_bitrate));
+
+    /* Enable VBR with unconstrained quality */
+    opus_encoder_ctl(opus_encoder, OPUS_SET_VBR(1));
+    opus_encoder_ctl(opus_encoder, OPUS_SET_VBR_CONSTRAINT(0));
 
     /* Set complexity based on channel count for optimal performance:
      * - Stereo (2 channels): complexity=0 (faster encoding, ~8-10ms)
@@ -963,8 +967,16 @@ static int init_opus_encoder(void)
         return err;
     }
 
-    /* Disable FEC */
+    /* Voice-optimized signal */
+    opus_encoder_ctl(opus_encoder, OPUS_SET_SIGNAL(OPUS_SIGNAL_VOICE));
+
+    /* Input sample depth */
+    opus_encoder_ctl(opus_encoder, OPUS_SET_LSB_DEPTH(16));
+
+    /* Disable DTX, FEC, packet loss */
+    opus_encoder_ctl(opus_encoder, OPUS_SET_DTX(0));
     opus_encoder_ctl(opus_encoder, OPUS_SET_INBAND_FEC(0));
+    opus_encoder_ctl(opus_encoder, OPUS_SET_PACKET_LOSS_PERC(0));
 
     /* Update cached parameters */
     encoder_params.bitrate = actual_bitrate;
