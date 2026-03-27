@@ -6,6 +6,7 @@
 
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
+#include <stdio.h>
 #include "transport_ble.h"
 #include "ble.h"
 
@@ -51,9 +52,53 @@ static void *ble_transport_get_conn(void)
     return ble_get_connection();
 }
 
+static int ble_transport_send_file_start(const char *session_id,
+                                          const char *filename, uint32_t size)
+{
+    char buf[256];
+    int len = snprintf(buf, sizeof(buf),
+                       "{\"ok\":true,\"event\":\"file_ready\","
+                       "\"session\":\"%s\",\"filename\":\"%s\",\"size\":%u}",
+                       session_id, filename, size);
+    if (len < 0 || len >= (int)sizeof(buf)) {
+        return -EINVAL;
+    }
+    return ble_send((const uint8_t *)buf, len);
+}
+
+static int ble_transport_send_file_end(const char *filename)
+{
+    char buf[128];
+    int len = snprintf(buf, sizeof(buf),
+                       "{\"ok\":true,\"event\":\"file_complete\","
+                       "\"filename\":\"%s\"}",
+                       filename);
+    if (len < 0 || len >= (int)sizeof(buf)) {
+        return -EINVAL;
+    }
+    return ble_send((const uint8_t *)buf, len);
+}
+
+static int ble_transport_send_transfer_done(const char *session_id,
+                                             uint32_t file_count)
+{
+    char buf[256];
+    int len = snprintf(buf, sizeof(buf),
+                       "{\"ok\":true,\"event\":\"transfer_complete\","
+                       "\"session_id\":\"%s\",\"files\":%u}",
+                       session_id, file_count);
+    if (len < 0 || len >= (int)sizeof(buf)) {
+        return -EINVAL;
+    }
+    return ble_send((const uint8_t *)buf, len);
+}
+
 static const struct transport_ops ble_transport_ops = {
     .send = ble_transport_send,
     .send_file_data = ble_transport_send_file_data,
+    .send_file_start = ble_transport_send_file_start,
+    .send_file_end = ble_transport_send_file_end,
+    .send_transfer_done = ble_transport_send_transfer_done,
     .is_connected = ble_transport_is_connected,
     .get_conn = ble_transport_get_conn,
 };

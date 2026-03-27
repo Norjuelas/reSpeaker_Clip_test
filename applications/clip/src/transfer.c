@@ -978,10 +978,6 @@ static int transfer_send_chunk(void)
 
 static void send_file_ready_event(const char *session_id, const char *filename, uint64_t size)
 {
-    char buffer[256];
-    int len;
-    int err;
-
     if (!session_id || session_id[0] == '\0') {
         LOG_WRN("Cannot send file_ready: empty session_id");
         return;
@@ -997,40 +993,13 @@ static void send_file_ready_event(const char *session_id, const char *filename, 
         return;
     }
 
-    /* Send file_start via current transport (binary frame) */
     if (current_transport->ops->send_file_start) {
         current_transport->ops->send_file_start(session_id, filename, (uint32_t)size);
     }
-
-    /* For BLE, also send JSON event for compatibility.
-     * For UDP, don't send JSON - binary frame is sufficient and
-     * JSON would corrupt the binary stream protocol. */
-    if (current_transport->type == TRANSPORT_TYPE_BLE) {
-        len = snprintf(buffer, sizeof(buffer),
-                       "{\"ok\":true,\"event\":\"file_ready\",\"session\":\"%s\",\"filename\":\"%s\",\"size\":%u}",
-                       session_id, filename, (uint32_t)size);
-
-        if (len < 0 || len >= sizeof(buffer)) {
-            LOG_ERR("file_ready buffer overflow");
-            return;
-        }
-
-        err = current_transport->ops->send((uint8_t *)buffer, len);
-        if (err != 0) {
-            LOG_WRN("file_ready notify failed: %d", err);
-        }
-    }
-    /* TCP: binary frame is enough, no JSON needed */
 }
 
 static int send_file_complete_event(const char *filename)
 {
-    char buffer[256];
-    int len;
-    int err;
-    int retry_count = 0;
-    const int max_retries = 5;
-
     if (!filename || filename[0] == '\0') {
         LOG_WRN("Cannot send file_complete: empty filename");
         return -EINVAL;
@@ -1041,7 +1010,6 @@ static int send_file_complete_event(const char *filename)
         return -ENOTCONN;
     }
 
-    /* Send file_end via current transport (binary frame) */
     if (current_transport->ops->send_file_end) {
         return current_transport->ops->send_file_end(filename);
     }
@@ -1052,12 +1020,6 @@ static int send_file_complete_event(const char *filename)
 
 static void send_transfer_complete_once(const char *session_id, int file_count)
 {
-    char buffer[256];
-    int len;
-    int err;
-    int retry_count = 0;
-    const int max_retries = 5;
-
     if (transfer_complete_sent) {
         LOG_DBG("transfer_complete already sent, skipping duplicate");
         return;
@@ -1073,53 +1035,12 @@ static void send_transfer_complete_once(const char *session_id, int file_count)
         transfer_set_synced_files(session_id, current_transfer.synced_files);
     }
 
-    /* Send transfer_done via current transport (binary frame) */
     if (current_transport && current_transport->ops && current_transport->ops->send_transfer_done) {
         current_transport->ops->send_transfer_done(session_id, file_count);
     }
 
-    /* For BLE, also send JSON event for compatibility.
-     * For UDP, don't send JSON - binary frame is sufficient. */
-    if (current_transport->type != TRANSPORT_TYPE_BLE) {
-        LOG_INF("Transfer complete: session=%s, files=%d", session_id, file_count);
-        transfer_complete_sent = true;
-        return;  /* UDP: done after binary frame */
-    }
-
-    /* BLE: send JSON event */
-    len = snprintf(buffer, sizeof(buffer),
-                   "{\"ok\":true,\"event\":\"transfer_complete\",\"session_id\":\"%s\",\"files\":%d}",
-                   session_id, file_count);
-
-    /* Retry with delay for critical transfer_complete notification */
-    do {
-        if (!current_transport || !current_transport->ops) {
-            LOG_WRN("No transport for transfer_complete event");
-            return;
-        }
-        err = current_transport->ops->send((uint8_t *)buffer, len);
-        if (err == 0) {
-            LOG_INF("Sent transfer_complete: session=%s, files=%d", session_id, file_count);
-            transfer_complete_sent = true;
-            return;
-        }
-
-        /* Retry on temporary errors */
-        if (err == -ENOMEM || err == -EAGAIN || err == -EBUSY) {
-            retry_count++;
-            if (retry_count < max_retries) {
-                LOG_DBG("transfer_complete notify failed (err=%d), retrying %d/%d",
-                        err, retry_count, max_retries);
-                k_sleep(K_MSEC(50));
-                continue;
-            }
-        }
-
-        /* Fatal error or retries exhausted */
-        LOG_ERR("transfer_complete notify failed: %d (retries: %d)", err, retry_count);
-        break;
-
-    } while (retry_count < max_retries);
+    LOG_INF("Transfer complete: session=%s, files=%d", session_id, file_count);
+    transfer_complete_sent = true;
 }
 
 static void transfer_cleanup(void)
