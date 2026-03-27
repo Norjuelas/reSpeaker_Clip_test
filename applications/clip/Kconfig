@@ -55,18 +55,6 @@ config CLIP_DEFAULT_CONTRAST
 # =============================================================================
 
 # =============================================================================
-# Event Dispatcher Configuration
-# =============================================================================
-
-config CLIP_EVENT_WORK_STACK_SIZE
-	int "Event dispatcher work queue stack size"
-	default 2048
-
-config CLIP_EVENT_WORK_PRIORITY
-	int "Event dispatcher work queue priority"
-	default 5
-
-# =============================================================================
 # Haptic Motor Configuration
 # =============================================================================
 

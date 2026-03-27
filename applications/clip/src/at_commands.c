@@ -713,6 +713,105 @@ static int cmd_reboot_handler(struct at_cmd_ctx *ctx, char *response, size_t len
     return ret;
 }
 
+/* PAIR Command Handler - Query or reset BLE pairing */
+static int cmd_pair_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
+{
+    if (ctx->type == AT_CMD_TYPE_SET) {
+        /* AT+PAIR=reset - Clear bonds and reboot */
+        if (!ctx->args || strcmp(ctx->args, "reset") != 0) {
+            return create_json_response(false, "Use AT+PAIR=reset", NULL, response, len);
+        }
+
+        int err = ble_clear_bonds();
+        if (err) {
+            LOG_WRN("Failed to clear bonds: %d", err);
+        }
+
+        int ret = create_json_response(true, NULL, "{\"rebooting\":true}", response, len);
+        k_sleep(K_MSEC(500));
+        sys_reboot(SYS_REBOOT_COLD);
+        return ret;
+    } else {
+        /* AT+PAIR? - Query pairing status */
+        char addr[18] = {0};
+        bool bonded = (ble_get_bond_addr(addr, sizeof(addr)) == 0);
+
+        if (bonded) {
+            char data[64];
+            snprintf(data, sizeof(data), "\"paired\",\"addr\":\"%s\"", addr);
+            return create_json_response(true, data, NULL, response, len);
+        } else {
+            return create_json_response(true, "\"unpaired\"", NULL, response, len);
+        }
+    }
+}
+
+/* PURGEABLE Command Handler - List sessions ready for cleanup */
+static int cmd_purgeable_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
+{
+    if (!storage_is_mounted()) {
+        return create_json_response(false, "SD card not mounted", NULL, response, len);
+    }
+
+    static struct storage_session_info sessions[100];
+    int count = storage_list_sessions(sessions, 100);
+    if (count < 0) {
+        return create_json_response(false, "Failed to list sessions", NULL, response, len);
+    }
+
+    /* Find fully synced sessions (synced_files == file_count && file_count > 0) */
+    int purgeable_count = 0;
+    uint64_t total_bytes = 0;
+    char ids_buf[1024];
+    int ids_len = 0;
+
+    ids_buf[0] = '\0';
+
+    for (int i = 0; i < count; i++) {
+        if (sessions[i].file_count > 0 &&
+            sessions[i].synced_files == sessions[i].file_count) {
+            total_bytes += sessions[i].total_bytes;
+            purgeable_count++;
+
+            if (ids_len > 0 && ids_len < (int)sizeof(ids_buf) - 30) {
+                ids_len += snprintf(ids_buf + ids_len, sizeof(ids_buf) - ids_len, ",");
+            }
+            if (ids_len < (int)sizeof(ids_buf) - 30) {
+                ids_len += snprintf(ids_buf + ids_len, sizeof(ids_buf) - ids_len,
+                                    "\"%s\"", sessions[i].session_id);
+            }
+        }
+    }
+
+    char data[1152];
+    snprintf(data, sizeof(data),
+             "\"count\":%d,\"bytes\":%llu,\"sessions\":[%s]",
+             purgeable_count,
+             (unsigned long long)total_bytes,
+             ids_buf);
+
+    return create_json_response(true, NULL, data, response, len);
+}
+
+/* FORMAT Command Handler - Format SD card (delete all sessions) */
+static int cmd_format_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
+{
+    if (!storage_is_mounted()) {
+        return create_json_response(false, "SD card not mounted", NULL, response, len);
+    }
+
+    if (audio_is_recording()) {
+        return create_json_response(false, "Cannot format while recording", NULL, response, len);
+    }
+
+    int err = storage_format_card();
+    if (err) {
+        return create_json_response(false, "Format failed", NULL, response, len);
+    }
+
+    return create_json_response(true, NULL, NULL, response, len);
+}
+
 /* START Command Handler - Start recording */
 static int cmd_start_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
 {
@@ -1527,48 +1626,6 @@ static int cmd_purge_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
     return create_json_response(true, NULL, data, response, len);
 }
 
-/* TPAUSE Command Handler - Pause transfer */
-static int cmd_tpause_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
-{
-    /*
-     * AT+TPAUSE - Pause transfer
-     *
-     * Response: {"ok":true,"data":{"paused":true}}
-     */
-
-    if (!transfer_is_active()) {
-        return create_json_response(false, "No active transfer", NULL, response, len);
-    }
-
-    int err = transfer_pause();
-    if (err) {
-        return create_json_response(false, "Failed to pause transfer", NULL, response, len);
-    }
-
-    return create_json_response(true, NULL, "{\"paused\":true}", response, len);
-}
-
-/* TRESUME Command Handler - Resume transfer */
-static int cmd_tresume_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
-{
-    /*
-     * AT+TRESUME - Resume paused transfer
-     *
-     * Response: {"ok":true,"data":{"resumed":true}}
-     */
-
-    if (transfer_get_state() != TRANSFER_STATE_PAUSED) {
-        return create_json_response(false, "Transfer not paused", NULL, response, len);
-    }
-
-    int err = transfer_resume_transfer();
-    if (err) {
-        return create_json_response(false, "Failed to resume transfer", NULL, response, len);
-    }
-
-    return create_json_response(true, NULL, "{\"resumed\":true}", response, len);
-}
-
 /* WIFI Command Handler - Control WiFi AP */
 static int cmd_wifi_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
 {
@@ -1783,6 +1840,15 @@ int at_commands_register(void)
     err = at_server_register_cmd(&factory_cmd);
     if (err) return err;
 
+    /* PAIR - BLE pairing query/reset */
+    static const struct at_command pair_cmd = {
+        .name = "PAIR",
+        .flags = AT_CMD_SET | AT_CMD_QUERY,
+        .handler = cmd_pair_handler,
+    };
+    err = at_server_register_cmd(&pair_cmd);
+    if (err) return err;
+
     /* REBOOT - Reboot the device */
     static const struct at_command reboot_cmd = {
         .name = "REBOOT",
@@ -1864,15 +1930,6 @@ int at_commands_register(void)
     err = at_server_register_cmd(&download_cmd);
     if (err) return err;
 
-    /* PROGRESS - Query transfer progress */
-    static const struct at_command progress_cmd = {
-        .name = "PROGRESS",
-        .flags = AT_CMD_EXEC | AT_CMD_QUERY,
-        .handler = cmd_progress_handler,
-    };
-    err = at_server_register_cmd(&progress_cmd);
-    if (err) return err;
-
     /* CANCEL - Cancel transfer */
     static const struct at_command cancel_cmd = {
         .name = "CANCEL",
@@ -1900,22 +1957,22 @@ int at_commands_register(void)
     err = at_server_register_cmd(&purge_cmd);
     if (err) return err;
 
-    /* TPAUSE - Pause transfer */
-    static const struct at_command tpause_cmd = {
-        .name = "TPAUSE",
+    /* PURGEABLE - List sessions ready for cleanup */
+    static const struct at_command purgeable_cmd = {
+        .name = "PURGEABLE",
         .flags = AT_CMD_EXEC,
-        .handler = cmd_tpause_handler,
+        .handler = cmd_purgeable_handler,
     };
-    err = at_server_register_cmd(&tpause_cmd);
+    err = at_server_register_cmd(&purgeable_cmd);
     if (err) return err;
 
-    /* TRESUME - Resume transfer */
-    static const struct at_command tresume_cmd = {
-        .name = "TRESUME",
+    /* FORMAT - Format SD card */
+    static const struct at_command format_cmd = {
+        .name = "FORMAT",
         .flags = AT_CMD_EXEC,
-        .handler = cmd_tresume_handler,
+        .handler = cmd_format_handler,
     };
-    err = at_server_register_cmd(&tresume_cmd);
+    err = at_server_register_cmd(&format_cmd);
     if (err) return err;
 
     /* WIFI - Control WiFi AP */

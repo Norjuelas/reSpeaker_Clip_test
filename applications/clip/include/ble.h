@@ -114,6 +114,22 @@ bool ble_is_file_data_notify_enabled(void);
 bool ble_is_bonded(void);
 
 /**
+ * @brief Get address of first bonded device
+ *
+ * @param addr_buf Buffer to hold address string (min 18 bytes)
+ * @param len Buffer length
+ * @return 0 on success, -ENOENT if no bonds, -EINVAL if buffer too small
+ */
+int ble_get_bond_addr(char *addr_buf, size_t len);
+
+/**
+ * @brief Clear all BLE bonds
+ *
+ * @return 0 on success, negative error code on failure
+ */
+int ble_clear_bonds(void);
+
+/**
  * @brief Get BLE connection
  *
  * @return Connection pointer or NULL if not connected

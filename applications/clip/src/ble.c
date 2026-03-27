@@ -723,6 +723,29 @@ bool ble_is_bonded(void)
     return bond_count > 0;
 }
 
+static void get_bond_addr_cb(const struct bt_bond_info *info, void *user_data)
+{
+    char *buf = (char *)user_data;
+    if (buf[0] == '\0') {
+        bt_addr_le_to_str(&info->addr, buf, 18);
+    }
+}
+
+int ble_get_bond_addr(char *addr_buf, size_t len)
+{
+    if (len < 18) {
+        return -EINVAL;
+    }
+    addr_buf[0] = '\0';
+    bt_foreach_bond(BT_ID_DEFAULT, get_bond_addr_cb, addr_buf);
+    return addr_buf[0] ? 0 : -ENOENT;
+}
+
+int ble_clear_bonds(void)
+{
+    return bt_unpair(BT_ID_DEFAULT, NULL);
+}
+
 struct bt_conn *ble_get_connection(void)
 {
     return ble_ctx.conn;

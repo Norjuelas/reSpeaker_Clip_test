@@ -874,9 +874,21 @@ int storage_delete_session(const char *session_id)
 
 int storage_format_card(void)
 {
-    /* TODO: Implement FAT format */
-    LOG_WRN("Format not implemented");
-    return -ENOTSUP;
+    struct storage_session_info sessions[100];
+    int count = storage_list_sessions(sessions, 100);
+    int deleted = 0;
+
+    for (int i = 0; i < count; i++) {
+        int err = storage_delete_session(sessions[i].session_id);
+        if (err == 0) {
+            deleted++;
+        } else {
+            LOG_WRN("Failed to delete session %s: %d", sessions[i].session_id, err);
+        }
+    }
+
+    LOG_INF("Format complete: %d/%d sessions deleted", deleted, count);
+    return 0;
 }
 
 /* Internal functions */

@@ -75,4 +75,21 @@ enum clip_state clip_event_get_state(void);
  */
 int clip_event_init(void);
 
+/**
+ * @brief Wait for events (called by main loop)
+ *
+ * Blocks until an event is posted or timeout expires.
+ *
+ * @param timeout Timeout in milliseconds
+ */
+void clip_event_wait(k_timeout_t timeout);
+
+/**
+ * @brief Process all pending events (called by main loop)
+ *
+ * Must be called after clip_event_wait() returns.
+ * Executes all queued events in order.
+ */
+void clip_event_process(void);
+
 #endif /* CLIP_EVENT_H */

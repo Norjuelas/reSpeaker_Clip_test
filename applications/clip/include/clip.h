@@ -103,7 +103,7 @@ struct clip_context {
 struct clip_context *clip_get_context(void);
 
 /**
- * @brief Initialize clip2 application
+ * @brief Initialize clip application
  *
  * @return 0 on success, negative error code on failure
  */

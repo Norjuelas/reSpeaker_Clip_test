@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-BLE Terminal for Clip2
+BLE Terminal for Clip
 
-Interactive terminal for sending AT commands to Clip2 device via BLE.
+Interactive terminal for sending AT commands to Clip device via BLE.
 Requires: bleak, asyncio
 """
 
@@ -14,14 +14,14 @@ import time
 from typing import Optional
 from bleak import BleakClient, BleakScanner
 
-# UUIDs - Matching the Clip2 BLE service
+# UUIDs - Matching the Clip BLE service
 SERVICE_UUID = "6E400001-B5A3-F393-E0A9-E50E24DCCA9E"
 CMD_RECV_UUID = "6E400002-B5A3-F393-E0A9-E50E24DCCA9E"
 RESP_SEND_UUID = "6E400003-B5A3-F393-E0A9-E50E24DCCA9E"
 
 
-class Clip2Terminal:
-    """Clip2 BLE Terminal"""
+class ClipTerminal:
+    """Clip BLE Terminal"""
 
     def __init__(self, address: str):
         self.address = address
@@ -112,7 +112,7 @@ class Clip2Terminal:
 
 
 async def scan_for_device(name_prefix: str = "CLIP_", timeout: float = 5.0) -> Optional[str]:
-    """Scan for Clip2 device"""
+    """Scan for Clip device"""
     print(f"Scanning for {name_prefix}...")
     devices = await BleakScanner.discover(timeout=timeout)
     for device in devices:
@@ -122,10 +122,10 @@ async def scan_for_device(name_prefix: str = "CLIP_", timeout: float = 5.0) -> O
     return None
 
 
-async def interactive_mode(terminal: Clip2Terminal):
+async def interactive_mode(terminal: ClipTerminal):
     """Interactive terminal mode"""
     print("\n" + "="*50)
-    print("Clip2 BLE Terminal - Interactive Mode")
+    print("Clip BLE Terminal - Interactive Mode")
     print("="*50)
     print("Commands:")
     print("  AT+<command>    - Send AT command")
@@ -149,7 +149,7 @@ async def interactive_mode(terminal: Clip2Terminal):
     while True:
         try:
             # Get input from user
-            cmd = input("clip2> ").strip()
+            cmd = input("clip> ").strip()
 
             if not cmd:
                 continue
@@ -204,16 +204,16 @@ async def main():
         address = sys.argv[1]
     else:
         # Scan for device
-        address = await scan_for_device("CLIP_")
+        address = await scan_for_device("Clip")
         if not address:
-            print("No Clip2 device found!")
+            print("No Clip device found!")
             print("Usage: python ble_terminal.py <BLE_ADDRESS>")
             sys.exit(1)
 
     print(f"Using device: {address}")
 
     # Create terminal
-    terminal = Clip2Terminal(address)
+    terminal = ClipTerminal(address)
 
     try:
         # Connect

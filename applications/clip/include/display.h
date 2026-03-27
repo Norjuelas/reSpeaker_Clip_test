@@ -13,7 +13,7 @@
 
 /**
  * @file display.h
- * @brief UI display module for clip2
+ * @brief UI display module for clip
  *
  * Event-driven UI system with state machine for display management.
  */

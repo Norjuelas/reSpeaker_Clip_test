@@ -7,6 +7,9 @@
  *
  * All state transitions and side effects (audio, haptic, display)
  * are handled here. Button and AT command modules only post events.
+ *
+ * Events are processed in the main thread (via clip_event_process()),
+ * which provides a large enough stack for WiFi ON/OFF operations.
  */
 
 #include <zephyr/kernel.h>
@@ -70,12 +73,11 @@ K_MSGQ_DEFINE(clip_ev_msgq, sizeof(struct clip_event_item),
               EVENT_QUEUE_SIZE, 4);
 
 /* ========================================================================== */
-/* Work Queue                                                                  */
+/* Event Notification Semaphore                                               */
 /* ========================================================================== */
 
-K_THREAD_STACK_DEFINE(event_work_stack, CONFIG_CLIP_EVENT_WORK_STACK_SIZE);
-static struct k_work_q event_work_q;
-static struct k_work event_process_work;
+/* Signaled when a new event is queued; main loop waits on this */
+struct k_sem event_notify_sem;
 
 /* ========================================================================== */
 /* State                                                                       */
@@ -87,7 +89,6 @@ static atomic_t g_state;
 /* Forward Declarations                                                         */
 /* ========================================================================== */
 
-static void event_process_handler(struct k_work *work);
 static enum clip_event_result execute_transition(enum clip_event event,
                                                  enum clip_state from,
                                                  enum clip_state to);
@@ -99,11 +100,7 @@ static enum clip_event_result execute_transition(enum clip_event event,
 int clip_event_init(void)
 {
     atomic_set(&g_state, CLIP_STATE_IDLE);
-
-    k_work_queue_start(&event_work_q, event_work_stack,
-                       K_THREAD_STACK_SIZEOF(event_work_stack),
-                       CONFIG_CLIP_EVENT_WORK_PRIORITY, NULL);
-    k_work_init(&event_process_work, event_process_handler);
+    k_sem_init(&event_notify_sem, 0, 1);
 
     LOG_INF("Event dispatcher initialized");
     return 0;
@@ -128,7 +125,7 @@ int clip_post_event(enum clip_event event)
         return ret;
     }
 
-    k_work_submit_to_queue(&event_work_q, &event_process_work);
+    k_sem_give(&event_notify_sem);
     return 0;
 }
 
@@ -153,20 +150,23 @@ int clip_post_event_sync(enum clip_event event,
         return ret;
     }
 
-    k_work_submit_to_queue(&event_work_q, &event_process_work);
+    k_sem_give(&event_notify_sem);
     k_sem_take(&sem, K_FOREVER);
     return 0;
 }
 
 /* ========================================================================== */
-/* Event Processing (runs in work queue thread)                                */
+/* Event Processing — called from main thread                                   */
 /* ========================================================================== */
 
-static void event_process_handler(struct k_work *work)
+void clip_event_wait(k_timeout_t timeout)
+{
+    k_sem_take(&event_notify_sem, timeout);
+}
+
+void clip_event_process(void)
 {
     struct clip_event_item item;
-
-    ARG_UNUSED(work);
 
     while (k_msgq_get(&clip_ev_msgq, &item, K_NO_WAIT) == 0) {
         enum clip_state current = (enum clip_state)atomic_get(&g_state);

@@ -330,33 +330,6 @@ int transfer_resume_from(const char *session_id, const char *start_file, struct 
     return 0;
 }
 
-int transfer_pause(void)
-{
-    if (!transfer_is_active()) {
-        return -EINVAL;
-    }
-
-    LOG_INF("Transfer pause requested");
-    transfer_pause_requested = true;
-    current_transfer.state = TRANSFER_STATE_PAUSED;
-
-    return 0;
-}
-
-int transfer_resume_transfer(void)
-{
-    if (current_transfer.state != TRANSFER_STATE_PAUSED) {
-        return -EINVAL;
-    }
-
-    LOG_INF("Transfer resume requested");
-    transfer_pause_requested = false;
-    current_transfer.state = TRANSFER_STATE_TRANSMITTING;
-    k_sem_give(&transfer_trigger_sem);
-
-    return 0;
-}
-
 int transfer_cancel(void)
 {
     if (!transfer_is_active()) {

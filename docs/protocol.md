@@ -139,7 +139,7 @@ Execute an operation or retrieve status:
 - `AT+PROGRESS` - Query transfer progress
 - `AT+PURGE` - Delete transferred sessions
 - `AT+VERSION` - Get version info
-- `AT+RESET` - Reboot device
+- `AT+REBOOT` - Reboot device
 
 #### SET Commands (With Parameters)
 Format: `AT+XX=<value>`
@@ -1294,13 +1294,13 @@ AT+FACTORY=confirm
 
 ---
 
-##### AT+RESET - Reboot Device
+##### AT+REBOOT - Reboot Device
 
 Restart the device.
 
 **Request:**
 ```
-AT+RESET
+AT+REBOOT
 ```
 
 **Response:**
@@ -1545,7 +1545,7 @@ App                          Device
 │         ▼                                               │
 │  ┌──────────────┐                                       │
 │  │    ERROR     │──────────────────────────────────────┘
-│  └──────────────┘         Recovery / AT+RESET          │
+│  └──────────────┘         Recovery / AT+REBOOT          │
 │                                                             │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -2053,7 +2053,7 @@ Some errors include additional fields:
 - Battery low (4006): Charge device
 
 **Fatal Errors (require reset):**
-- Internal error (2005): AT+RESET
+- Internal error (2005): AT+REBOOT
 - File system error (3003): Reformat SD card
 - Encoder error (4004): Reboot device
 
@@ -2220,7 +2220,7 @@ To prevent BLE congestion:
 | AT+BRIGHTNESS | GET/SET | OLED brightness | 3.3.7 |
 | AT+PAIR | GET/SET | BLE pairing | 3.3.8 |
 | AT+FACTORY | SET | Factory reset | 3.3.8 |
-| AT+RESET | EXEC | Reboot | 3.3.8 |
+| AT+REBOOT | EXEC | Reboot | 3.3.8 |
 
 ## Appendix B: Example Sessions
 

@@ -285,8 +285,11 @@ void clip_main_loop(void)
     LOG_INF("Entering main loop");
 
     while (true) {
-        /* Sleep to save power */
-        k_sleep(K_MSEC(1000));
+        /* Wait for events (timeout 1s for recording time update) */
+        clip_event_wait(K_MSEC(1000));
+
+        /* Process all pending events */
+        clip_event_process();
 
         /* Update recording time if recording */
         if (clip_event_get_state() == CLIP_STATE_RECORDING) {

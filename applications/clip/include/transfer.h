@@ -80,20 +80,6 @@ int transfer_start(const char *session_id, const char *filename, struct transpor
 int transfer_resume_from(const char *session_id, const char *start_file, struct transport *tp);
 
 /**
- * @brief Pause ongoing transfer
- *
- * @return 0 on success, negative error code on failure
- */
-int transfer_pause(void);
-
-/**
- * @brief Resume paused transfer
- *
- * @return 0 on success, negative error code on failure
- */
-int transfer_resume_transfer(void);
-
-/**
  * @brief Cancel ongoing transfer
  *
  * @return 0 on success, negative error code on failure
