@@ -136,7 +136,6 @@ int clip_init(void)
     LOG_INF("Initializing Clip2...");
 
     /* Initialize context */
-    g_ctx.state = CLIP_STATE_UNINITIALIZED;
 
     /* Initialize configuration (will set defaults and load from storage) */
     err = config_init();

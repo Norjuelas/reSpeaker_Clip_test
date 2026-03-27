@@ -100,7 +100,6 @@ static enum clip_event_result execute_transition(enum clip_event event,
 int clip_event_init(void)
 {
     atomic_set(&g_state, CLIP_STATE_IDLE);
-    clip_get_context()->state = CLIP_STATE_IDLE;
     k_sem_init(&event_notify_sem, 0, 1);
 
     LOG_INF("Event dispatcher initialized");
@@ -193,7 +192,6 @@ void clip_event_process(void)
 
         if (result == CLIP_EVENT_OK && next != TRANS_SAME) {
             atomic_set(&g_state, (atomic_val_t)new_state);
-            clip_get_context()->state = new_state;
         }
 
         if (item.result) {

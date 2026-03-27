@@ -14,7 +14,7 @@
 #include <stdbool.h>
 
 /**
- * @brief Clip2 error codes
+ * @brief Clip error codes
  */
 #define CLIP_OK           0
 #define CLIP_ERR_INVALID -1
@@ -50,15 +50,12 @@ enum recording_mode {
 typedef void (*event_handler_t)(int event, void *data);
 
 /**
- * @brief Clip2 context structure
+ * @brief Clip context structure
  *
  * Central structure that holds all application state.
  * This replaces global variables and enables better modularity.
  */
 struct clip_context {
-    /* Device state */
-    enum clip_state state;
-
     /* Configuration */
     struct clip_config {
         uint16_t bitrate;           /* Opus bitrate in bps */
