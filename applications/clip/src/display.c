@@ -988,7 +988,11 @@ static void handle_event(enum ui_event event)
 
 	case UI_EVENT_TIMEOUT:
 		if (g_ui_state == UI_STATE_STATUS_BAR) {
-			set_ui_state(UI_STATE_OFF);
+			if (ble_is_bonded()) {
+				set_ui_state(UI_STATE_OFF);
+			} else {
+				set_ui_state(UI_STATE_PAIRING_GUIDE);
+			}
 		} else if (g_ui_state == UI_STATE_REC_WAVE) {
 			set_ui_state(UI_STATE_REC_DOT);
 		}
@@ -1010,9 +1014,13 @@ static void render_current_state(void)
 	case UI_STATE_STATUS_BAR:
 		render_status_bar(display_buffer);
 		flush_display();
-		/* Check 3s timeout - transition to OFF */
+		/* Check 3s timeout - transition to OFF or PAIRING_GUIDE */
 		if (k_uptime_get() - g_status_bar_start_ms >= DISPLAY_STATUS_TIMEOUT_MS) {
-			set_ui_state(UI_STATE_OFF);
+			if (ble_is_bonded()) {
+				set_ui_state(UI_STATE_OFF);
+			} else {
+				set_ui_state(UI_STATE_PAIRING_GUIDE);
+			}
 		}
 		break;
 
