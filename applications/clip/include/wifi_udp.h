@@ -4,8 +4,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#ifndef CLIP2_WIFI_UDP_H
-#define CLIP2_WIFI_UDP_H
+#ifndef CLIP_WIFI_UDP_H
+#define CLIP_WIFI_UDP_H
 
 #include <stdbool.h>
 
@@ -47,4 +47,4 @@ bool wifi_udp_is_running(void);
  */
 bool wifi_udp_is_active(void);
 
-#endif /* CLIP2_WIFI_UDP_H */
+#endif /* CLIP_WIFI_UDP_H */

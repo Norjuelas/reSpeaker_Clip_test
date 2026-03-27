@@ -4,8 +4,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#ifndef CLIP2_TRANSFER_H
-#define CLIP2_TRANSFER_H
+#ifndef CLIP_TRANSFER_H
+#define CLIP_TRANSFER_H
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -148,4 +148,4 @@ uint32_t transfer_get_total_files(void);
  */
 int transfer_set_synced_files(const char *session_id, uint32_t count);
 
-#endif /* CLIP2_TRANSFER_H */
+#endif /* CLIP_TRANSFER_H */

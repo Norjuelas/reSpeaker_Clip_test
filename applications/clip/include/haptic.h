@@ -4,8 +4,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#ifndef CLIP2_HAPTIC_H
-#define CLIP2_HAPTIC_H
+#ifndef CLIP_HAPTIC_H
+#define CLIP_HAPTIC_H
 
 #include <zephyr/kernel.h>
 #include <stdbool.h>
@@ -54,4 +54,4 @@ int haptic_play_pattern(enum haptic_pattern pattern);
  */
 bool haptic_is_running(void);
 
-#endif /* CLIP2_HAPTIC_H */
+#endif /* CLIP_HAPTIC_H */

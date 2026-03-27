@@ -18,7 +18,7 @@
 #include "clip.h"
 #include "transfer.h"
 
-LOG_MODULE_REGISTER(display, CONFIG_CLIP2_LOG_LEVEL);
+LOG_MODULE_REGISTER(display, CONFIG_CLIP_LOG_LEVEL);
 
 /* =============================================================================
  * Display Configuration

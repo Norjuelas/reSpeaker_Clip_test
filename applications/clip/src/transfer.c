@@ -18,16 +18,13 @@
 #include "ble.h"
 #include "audio.h"
 
-LOG_MODULE_REGISTER(transfer, CONFIG_CLIP2_LOG_LEVEL);
+LOG_MODULE_REGISTER(transfer, CONFIG_CLIP_LOG_LEVEL);
 
-/* Transfer configuration - 1KB buffer for UDP (reduces memory pressure) */
-#define TRANSFER_CHUNK_SIZE 1024
-
-/* Transfer thread stack - reduced since we use static buffer */
+/* Transfer thread stack - uses Kconfig value */
 K_THREAD_STACK_DEFINE(transfer_thread_stack, CONFIG_CLIP_TRANSFER_STACK_SIZE);
 
 /* Static chunk buffer - avoids stack allocation for large buffer */
-static uint8_t chunk_buffer[TRANSFER_CHUNK_SIZE];
+static uint8_t chunk_buffer[CONFIG_CLIP_TRANSFER_CHUNK_SIZE];
 
 /* Transfer thread state */
 static struct k_thread transfer_thread_data;
@@ -871,7 +868,7 @@ static int transfer_send_chunk(void)
 
     /* Read chunk from file into static buffer */
     t0 = k_uptime_get();
-    bytes_read = fs_read(&transfer_file, chunk_buffer, TRANSFER_CHUNK_SIZE);
+    bytes_read = fs_read(&transfer_file, chunk_buffer, CONFIG_CLIP_TRANSFER_CHUNK_SIZE);
     t_read = k_uptime_get() - t0;
 
     if (bytes_read < 0) {

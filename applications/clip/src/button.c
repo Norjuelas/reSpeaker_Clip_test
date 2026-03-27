@@ -17,7 +17,7 @@
 #include "display.h"
 #include "clip.h"
 
-LOG_MODULE_REGISTER(button, CONFIG_CLIP2_LOG_LEVEL);
+LOG_MODULE_REGISTER(button, CONFIG_CLIP_LOG_LEVEL);
 
 /* Button device from device tree */
 static const struct device *button_dev = DEVICE_DT_GET(DT_NODELABEL(usr_btn));
@@ -27,7 +27,7 @@ static button_callback_t button_cb = NULL;
 static void *button_user_data = NULL;
 
 /* Work queue for deferred button actions (needs larger stack for audio operations) */
-K_THREAD_STACK_DEFINE(button_work_stack, CONFIG_CLIP2_BUTTON_WORK_STACK_SIZE);
+K_THREAD_STACK_DEFINE(button_work_stack, CONFIG_CLIP_BUTTON_WORK_STACK_SIZE);
 static struct k_work_q button_work_q;
 
 /* Work items for different actions */
@@ -193,15 +193,16 @@ static void button_event_callback(const struct device *dev, enum button_action a
 		action, current_state, is_recording);
 
 	/* Log button action name for easier debugging */
-	const char *action_name = "UNKNOWN";
+	const char *action_name;
 	switch (action) {
-	case 0: action_name = "LONG_PRESS"; break;
-	case 1: action_name = "LONG_PRESS_LEVEL_1"; break;
-	case 2: action_name = "LONG_PRESS_LEVEL_2"; break;
-	case 3: action_name = "LONG_PRESS_LEVEL_3"; break;
-	case 4: action_name = "SINGLE_CLICK"; break;
-	case 5: action_name = "DOUBLE_CLICK"; break;
-	case 6: action_name = "RELEASE"; break;
+	case BUTTON_LONG_PRESS: action_name = "LONG_PRESS"; break;
+	case BUTTON_LONG_PRESS_LEVEL_1: action_name = "LONG_PRESS_LEVEL_1"; break;
+	case BUTTON_LONG_PRESS_LEVEL_2: action_name = "LONG_PRESS_LEVEL_2"; break;
+	case BUTTON_LONG_PRESS_LEVEL_3: action_name = "LONG_PRESS_LEVEL_3"; break;
+	case BUTTON_SINGLE_CLICK: action_name = "SINGLE_CLICK"; break;
+	case BUTTON_DOUBLE_CLICK: action_name = "DOUBLE_CLICK"; break;
+	case BUTTON_RELEASE: action_name = "RELEASE"; break;
+	default: action_name = "UNKNOWN_EVENT"; break;
 	}
 	LOG_INF("  Action: %s", action_name);
 
@@ -273,8 +274,8 @@ int button_init(void)
 
 	/* Initialize work queue for button actions */
 	k_work_queue_start(&button_work_q, button_work_stack,
-			   CONFIG_CLIP2_BUTTON_WORK_STACK_SIZE,
-			   CONFIG_CLIP2_BUTTON_WORK_PRIORITY, NULL);
+			   CONFIG_CLIP_BUTTON_WORK_STACK_SIZE,
+			   CONFIG_CLIP_BUTTON_WORK_PRIORITY, NULL);
 
 	/* Initialize work items */
 	k_work_init(&start_work, button_start_work_handler);

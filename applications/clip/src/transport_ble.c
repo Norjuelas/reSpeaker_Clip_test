@@ -9,7 +9,7 @@
 #include "transport_ble.h"
 #include "ble.h"
 
-LOG_MODULE_REGISTER(transport_ble, CONFIG_CLIP2_LOG_LEVEL);
+LOG_MODULE_REGISTER(transport_ble, CONFIG_CLIP_LOG_LEVEL);
 
 /* BLE Transport Context */
 static struct {

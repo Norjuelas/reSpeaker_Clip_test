@@ -18,8 +18,9 @@
 #include <net/wifi_ready.h>
 #include "wifi.h"
 #include "wifi_udp.h"
+#include "transport_udp.h"
 
-LOG_MODULE_REGISTER(wifi, CONFIG_CLIP2_LOG_LEVEL);
+LOG_MODULE_REGISTER(wifi, CONFIG_CLIP_LOG_LEVEL);
 
 #define WIFI_AP_MGMT_EVENTS (NET_EVENT_WIFI_AP_ENABLE_RESULT | \
 			     NET_EVENT_WIFI_AP_DISABLE_RESULT | \
@@ -78,20 +79,26 @@ static void wifi_mgmt_event_handler(struct net_mgmt_event_callback *cb,
 		break;
 	case NET_EVENT_WIFI_AP_STA_CONNECTED: {
 		const struct wifi_ap_sta_info *sta_info = (const struct wifi_ap_sta_info *)cb->info;
-		uint8_t mac_string_buf[sizeof("xx:xx:xx:xx:xx:xx")];
-		LOG_INF("Station connected: %s",
-			net_sprint_ll_addr_buf(sta_info->mac, WIFI_MAC_ADDR_LEN,
-					       mac_string_buf, sizeof(mac_string_buf)));
+		char mac_string_buf[sizeof("xx:xx:xx:xx:xx:xx")];
+		snprintf(mac_string_buf, sizeof(mac_string_buf),
+			 "%02x:%02x:%02x:%02x:%02x:%02x",
+			 sta_info->mac[0], sta_info->mac[1], sta_info->mac[2],
+			 sta_info->mac[3], sta_info->mac[4], sta_info->mac[5]);
+		LOG_INF("Station connected: %s", mac_string_buf);
 		sta_connected = true;
+		transport_udp_update_active(false);  /* Reset, waiting for new client */
 		break;
 	}
 	case NET_EVENT_WIFI_AP_STA_DISCONNECTED: {
 		const struct wifi_ap_sta_info *sta_info = (const struct wifi_ap_sta_info *)cb->info;
-		uint8_t mac_string_buf[sizeof("xx:xx:xx:xx:xx:xx")];
-		LOG_INF("Station disconnected: %s",
-			net_sprint_ll_addr_buf(sta_info->mac, WIFI_MAC_ADDR_LEN,
-					       mac_string_buf, sizeof(mac_string_buf)));
+		char mac_string_buf[sizeof("xx:xx:xx:xx:xx:xx")];
+		snprintf(mac_string_buf, sizeof(mac_string_buf),
+			 "%02x:%02x:%02x:%02x:%02x:%02x",
+			 sta_info->mac[0], sta_info->mac[1], sta_info->mac[2],
+			 sta_info->mac[3], sta_info->mac[4], sta_info->mac[5]);
+		LOG_INF("Station disconnected: %s", mac_string_buf);
 		sta_connected = false;
+		transport_udp_update_active(false);  /* Notify transport of disconnect */
 		break;
 	}
 	default:

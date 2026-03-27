@@ -4,8 +4,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#ifndef CLIP2_AT_SERVER_H
-#define CLIP2_AT_SERVER_H
+#ifndef CLIP_AT_SERVER_H
+#define CLIP_AT_SERVER_H
 
 #include <zephyr/kernel.h>
 #include <stdbool.h>
@@ -85,4 +85,4 @@ int at_server_submit_cmd(const uint8_t *data, uint16_t len, uint8_t transport_ty
  */
 const char *at_server_err_msg(uint8_t err_code);
 
-#endif /* CLIP2_AT_SERVER_H */
+#endif /* CLIP_AT_SERVER_H */

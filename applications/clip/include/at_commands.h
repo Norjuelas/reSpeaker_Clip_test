@@ -4,8 +4,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#ifndef CLIP2_AT_COMMANDS_H
-#define CLIP2_AT_COMMANDS_H
+#ifndef CLIP_AT_COMMANDS_H
+#define CLIP_AT_COMMANDS_H
 
 #include <zephyr/kernel.h>
 #include "at_server.h"
@@ -17,4 +17,4 @@
  */
 int at_commands_register(void);
 
-#endif /* CLIP2_AT_COMMANDS_H */
+#endif /* CLIP_AT_COMMANDS_H */

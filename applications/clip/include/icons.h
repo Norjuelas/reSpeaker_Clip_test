@@ -4,14 +4,14 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#ifndef CLIP2_ICONS_H
-#define CLIP2_ICONS_H
+#ifndef CLIP_ICONS_H
+#define CLIP_ICONS_H
 
 #include <stdint.h>
 
 /**
  * @file icons.h
- * @brief Icon library for CLIP2 display
+ * @brief Icon library for CLIP display
  *
  * Icons are stored as const bitmap data in Flash (ROM), not RAM.
  * Format: 16x16 pixels, row-major order, 1 bit per pixel
@@ -66,4 +66,4 @@ const uint8_t* icon_get_bitmap(icon_id_t id, uint8_t *width, uint8_t *height);
 void icon_draw_bitmap(uint8_t *buf, int x, int y,
                       const uint8_t *bitmap, uint8_t width, uint8_t height);
 
-#endif /* CLIP2_ICONS_H */
+#endif /* CLIP_ICONS_H */

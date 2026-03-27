@@ -4,8 +4,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#ifndef CLIP2_WIFI_H
-#define CLIP2_WIFI_H
+#ifndef CLIP_WIFI_H
+#define CLIP_WIFI_H
 
 #include <stdbool.h>
 
@@ -99,4 +99,4 @@ const char *wifi_get_ip_address(void);
  */
 bool wifi_is_sta_connected(void);
 
-#endif /* CLIP2_WIFI_H */
+#endif /* CLIP_WIFI_H */

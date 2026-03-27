@@ -3,7 +3,7 @@
 UDP Sync Tool for Clip2
 
 Downloads recording sessions via UDP file transfer (WiFi AP).
-Uses stop-and-wait protocol with sequence numbers for reliability.
+Implements reliable protocol with flow control, CRC verification, and heartbeat.
 
 WiFi AP Configuration:
   SSID:     ClipAP_XXXX  (XXXX = last 4 hex digits of chip ID)
@@ -11,16 +11,20 @@ WiFi AP Configuration:
   IP:       192.168.4.1
   UDP Port: 8089
 
-Protocol (stop-and-wait):
-  Sender -> Receiver: FILE_START | filename_len | filename | file_size(4)
-  Receiver -> Sender: ACK | seq=0
-  Sender -> Receiver: FILE_DATA | seq=N | length(2) | data
-  Receiver -> Sender: ACK | seq=N
-  ... (repeat until file complete)
-  Sender -> Receiver: FILE_END | filename_len | filename
-  Receiver -> Sender: ACK | seq=MAX
-  Sender -> Receiver: TRANSFER_DONE | session_len | session_id | file_count(4)
-  Receiver -> Sender: ACK | seq=MAX
+Protocol (reliable with flow control):
+  1. Client sends initial packet to activate server
+  2. Client sends AT+DOWNLOAD command
+  3. Server responds with FRAME_AT_RESPONSE containing JSON
+  4. Server sends files using stop-and-wait with sequence numbers
+  5. Client sends FRAME_WINDOW_ACK to update server's window
+  6. Client sends FRAME_ACK for each received frame
+  7. File integrity verified via CRC32 in FRAME_FILE_END
+
+New Frame Types:
+  FRAME_HEARTBEAT    = 0xFF   # Heartbeat (timestamp)
+  FRAME_WINDOW_ACK    = 0x15   # Window acknowledgment
+  FRAME_FILE_CRC      = 0x16   # CRC verification result
+  FRAME_AT_RESPONSE   = 0x17   # AT command response
 
 Usage:
   python udp_sync.py                          # list sessions
@@ -36,17 +40,24 @@ import argparse
 import time
 from pathlib import Path
 
-# Frame types (must match transport_udp.c)
-FRAME_ACK             = 0x80
-FRAME_FILE_START_UDP  = 0x11
-FRAME_FILE_DATA_UDP   = 0x12
-FRAME_FILE_END_UDP    = 0x13
+# Frame types (must match transport_udp.h)
+FRAME_ACK              = 0x80
+FRAME_FILE_START_UDP    = 0x11
+FRAME_FILE_DATA_UDP    = 0x12
+FRAME_FILE_END_UDP     = 0x13
 FRAME_TRANSFER_DONE_UDP = 0x14
+FRAME_WINDOW_ACK        = 0x15
+FRAME_FILE_CRC         = 0x16
+FRAME_AT_RESPONSE      = 0x17
+FRAME_HEARTBEAT        = 0xFF
 
 # Protocol config
 ACK_TIMEOUT_MS = 500
 MAX_RETRIES = 10
 MAX_DATA_PER_PKT = 480
+HEARTBEAT_INTERVAL_MS = 5000
+CONNECTION_TIMEOUT_MS = 30000
+WINDOW_SIZE = 16  # Initial window size
 
 
 # ============================================================================
@@ -239,7 +250,7 @@ def _fmt_bytes(n):
 
 
 class UDPSync:
-    """Download sessions from Clip2 device over UDP."""
+    """Download sessions from Clip2 device over UDP with reliable protocol."""
 
     def __init__(self, host="192.168.4.1", port=8089, timeout=120.0):
         self.host = host
@@ -247,9 +258,10 @@ class UDPSync:
         self.timeout = timeout
         self.sock = None
         self.device_name = "Clip2"
-        self.expected_seq = 0
-        self.last_recv_time = time.time()
         self.bytes_received = 0
+        self.last_activity_time = time.time()
+        self.window_size = WINDOW_SIZE
+        self.unacked_frames = 0
 
     def connect(self):
         try:
@@ -271,79 +283,125 @@ class UDPSync:
                 pass
             self.sock = None
 
-    def _recv_ack(self, expected_seq, timeout_ms=ACK_TIMEOUT_MS):
-        """Receive ACK for expected sequence number."""
-        retries = 0
-        while retries < MAX_RETRIES:
-            try:
-                data, addr = self.sock.recvfrom(1024)
-                if not data:
-                    continue
+    def _send_heartbeat(self):
+        """Send heartbeat frame."""
+        heartbeat_frame = bytes([
+            FRAME_HEARTBEAT,
+            0x00, 0x00, 0x00,  # reserved
+            0x00, 0x00, 0x00, 0x00  # timestamp placeholder
+        ])
+        try:
+            self.sock.sendto(heartbeat_frame, (self.host, self.port))
+        except Exception as e:
+            print(f"  Heartbeat error: {e}")
 
-                if data[0] == FRAME_ACK and len(data) >= 4:
-                    ack_seq = data[1] | (data[2] << 8)
-                    if ack_seq == expected_seq:
-                        return 0
-                    else:
-                        print(f"  ACK seq mismatch: got {ack_seq}, expected {expected_seq}")
-                retries += 1
-                if retries >= MAX_RETRIES:
-                    print(f"  Max retries exceeded for seq {expected_seq}")
-                    return -1
-            except socket.timeout:
-                retries += 1
-                if retries >= MAX_RETRIES:
-                    print(f"  ACK timeout for seq {expected_seq}")
-                    return -1
-        return -1
-
-    def _send_frame(self, frame_type, seq, data=b""):
-        """Send frame and wait for ACK (stop-and-wait)."""
-        # Build header: type(1) + seq(2) + length(1)
-        header = bytes([frame_type, seq & 0xFF, (seq >> 8) & 0xFF, len(data) & 0xFF])
-
-        for retry in range(MAX_RETRIES):
-            try:
-                # Send header
-                self.sock.sendto(header, (self.host, self.port))
-                # Send data if any
-                if data:
-                    self.sock.sendto(data, (self.host, self.port))
-
-                # Wait for ACK
-                ret = self._recv_ack(seq)
-                if ret == 0:
-                    return 0
-
-                print(f"  Retry {retry + 1}/{MAX_RETRIES}")
-            except Exception as e:
-                print(f"  Send error: {e}")
-                return -1
-
-        return -1
-
-    def _send_cmd(self, cmd):
-        """Send AT command, return JSON response."""
-        if not cmd.upper().startswith("AT"):
-            cmd = f"AT+{cmd}"
-        self.sock.sendto((cmd + "\n").encode(), (self.host, self.port))
-
+    def _recv_frame(self, timeout_ms=1000):
+        """Receive a frame with timeout."""
+        self.sock.settimeout(timeout_ms / 1000.0)
         try:
             data, addr = self.sock.recvfrom(4096)
-            if data:
-                line = data.decode('utf-8', errors='replace').strip()
-                try:
-                    return json.loads(line)
-                except json.JSONDecodeError:
-                    return {"ok": True, "raw": line}
+            self.last_activity_time = time.time()
+            self.bytes_received += len(data)
+            return data
         except socket.timeout:
-            return {"ok": False, "error": "Timeout"}
+            return None
+        except Exception as e:
+            print(f"  Recv error: {e}")
+            return None
+
+    def _send_ack(self, seq):
+        """Send ACK frame."""
+        ack_frame = bytes([
+            FRAME_ACK,
+            seq & 0xFF,
+            (seq >> 8) & 0xFF,
+            0, 0  # reserved
+        ])
+        try:
+            self.sock.sendto(ack_frame, (self.host, self.port))
+        except Exception as e:
+            print(f"  ACK send error: {e}")
+
+    def _send_window_ack(self):
+        """Send window acknowledgment."""
+        ack_frame = bytes([
+            FRAME_WINDOW_ACK,
+            self.window_size & 0xFF,
+            (self.window_size >> 8) & 0xFF,
+            0, 0  # reserved
+        ])
+        try:
+            self.sock.sendto(ack_frame, (self.host, self.port))
+            print(f"  Window ACK sent: {self.window_size}")
+        except Exception as e:
+            print(f"  Window ACK send error: {e}")
+
+    def _wait_for_ack(self, expected_seq, timeout_ms=ACK_TIMEOUT_MS):
+        """Wait for specific ACK with retries."""
+        retries = 0
+        while retries < MAX_RETRIES:
+            data = self._recv_frame(timeout_ms)
+            if data is None:
+                retries += 1
+                print(f"  ACK timeout for seq {expected_seq}, retry {retries}/{MAX_RETRIES}")
+                continue
+
+            if len(data) >= 4 and data[0] == FRAME_ACK:
+                ack_seq = data[1] | (data[2] << 8)
+                if ack_seq == expected_seq:
+                    self.unacked_frames = max(0, self.unacked_frames - 1)
+                    return 0
+                else:
+                    print(f"  ACK seq mismatch: got {ack_seq}, expected {expected_seq}")
+            elif len(data) >= 4 and data[0] == FRAME_WINDOW_ACK:
+                # Update window size
+                self.window_size = data[1] | (data[2] << 8)
+                print(f"  Window update: {self.window_size}")
+                # Continue waiting for our ACK
+            elif len(data) >= 3 and data[0] == FRAME_AT_RESPONSE:
+                # AT response - extract and print
+                resp_len = data[1] | (data[2] << 8)
+                if len(data) >= 3 + resp_len:
+                    response = data[3:3+resp_len].decode('utf-8', errors='replace')
+                    print(f"  AT Response: {response}")
+                # Continue waiting for ACK
+
+        return -1
+
+    def _send_at_command(self, cmd):
+        """Send AT command and wait for response."""
+        if not cmd.upper().startswith("AT"):
+            cmd = f"AT+{cmd}"
+
+        # Send as plain text (AT commands are text)
+        self.sock.sendto((cmd + "\n").encode(), (self.host, self.port))
+
+        # Wait for FRAME_AT_RESPONSE
+        for _ in range(5):  # Try up to 5 times
+            data = self._recv_frame(2000)
+            if data is None:
+                continue
+
+            if len(data) >= 3 and data[0] == FRAME_AT_RESPONSE:
+                resp_len = data[1] | (data[2] << 8)
+                if len(data) >= 3 + resp_len:
+                    response = data[3:3+resp_len].decode('utf-8', errors='replace')
+                    try:
+                        return json.loads(response)
+                    except json.JSONDecodeError:
+                        return {"ok": True, "raw": response}
+            elif len(data) >= 4 and data[0] == FRAME_ACK:
+                # ACK for something else, ignore
+                pass
+            else:
+                print(f"  Unexpected frame: 0x{data[0]:02x}")
+                # Continue waiting
 
         return {"ok": False, "error": "No response"}
 
     def list_sessions(self):
         """List sessions from AT+LIST."""
-        result = self._send_cmd("AT+LIST")
+        result = self._send_at_command("LIST")
         if not result.get("ok"):
             print(f"AT+LIST error: {result.get('error')}")
             return []
@@ -355,7 +413,7 @@ class UDPSync:
         return []
 
     def download_session(self, session_id, out_dir, convert_ogg=True):
-        """Download session using UDP protocol."""
+        """Download session using UDP protocol with reliability features."""
         session_dir = out_dir / self.device_name / session_id
         session_dir.mkdir(parents=True, exist_ok=True)
 
@@ -363,38 +421,12 @@ class UDPSync:
         downloaded_files = []
 
         # Send download command
-        self.sock.sendto(f"AT+DOWNLOAD={session_id}\n".encode(), (self.host, self.port))
-
-        try:
-            info_data, addr = self.sock.recvfrom(4096)
-            print(f"  First packet: {len(info_data)} bytes, first 20 bytes: {info_data[:20]}")
-            # Check if this is JSON or binary frame
-            if info_data and len(info_data) > 0:
-                # If first byte is '{', it's JSON
-                if info_data[0] == ord('{'):
-                    info_line = info_data.decode('utf-8', errors='replace').strip()
-                    try:
-                        info = json.loads(info_line)
-                        print(f"  JSON parsed: {info}")
-                    except json.JSONDecodeError as e:
-                        print(f"  JSON parse error: {e}, data: {info_line[:100]}")
-                        # Continue anyway to try receiving binary frames
-                        info = {"ok": True, "data": {}}
-                else:
-                    # First byte is not '{', might be a binary frame - skip parsing
-                    print(f"  First packet is binary (0x{info_data[0]:02x}='{chr(info_data[0]) if info_data[0] < 128 else '?'}'), skipping JSON info")
-                    info = {"ok": True, "data": {}}
-            else:
-                info = {"ok": True, "data": {}}
-        except socket.timeout:
-            print(f"  Timeout waiting for download info")
+        result = self._send_at_command(f"DOWNLOAD={session_id}")
+        if not result.get("ok"):
+            print(f"  Error: {result.get('error', 'unknown')}")
             return False
 
-        if not info.get("ok"):
-            print(f"  Error: {info.get('error', 'unknown')}")
-            return False
-
-        data = info.get("data", {})
+        data = result.get("data", {})
         total_files = data.get("files", "?")
         total_bytes = data.get("bytes", "?")
         print(f"  Session {session_id}: {total_files} file(s), {_fmt_bytes(total_bytes) if isinstance(total_bytes, int) else total_bytes}")
@@ -404,109 +436,146 @@ class UDPSync:
         current_name = None
         current_data = bytearray()
         current_size = 0
-        self.expected_seq = 0
+        expected_seq = 0
+        frame_count = 0
+        last_progress_time = time.time()
+        last_frame_count = 0
+
+        # Start heartbeat thread
+        heartbeat_next = time.time() + HEARTBEAT_INTERVAL_MS / 1000.0
+        window_ack_next = time.time() + 1.0  # Send window ack every second
 
         try:
-            frame_count = 0
-            last_progress_time = time.time()
-            last_frame_count = 0
             while True:
-                # Receive frame
-                try:
-                    frame_data, addr = self.sock.recvfrom(4096)
-                except socket.timeout:
+                # Check if we need to send heartbeat
+                now = time.time()
+                if now >= heartbeat_next:
+                    self._send_heartbeat()
+                    heartbeat_next = now + HEARTBEAT_INTERVAL_MS / 1000.0
+
+                # Check if we need to send window ack
+                if now >= window_ack_next:
+                    self._send_window_ack()
+                    window_ack_next = now + 1.0
+
+                # Receive frame with short timeout for responsiveness
+                data = self._recv_frame(500)
+                if data is None:
+                    # Timeout - check if too much time passed
                     elapsed = time.time() - last_progress_time
-                    if elapsed > 10 and frame_count == last_frame_count:
+                    if elapsed > 30:
                         print(f"\n  Timeout after {elapsed:.0f}s of no progress (received {self.bytes_received} bytes)")
                         return False
-                    print("  Timeout waiting for frame")
                     continue
 
-                if not frame_data or len(frame_data) < 4:
+                if len(data) < 1:
                     continue
 
-                self.bytes_received += len(frame_data)
-                now = time.time()
-                if now - last_progress_time > 5:
-                    print(f"\n  Progress: {frame_count} frames, {self.bytes_received} bytes")
-                    last_progress_time = now
-                    last_frame_count = frame_count
+                frame_type = data[0]
+
+                # Handle AT responses
+                if frame_type == FRAME_AT_RESPONSE:
+                    resp_len = data[1] | (data[2] << 8)
+                    if len(data) >= 3 + resp_len:
+                        response = data[3:3+resp_len].decode('utf-8', errors='replace')
+                        print(f"  AT Response: {response}")
+                    continue
+
+                # Handle window acks
+                if frame_type == FRAME_WINDOW_ACK:
+                    self.window_size = data[1] | (data[2] << 8)
+                    print(f"  Window update: {self.window_size}")
+                    continue
+
+                # Handle heartbeats
+                if frame_type == FRAME_HEARTBEAT:
+                    print("  Heartbeat received")
+                    continue
+
+                # Skip non-file frames
+                if frame_type != FRAME_FILE_START_UDP and frame_type != FRAME_FILE_DATA_UDP and \
+                   frame_type != FRAME_FILE_END_UDP and frame_type != FRAME_TRANSFER_DONE_UDP:
+                    if frame_type != FRAME_ACK:  # ACK is normal
+                        print(f"  Skipping frame 0x{frame_type:02x}")
+                    continue
 
                 frame_count += 1
-                if frame_count <= 5:
-                    print(f"  Frame {frame_count}: {len(frame_data)} bytes, hex: {frame_data[:16].hex()}")
+                if frame_count <= 5 or frame_count % 100 == 0:
+                    print(f"  Frame {frame_count}: {len(data)} bytes, type 0x{frame_type:02x}")
 
-                frame_type = frame_data[0]
+                # Parse sequence number
+                if len(data) >= 3:
+                    seq = data[1] | (data[2] << 8)
+                else:
+                    seq = 0
 
-                # Skip non-binary frames (JSON responses, etc)
-                if frame_type != FRAME_FILE_START_UDP and frame_type != FRAME_FILE_DATA_UDP and \
-                   frame_type != FRAME_FILE_END_UDP and frame_type != FRAME_TRANSFER_DONE_UDP and \
-                   frame_type != FRAME_ACK:
-                    if frame_count > 5:
-                        print(f"  Skipping non-frame byte 0x{frame_type:02x}")
-                    continue
-
-                seq = frame_data[1] | (frame_data[2] << 8)
-
-                # Send ACK first
-                ack_frame = bytes([FRAME_ACK, seq & 0xFF, (seq >> 8) & 0xFF, 0, 0])
-                self.sock.sendto(ack_frame, (self.host, self.port))
+                # Send ACK for this frame
+                self._send_ack(seq)
 
                 if frame_type == FRAME_FILE_START_UDP:
                     # Format: type(1) + seq(2) + fn_len(1) + filename(fn_len) + size(4)
-                    fn_len = frame_data[3]  # byte 3 is fn_len (1 byte)
-                    filename_start = 4
-                    if len(frame_data) >= filename_start + fn_len + 4:
-                        filename = frame_data[filename_start:filename_start+fn_len].decode('utf-8', errors='replace')
-                        file_size = struct.unpack("<I", frame_data[filename_start+fn_len:filename_start+fn_len+4])[0]
+                    fn_len = data[3]
+                    if len(data) >= 4 + fn_len + 4:
+                        filename = data[4:4+fn_len].decode('utf-8', errors='replace')
+                        file_size = struct.unpack("<I", data[4+fn_len:4+fn_len+4])[0]
                         current_name = filename
                         current_size = file_size
                         current_data = bytearray()
+                        expected_seq = 0
                         print(f"  <- {filename} ({_fmt_bytes(file_size)})", end="", flush=True)
                     else:
-                        print(f"  FILE_START parse error: len={len(frame_data)}, fn_len={fn_len}, need={filename_start + fn_len + 4}")
+                        print(f"  FILE_START parse error: len={len(data)}, fn_len={fn_len}")
 
                 elif frame_type == FRAME_FILE_DATA_UDP:
                     # Format: type(1) + seq(2) + length(2) + data
-                    data_len = frame_data[3] | (frame_data[4] << 8)  # 2-byte length
-                    # Data follows header at offset 5
-                    if len(frame_data) >= 5 + data_len:
-                        current_data.extend(frame_data[5:5+data_len])
-                        # Progress indicator every 64KB
+                    data_len = data[3] | (data[4] << 8)
+                    if len(data) >= 5 + data_len:
+                        current_data.extend(data[5:5+data_len])
+                        # Progress indicator
                         if len(current_data) % (64 * 1024) < MAX_DATA_PER_PKT:
                             print(".", end="", flush=True)
                     else:
-                        print(f"  Incomplete DATA frame: have {len(frame_data)}, need {5 + data_len}")
+                        print(f"  Incomplete DATA frame")
 
                 elif frame_type == FRAME_FILE_END_UDP:
-                    # Format: type(1) + seq(2) + fn_len(1) + filename(fn_len)
-                    fn_len = frame_data[3]  # byte 3 is fn_len (1 byte)
-                    if len(frame_data) >= 4 + fn_len:
-                        received_name = frame_data[4:4+fn_len].decode('utf-8', errors='replace')
-                        print(f"  FILE_END: {received_name}")
-                        if current_name and current_data:
-                            out_file = session_dir / current_name
-                            out_file.write_bytes(bytes(current_data))
-                            print(f" OK ({_fmt_bytes(len(current_data))})")
-                            # Track file for merging
-                            if current_name.endswith('.opus'):
-                                downloaded_files.append((current_name, session_dir / current_name))
-                            files_received += 1
-                        current_name = None
-                        current_data = bytearray()
+                    # Format: type(1) + seq(2) + fn_len(1) + filename(fn_len) + crc32(4)
+                    fn_len = data[3]
+                    received_crc = 0
+                    if len(data) >= 4 + fn_len + 4:
+                        received_crc = struct.unpack("<I", data[4+fn_len:4+fn_len+4])[0]
+                        received_name = data[4:4+fn_len].decode('utf-8', errors='replace')
+
+                    # Verify CRC
+                    actual_crc = ogg_crc32(bytes(current_data))
+                    print(f"\n  FILE_END: {received_name}, CRC: 0x{received_crc:08x}")
+                    if actual_crc == received_crc:
+                        print(f"  CRC OK")
+                    else:
+                        print(f"  CRC ERROR: expected 0x{actual_crc:08x}")
+
+                    if current_name and current_data:
+                        out_file = session_dir / current_name
+                        out_file.write_bytes(bytes(current_data))
+                        print(f"  Saved ({_fmt_bytes(len(current_data))})")
+                        if current_name.endswith('.opus'):
+                            downloaded_files.append((current_name, session_dir / current_name))
+                        files_received += 1
+                    current_name = None
+                    current_data = bytearray()
+                    expected_seq = 0
+                    last_progress_time = time.time()
 
                 elif frame_type == FRAME_TRANSFER_DONE_UDP:
                     # Format: type(1) + seq(2) + sid_len(1) + session_id(sid_len) + file_count(4)
-                    sid_len = frame_data[3]  # byte 3 is sid_len (1 byte)
-                    if len(frame_data) >= 4 + sid_len + 4:
-                        session = frame_data[4:4+sid_len].decode('utf-8', errors='replace')
-                        file_count = struct.unpack("<I", frame_data[4+sid_len:4+sid_len+4])[0]
+                    sid_len = data[3]
+                    if len(data) >= 4 + sid_len + 4:
+                        session = data[4:4+sid_len].decode('utf-8', errors='replace')
+                        file_count = struct.unpack("<I", data[4+sid_len:4+sid_len+4])[0]
                         print(f"  Done: {file_count} file(s) transferred")
                     break
 
-                else:
-                    print(f"  Unknown frame 0x{frame_type:02x}")
-                    return False
+                last_progress_time = time.time()
+                last_frame_count = frame_count
 
         except socket.timeout:
             print("  Connection timeout")
@@ -514,6 +583,9 @@ class UDPSync:
         except Exception as e:
             print(f"  Error: {e}")
             return False
+
+        # Send final window ack
+        self._send_window_ack()
 
         # Merge all .opus files into one and convert to OGG
         if convert_ogg and downloaded_files:
@@ -544,7 +616,7 @@ class UDPSync:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="UDP Sync Tool for Clip2")
+    parser = argparse.ArgumentParser(description="UDP Sync Tool for Clip2 (Reliable Protocol)")
     parser.add_argument("--host", default="192.168.4.1")
     parser.add_argument("--port", type=int, default=8089)
     parser.add_argument("--timeout", type=float, default=30.0)

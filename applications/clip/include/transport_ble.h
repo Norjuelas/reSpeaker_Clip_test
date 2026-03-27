@@ -4,8 +4,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#ifndef CLIP2_TRANSPORT_BLE_H
-#define CLIP2_TRANSPORT_BLE_H
+#ifndef CLIP_TRANSPORT_BLE_H
+#define CLIP_TRANSPORT_BLE_H
 
 #include <zephyr/kernel.h>
 #include <stdint.h>
@@ -68,4 +68,4 @@ void *transport_ble_get_conn(void);
  */
 struct transport *transport_ble_get(void);
 
-#endif /* CLIP2_TRANSPORT_BLE_H */
+#endif /* CLIP_TRANSPORT_BLE_H */

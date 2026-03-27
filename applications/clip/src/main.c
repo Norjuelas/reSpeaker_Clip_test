@@ -26,7 +26,7 @@
 #include "wifi_udp.h"
 #include "transport_udp.h"
 
-LOG_MODULE_REGISTER(main, CONFIG_CLIP2_LOG_LEVEL);
+LOG_MODULE_REGISTER(main, CONFIG_CLIP_LOG_LEVEL);
 
 /* Global context */
 static struct clip_context g_ctx;

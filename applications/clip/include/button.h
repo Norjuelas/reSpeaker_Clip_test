@@ -4,8 +4,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#ifndef CLIP2_BUTTON_H
-#define CLIP2_BUTTON_H
+#ifndef CLIP_BUTTON_H
+#define CLIP_BUTTON_H
 
 #include <zephyr/kernel.h>
 #include <zephyr/device.h>
@@ -45,4 +45,4 @@ int button_register_callback(button_callback_t callback, void *user_data);
  */
 bool button_is_ready(void);
 
-#endif /* CLIP2_BUTTON_H */
+#endif /* CLIP_BUTTON_H */

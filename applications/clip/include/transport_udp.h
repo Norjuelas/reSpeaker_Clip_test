@@ -4,12 +4,26 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#ifndef CLIP2_TRANSPORT_UDP_H
-#define CLIP2_TRANSPORT_UDP_H
+#ifndef CLIP_TRANSPORT_UDP_H
+#define CLIP_TRANSPORT_UDP_H
 
 #include <stdint.h>
 #include <stdbool.h>
 #include <sys/socket.h>
+#include <zephyr/drivers/mbox.h>
+
+/**
+ * @brief Frame types for UDP protocol
+ */
+#define FRAME_ACK              0x80
+#define FRAME_FILE_START_UDP   0x11
+#define FRAME_FILE_DATA_UDP    0x12
+#define FRAME_FILE_END_UDP     0x13
+#define FRAME_TRANSFER_DONE_UDP 0x14
+#define FRAME_WINDOW_ACK       0x15
+#define FRAME_FILE_CRC         0x16
+#define FRAME_AT_RESPONSE      0x17
+#define FRAME_HEARTBEAT        0xFF
 
 /**
  * @brief Initialize UDP transport
@@ -111,10 +125,34 @@ void transport_udp_notify_file_end(void);
 void transport_udp_notify_transfer_done(void);
 
 /**
+ * @brief Notify window size update (called from wifi_udp server thread)
+ *
+ * @param window_size New window size
+ */
+void transport_udp_notify_window_ack(uint16_t window_size);
+
+/**
+ * @brief Notify CRC verification result (called from wifi_udp server thread)
+ *
+ * @param crc CRC32 value
+ * @param status 0=OK, 1=Error
+ */
+void transport_udp_notify_crc_result(uint32_t crc, uint8_t status);
+
+/**
+ * @brief Send AT command response with FRAME_AT_RESPONSE framing
+ *
+ * @param data Response data
+ * @param len Response length
+ * @return Bytes sent on success, negative error code on failure
+ */
+int transport_udp_send_response(const uint8_t *data, uint16_t len);
+
+/**
  * @brief Get UDP transport pointer for registration
  *
  * @return Transport pointer
  */
 struct transport *transport_udp_get(void);
 
-#endif /* CLIP2_TRANSPORT_UDP_H */
+#endif /* CLIP_TRANSPORT_UDP_H */

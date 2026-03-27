@@ -16,7 +16,7 @@
 
 #include "storage.h"
 
-LOG_MODULE_REGISTER(storage, CONFIG_CLIP2_LOG_LEVEL);
+LOG_MODULE_REGISTER(storage, CONFIG_CLIP_LOG_LEVEL);
 
 /* SD Card and File System */
 static FATFS fat_fs;

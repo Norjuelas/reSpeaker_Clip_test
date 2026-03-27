@@ -16,7 +16,7 @@
 #include "clip.h"
 #include "config.h"
 
-LOG_MODULE_REGISTER(config, CONFIG_CLIP2_LOG_LEVEL);
+LOG_MODULE_REGISTER(config, CONFIG_CLIP_LOG_LEVEL);
 
 /* Settings keys */
 #define SETTING_BITRATE         "config/bitrate"

@@ -29,7 +29,7 @@
 #include "transfer.h"
 #include "ble.h"
 
-LOG_MODULE_REGISTER(audio, CONFIG_CLIP2_LOG_LEVEL);
+LOG_MODULE_REGISTER(audio, CONFIG_CLIP_LOG_LEVEL);
 
 /* Memory slab for DMIC buffers */
 K_MEM_SLAB_DEFINE_STATIC(audio_mem_slab, AUDIO_BLOCK_SIZE, 16, 4);

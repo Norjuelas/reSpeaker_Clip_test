@@ -10,26 +10,26 @@
 #include <zephyr/logging/log.h>
 #include "haptic.h"
 
-LOG_MODULE_REGISTER(haptic, CONFIG_CLIP2_LOG_LEVEL);
+LOG_MODULE_REGISTER(haptic, CONFIG_CLIP_LOG_LEVEL);
 
 /* Motor control GPIO - P1.06 controls PMIC GPIO1 which controls BUCK1 (MOTOR_3V3)
  *
  * Hardware connection:
  *   nRF5340 P1.06 → NPM1300 GPIO1 → BUCK1 (VOUT1/MOTOR_3V3) enable
  */
-#ifdef CONFIG_CLIP2_HAPTIC_MOTOR_ENABLED
-#define HAPTIC_MOTOR_GPIO_PIN  CONFIG_CLIP2_HAPTIC_MOTOR_GPIO_PIN
+#ifdef CONFIG_CLIP_HAPTIC_MOTOR_ENABLED
+#define HAPTIC_MOTOR_GPIO_PIN  CONFIG_CLIP_HAPTIC_MOTOR_GPIO_PIN
 
 static const struct device *gpio1_dev = DEVICE_DT_GET(DT_NODELABEL(gpio1));
 
 /* Current motor state */
 static volatile bool motor_is_on = false;
 
-#endif /* CONFIG_CLIP2_HAPTIC_MOTOR_ENABLED */
+#endif /* CONFIG_CLIP_HAPTIC_MOTOR_ENABLED */
 
 int haptic_init(void)
 {
-#ifdef CONFIG_CLIP2_HAPTIC_MOTOR_ENABLED
+#ifdef CONFIG_CLIP_HAPTIC_MOTOR_ENABLED
 	LOG_INF("Initializing haptic motor control...");
 
 	if (!device_is_ready(gpio1_dev)) {
@@ -55,7 +55,7 @@ int haptic_init(void)
 
 int haptic_set_motor(bool enable)
 {
-#ifdef CONFIG_CLIP2_HAPTIC_MOTOR_ENABLED
+#ifdef CONFIG_CLIP_HAPTIC_MOTOR_ENABLED
 	int ret = gpio_port_set_masked_raw(gpio1_dev, BIT(HAPTIC_MOTOR_GPIO_PIN),
 					   enable ? BIT(HAPTIC_MOTOR_GPIO_PIN) : 0);
 	if (ret == 0) {
@@ -73,7 +73,7 @@ int haptic_set_motor(bool enable)
 
 bool haptic_is_running(void)
 {
-#ifdef CONFIG_CLIP2_HAPTIC_MOTOR_ENABLED
+#ifdef CONFIG_CLIP_HAPTIC_MOTOR_ENABLED
 	return motor_is_on;
 #else
 	return false;
@@ -83,7 +83,7 @@ bool haptic_is_running(void)
 /* Execute haptic pattern (blocking) */
 static int execute_pattern(enum haptic_pattern pattern)
 {
-#ifdef CONFIG_CLIP2_HAPTIC_MOTOR_ENABLED
+#ifdef CONFIG_CLIP_HAPTIC_MOTOR_ENABLED
 	switch (pattern) {
 	case HAPTIC_SHORT:
 		/* Short tap: 100ms */

@@ -4,8 +4,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#ifndef CLIP2_BLE_H
-#define CLIP2_BLE_H
+#ifndef CLIP_BLE_H
+#define CLIP_BLE_H
 
 #include <zephyr/bluetooth/bluetooth.h>
 #include <zephyr/bluetooth/conn.h>
@@ -161,4 +161,4 @@ int ble_send_response_buffer(size_t len);
  */
 int ble_send_audio_vis(const uint8_t *data, uint16_t len);
 
-#endif /* CLIP2_BLE_H */
+#endif /* CLIP_BLE_H */

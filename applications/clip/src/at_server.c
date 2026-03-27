@@ -11,8 +11,9 @@
 #include <ctype.h>
 #include "at_server.h"
 #include "transport.h"
+#include "transport_udp.h"
 
-LOG_MODULE_REGISTER(at_server, CONFIG_CLIP2_LOG_LEVEL);
+LOG_MODULE_REGISTER(at_server, CONFIG_CLIP_LOG_LEVEL);
 
 /* Command queue item */
 struct at_queue_item {
@@ -202,6 +203,17 @@ static void process_command(struct at_queue_item *item)
     uint8_t cmd_type = AT_CMD_TYPE_EXEC;
     int ret;
 
+    /* Helper to send response via appropriate transport */
+    #define SEND_RESPONSE() do { \
+        at_ctx.response_buffer[sizeof(at_ctx.response_buffer) - 1] = '\0'; \
+        size_t resp_len = strnlen(at_ctx.response_buffer, sizeof(at_ctx.response_buffer)); \
+        if (item->transport_type == TRANSPORT_TYPE_UDP) { \
+            transport_udp_send_response((uint8_t *)at_ctx.response_buffer, resp_len); \
+        } else { \
+            transport_send_to(item->transport_type, (uint8_t *)at_ctx.response_buffer, resp_len); \
+        } \
+    } while(0)
+
     /* Clear response buffer */
     memset(at_ctx.response_buffer, 0, sizeof(at_ctx.response_buffer));
 
@@ -209,9 +221,7 @@ static void process_command(struct at_queue_item *item)
     ret = parse_command((const char *)item->data, item->len, cmd_name, args, &cmd_type);
     if (ret != AT_OK) {
         create_json_response(false, at_server_err_msg(ret), NULL, at_ctx.response_buffer, sizeof(at_ctx.response_buffer));
-        at_ctx.response_buffer[sizeof(at_ctx.response_buffer) - 1] = '\0';
-        size_t resp_len = strnlen(at_ctx.response_buffer, sizeof(at_ctx.response_buffer));
-        transport_send_to(item->transport_type, (uint8_t *)at_ctx.response_buffer, resp_len);
+        SEND_RESPONSE();
         return;
     }
 
@@ -234,9 +244,7 @@ static void process_command(struct at_queue_item *item)
             case AT_CMD_TYPE_SET:
                 if (!(cmd->flags & AT_CMD_SET)) {
                     create_json_response(false, "SET not supported", NULL, at_ctx.response_buffer, sizeof(at_ctx.response_buffer));
-                    at_ctx.response_buffer[sizeof(at_ctx.response_buffer) - 1] = '\0';
-                    size_t resp_len = strnlen(at_ctx.response_buffer, sizeof(at_ctx.response_buffer));
-                    transport_send_to(item->transport_type, (uint8_t *)at_ctx.response_buffer, resp_len);
+                    SEND_RESPONSE();
                     return;
                 }
                 break;
@@ -244,18 +252,14 @@ static void process_command(struct at_queue_item *item)
             case AT_CMD_TYPE_READ:
                 if (!(cmd->flags & AT_CMD_QUERY)) {
                     create_json_response(false, "QUERY not supported", NULL, at_ctx.response_buffer, sizeof(at_ctx.response_buffer));
-                    at_ctx.response_buffer[sizeof(at_ctx.response_buffer) - 1] = '\0';
-                    size_t resp_len = strnlen(at_ctx.response_buffer, sizeof(at_ctx.response_buffer));
-                    transport_send_to(item->transport_type, (uint8_t *)at_ctx.response_buffer, resp_len);
+                    SEND_RESPONSE();
                     return;
                 }
                 break;
             case AT_CMD_TYPE_EXEC:
                 if (!(cmd->flags & AT_CMD_EXEC)) {
                     create_json_response(false, "EXEC not supported", NULL, at_ctx.response_buffer, sizeof(at_ctx.response_buffer));
-                    at_ctx.response_buffer[sizeof(at_ctx.response_buffer) - 1] = '\0';
-                    size_t resp_len = strnlen(at_ctx.response_buffer, sizeof(at_ctx.response_buffer));
-                    transport_send_to(item->transport_type, (uint8_t *)at_ctx.response_buffer, resp_len);
+                    SEND_RESPONSE();
                     return;
                 }
                 break;
@@ -270,22 +274,15 @@ static void process_command(struct at_queue_item *item)
             }
 
             /* Ensure null-termination and send response */
-            at_ctx.response_buffer[sizeof(at_ctx.response_buffer) - 1] = '\0';
-            size_t resp_len = strnlen(at_ctx.response_buffer, sizeof(at_ctx.response_buffer));
-
-            /* Log response for debugging */
-            LOG_INF("AT Response [%s]: %.*s", cmd_name, (int)resp_len, at_ctx.response_buffer);
-
-            transport_send_to(item->transport_type, (uint8_t *)at_ctx.response_buffer, resp_len);
+            LOG_INF("AT Response [%s]: %s", cmd_name, at_ctx.response_buffer);
+            SEND_RESPONSE();
             return;
         }
     }
 
     /* Command not found */
     create_json_response(false, "Unknown command", NULL, at_ctx.response_buffer, sizeof(at_ctx.response_buffer));
-    at_ctx.response_buffer[sizeof(at_ctx.response_buffer) - 1] = '\0';
-    size_t resp_len = strnlen(at_ctx.response_buffer, sizeof(at_ctx.response_buffer));
-    transport_send_to(item->transport_type, (uint8_t *)at_ctx.response_buffer, resp_len);
+    SEND_RESPONSE();
 }
 
 /* AT Server Thread */

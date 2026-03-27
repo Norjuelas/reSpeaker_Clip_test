@@ -7,46 +7,46 @@
 source "Kconfig.zephyr"
 
 # Main application
-menuconfig CLIP2
-	bool "Clip2 Application"
+menuconfig CLIP
+	bool "Clip Application"
 	default y
 
-if CLIP2
+if CLIP
 
-module = CLIP2
-module-str = Clip2 Application
+module = CLIP
+module-str = Clip Application
 source "subsys/logging/Kconfig.template.log_config"
 
 # =============================================================================
 # Configuration Defaults
 # =============================================================================
 
-config CLIP2_DEFAULT_BITRATE
+config CLIP_DEFAULT_BITRATE
 	int "Default Opus bitrate (bps)"
 	default 24000
 
-config CLIP2_DEFAULT_COMPLEXITY
+config CLIP_DEFAULT_COMPLEXITY
 	int "Default Opus complexity (0-10)"
 	range 0 10
 	default 0
 
-config CLIP2_DEFAULT_NOISE
+config CLIP_DEFAULT_NOISE
 	int "Default noise suppression level (dB)"
 	default 15
 
-config CLIP2_DEFAULT_CHUNK_SIZE
+config CLIP_DEFAULT_CHUNK_SIZE
 	int "Default transfer chunk size (bytes)"
 	default 4096
 
-config CLIP2_DEFAULT_AGC_ENABLED
+config CLIP_DEFAULT_AGC_ENABLED
 	bool "Default AGC enabled"
 	default y
 
-config CLIP2_DEFAULT_AGC_TARGET
+config CLIP_DEFAULT_AGC_TARGET
 	int "Default AGC target level"
 	default 8000
 
-config CLIP2_DEFAULT_CONTRAST
+config CLIP_DEFAULT_CONTRAST
 	int "Default OLED contrast (0-255)"
 	default 128
 
@@ -54,13 +54,25 @@ config CLIP2_DEFAULT_CONTRAST
 # Button Configuration
 # =============================================================================
 
-config CLIP2_BUTTON_WORK_STACK_SIZE
+config CLIP_BUTTON_WORK_STACK_SIZE
 	int "Button work queue stack size"
 	default 2048
 
-config CLIP2_BUTTON_WORK_PRIORITY
+config CLIP_BUTTON_WORK_PRIORITY
 	int "Button work queue priority"
 	default 5
+
+# =============================================================================
+# Haptic Motor Configuration
+# =============================================================================
+
+config CLIP_HAPTIC_MOTOR_ENABLED
+	bool "Enable haptic motor"
+	default n
+
+config CLIP_HAPTIC_MOTOR_GPIO_PIN
+	int "Haptic motor GPIO pin"
+	default 6
 
 # =============================================================================
 # AT Server Configuration
@@ -163,4 +175,52 @@ config CLIP_TRANSFER_CHUNK_SIZE
 	  Default: 240 bytes = 1 BLE notification (MTU 247 - 3 ATT header)
 	  for optimal throughput.
 
-endif # CLIP2
+# =============================================================================
+# UDP Transport Configuration
+# =============================================================================
+
+config CLIP_UDP_THREAD_STACK_SIZE
+	int "UDP server thread stack size"
+	default 4096
+
+config CLIP_UDP_THREAD_PRIORITY
+	int "UDP server thread priority"
+	default 5
+
+config CLIP_UDP_RECV_BUF_SIZE
+	int "UDP receive buffer size"
+	default 1024
+
+config CLIP_UDP_MAX_DATA_SIZE
+	int "UDP maximum data per packet"
+	default 480
+
+config CLIP_UDP_HEARTBEAT_INTERVAL_MS
+	int "UDP heartbeat interval (ms)"
+	default 5000
+
+config CLIP_UDP_CONNECTION_TIMEOUT_MS
+	int "UDP connection timeout (ms)"
+	default 30000
+
+config CLIP_UDP_INITIAL_WINDOW_SIZE
+	int "UDP initial flow control window size"
+	default 32
+
+config CLIP_UDP_MAX_WINDOW_SIZE
+	int "UDP maximum flow control window size"
+	default 256
+
+config CLIP_UDP_ACK_TIMEOUT_MS
+	int "UDP ACK timeout (ms)"
+	default 500
+
+config CLIP_UDP_MAX_RETRIES
+	int "UDP maximum retry attempts"
+	default 10
+
+config CLIP_UDP_WINDOW_ACK_INTERVAL_MS
+	int "UDP window ACK interval (ms)"
+	default 1000
+
+endif # CLIP

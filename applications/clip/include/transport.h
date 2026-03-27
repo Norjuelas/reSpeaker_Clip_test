@@ -4,8 +4,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#ifndef CLIP2_TRANSPORT_H
-#define CLIP2_TRANSPORT_H
+#ifndef CLIP_TRANSPORT_H
+#define CLIP_TRANSPORT_H
 
 #include <zephyr/kernel.h>
 #include <stdint.h>
@@ -225,4 +225,4 @@ bool transport_is_connected(void);
 void transport_notify_event(uint8_t type, uint8_t event,
                             const uint8_t *data, size_t len);
 
-#endif /* CLIP2_TRANSPORT_H */
+#endif /* CLIP_TRANSPORT_H */

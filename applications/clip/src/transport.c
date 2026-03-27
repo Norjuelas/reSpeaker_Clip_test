@@ -9,7 +9,7 @@
 #include <string.h>
 #include "transport.h"
 
-LOG_MODULE_REGISTER(transport, CONFIG_CLIP2_LOG_LEVEL);
+LOG_MODULE_REGISTER(transport, CONFIG_CLIP_LOG_LEVEL);
 
 /* Maximum number of transports */
 #define TRANSPORT_MAX 3

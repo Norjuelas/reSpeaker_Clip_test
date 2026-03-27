@@ -4,8 +4,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#ifndef CLIP2_DISPLAY_H
-#define CLIP2_DISPLAY_H
+#ifndef CLIP_DISPLAY_H
+#define CLIP_DISPLAY_H
 
 #include <zephyr/kernel.h>
 #include <stdint.h>
@@ -113,4 +113,4 @@ int display_set_recording(bool recording, bool enhanced_mode);
  */
 int display_turn_off(void);
 
-#endif /* CLIP2_DISPLAY_H */
+#endif /* CLIP_DISPLAY_H */

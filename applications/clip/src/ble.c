@@ -19,7 +19,7 @@
 #include "transport_ble.h"
 #include "transfer.h"
 
-LOG_MODULE_REGISTER(ble, CONFIG_CLIP2_LOG_LEVEL);
+LOG_MODULE_REGISTER(ble, CONFIG_CLIP_LOG_LEVEL);
 
 /* BLE context */
 static struct ble_context ble_ctx = {

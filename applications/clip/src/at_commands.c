@@ -25,7 +25,7 @@
 #include "haptic.h"
 #include "wifi.h"
 
-LOG_MODULE_REGISTER(at_commands, CONFIG_CLIP2_LOG_LEVEL);
+LOG_MODULE_REGISTER(at_commands, CONFIG_CLIP_LOG_LEVEL);
 
 /* Helper: Extract integer from string */
 static int extract_int(const char *str, int *value)

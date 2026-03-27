@@ -4,8 +4,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#ifndef CLIP2_CONFIG_H
-#define CLIP2_CONFIG_H
+#ifndef CLIP_CONFIG_H
+#define CLIP_CONFIG_H
 
 #include <stdint.h>
 #include <stddef.h>
@@ -192,4 +192,4 @@ int config_set_dereverb_enabled(bool enabled);
  */
 int config_set_oled_contrast(uint8_t contrast);
 
-#endif /* CLIP2_CONFIG_H */
+#endif /* CLIP_CONFIG_H */

@@ -5,17 +5,25 @@
  *
  * UDP server for file transfer.
  * Uses stop-and-wait protocol with sequence numbers for reliability.
+ * Includes flow control (sliding window) and CRC32 integrity checking.
  *
  * Protocol:
- *   Sender -> Receiver: FILE_START | filename | file_size | session_id
+ *   Sender -> Receiver: FILE_START | filename | file_size
  *   Receiver -> Sender: ACK | seq=0
  *   Sender -> Receiver: FILE_DATA | seq=N | length | data
  *   Receiver -> Sender: ACK | seq=N
  *   ... (repeat until file complete)
- *   Sender -> Receiver: FILE_END | filename
- *   Receiver -> Sender: ACK | seq=MAX
+ *   Sender -> Receiver: FILE_END | filename | crc32(4)
+ *   Receiver -> Sender: FILE_CRC | crc32 | status
  *   Sender -> Receiver: TRANSFER_DONE | session_id | file_count
  *   Receiver -> Sender: ACK | seq=MAX
+ *
+ * Flow Control:
+ *   Receiver -> Sender: WINDOW_ACK | window_size
+ *   Sender adjusts sending based on window size
+ *
+ * Heartbeat:
+ *   Either side can send: HEARTBEAT | timestamp
  */
 
 #include <zephyr/kernel.h>
@@ -26,31 +34,17 @@
 #include <stdio.h>
 #include <errno.h>
 #include <stdlib.h>
+#include <zephyr/sys/crc.h>
 #include "wifi_udp.h"
 #include "wifi.h"
 #include "at_server.h"
 #include "transport.h"
 #include "transport_udp.h"
 
-LOG_MODULE_REGISTER(wifi_udp, CONFIG_CLIP2_LOG_LEVEL);
-
-/* Configuration */
-#define UDP_THREAD_STACK_SIZE  4096
-#define UDP_THREAD_PRIORITY    5
-#define UDP_RECV_BUF_SIZE      1024
-#define UDP_MAX_FRAME_SIZE     512   /* Max data per UDP packet */
-#define UDP_ACK_TIMEOUT_MS     500
-#define UDP_MAX_RETRIES        5
-
-/* Frame types */
-#define FRAME_ACK             0x80
-#define FRAME_FILE_START_UDP  0x11
-#define FRAME_FILE_DATA_UDP   0x12
-#define FRAME_FILE_END_UDP    0x13
-#define FRAME_TRANSFER_DONE_UDP 0x14
+LOG_MODULE_REGISTER(wifi_udp, CONFIG_CLIP_LOG_LEVEL);
 
 /* State */
-static K_THREAD_STACK_DEFINE(udp_stack, UDP_THREAD_STACK_SIZE);
+static K_THREAD_STACK_DEFINE(udp_stack, CONFIG_CLIP_UDP_THREAD_STACK_SIZE);
 static struct k_thread udp_thread_data;
 
 static volatile bool server_running;
@@ -60,24 +54,60 @@ struct sockaddr_in client_addr;  /* Shared with transport_udp.c */
 socklen_t client_len;  /* Shared with transport_udp.c */
 
 /* Static buffers */
-static char resp_buf[256];
-static uint8_t udp_recv_buf[UDP_RECV_BUF_SIZE];
+static uint8_t udp_recv_buf[CONFIG_CLIP_UDP_RECV_BUF_SIZE];
 
 /* Sequence tracking */
 static uint16_t expected_seq;
-static int client_socket = -1;
 
-/* Pending ACK state */
-static volatile bool awaiting_ack;
-static uint8_t pending_frame_type;
-static uint16_t pending_seq;
-static void *pending_data;
-static size_t pending_len;
-static int retry_count;
+/* Flow control state */
+static uint16_t receive_window_size = CONFIG_CLIP_UDP_INITIAL_WINDOW_SIZE;
+static struct k_timer window_ack_timer;
+static struct k_work window_ack_work;
 
-extern struct at_server_context {
-    uint8_t transport_type;
-} at_ctx;
+/* CRC state for receiving */
+static uint32_t receive_crc32;
+static bool receiving_file = false;
+
+/* Forward declarations */
+static void send_window_ack(struct k_work *work);
+static void window_ack_timer_init(void);
+
+/**
+ * @brief Initialize window ACK timer
+ */
+static void window_ack_timer_init(void)
+{
+    k_timer_init(&window_ack_timer, NULL, NULL);
+    k_work_init(&window_ack_work, send_window_ack);
+}
+
+/**
+ * @brief Send window ACK frame
+ */
+static void send_window_ack(struct k_work *work)
+{
+    ARG_UNUSED(work);
+
+    uint8_t ack_frame[5] = {
+        FRAME_WINDOW_ACK,
+        receive_window_size & 0xFF,
+        (receive_window_size >> 8) & 0xFF,
+        0, 0  /* reserved */
+    };
+
+    if (server_sock >= 0 && client_len > 0) {
+        int ret = zsock_sendto(server_sock, ack_frame, sizeof(ack_frame), 0,
+                              (struct sockaddr *)&client_addr, sizeof(client_addr));
+        if (ret < 0) {
+            LOG_DBG("Window ACK send failed: %d", errno);
+        } else {
+            LOG_DBG("Window ACK sent: %d", receive_window_size);
+        }
+    }
+
+    /* Schedule next window ACK */
+    k_timer_start(&window_ack_timer, K_MSEC(CONFIG_CLIP_UDP_WINDOW_ACK_INTERVAL_MS), K_NO_WAIT);
+}
 
 /**
  * @brief Send ACK packet
@@ -95,93 +125,26 @@ static int send_ack(uint16_t seq)
 }
 
 /**
- * @brief Send file frame with retry (stop-and-wait)
+ * @brief Send CRC result packet
  */
-static int send_frame_with_ack(uint8_t frame_type, const void *data, size_t len)
+static int send_crc_result(uint32_t crc, uint8_t status)
 {
-    int ret;
-    struct pollfd pfd;
-    int timeout_ms = UDP_ACK_TIMEOUT_MS;
-
-    retry_count = 0;
-    awaiting_ack = true;
-    pending_frame_type = frame_type;
-    pending_seq = expected_seq;
-    pending_data = (void *)data;
-    pending_len = len;
-
-resend:
-    /* Send the frame */
-    uint8_t header[4] = {
-        frame_type,
-        expected_seq & 0xFF,
-        (expected_seq >> 8) & 0xFF,
-        (uint8_t)(len & 0xFF)
+    uint8_t crc_frame[6] = {
+        FRAME_FILE_CRC,
+        crc & 0xFF,
+        (crc >> 8) & 0xFF,
+        (crc >> 16) & 0xFF,
+        (crc >> 24) & 0xFF,
+        status  /* 0=OK, 1=Error */
     };
 
-    if (len > 0 && data) {
-        /* For FILE_DATA: header + data */
-        ret = zsock_sendto(server_sock, header, 4, 0,
+    int ret = zsock_sendto(server_sock, crc_frame, sizeof(crc_frame), 0,
                           (struct sockaddr *)&client_addr, sizeof(client_addr));
-        if (ret > 0 && ret < 4) {
-            /* Partial send, try rest */
-            size_t sent = ret;
-            const uint8_t *p = data;
-            while (sent < len) {
-                ret = zsock_sendto(server_sock, p + sent, len - sent, 0,
-                                  (struct sockaddr *)&client_addr, sizeof(client_addr));
-                if (ret < 0) break;
-                sent += ret;
-            }
-        }
-    } else {
-        /* For control frames without data payload */
-        ret = zsock_sendto(server_sock, header, 4, 0,
-                          (struct sockaddr *)&client_addr, sizeof(client_addr));
-    }
 
-    if (ret < 0) {
-        LOG_ERR("UDP send failed: %d", errno);
-        awaiting_ack = false;
-        return -1;
-    }
+    /* Notify transport layer */
+    transport_udp_notify_crc_result(crc, status);
 
-    /* Wait for ACK */
-    pfd.fd = server_sock;
-    pfd.events = ZSOCK_POLLIN;
-
-    while (awaiting_ack && retry_count < UDP_MAX_RETRIES) {
-        ret = zsock_poll(&pfd, 1, timeout_ms);
-        if (ret < 0) {
-            LOG_ERR("poll error: %d", errno);
-            awaiting_ack = false;
-            return -1;
-        }
-        if (ret == 0) {
-            /* Timeout - retransmit */
-            retry_count++;
-            LOG_WRN("ACK timeout, retry %d/%d", retry_count, UDP_MAX_RETRIES);
-            goto resend;
-        }
-
-        if (pfd.revents & ZSOCK_POLLIN) {
-            uint8_t ack_buf[8];
-            ret = zsock_recvfrom(server_sock, ack_buf, sizeof(ack_buf), 0,
-                               NULL, NULL);
-            if (ret >= 4 && ack_buf[0] == FRAME_ACK) {
-                uint16_t ack_seq = ack_buf[1] | (ack_buf[2] << 8);
-                if (ack_seq == expected_seq) {
-                    awaiting_ack = false;
-                    expected_seq++;
-                    return 0;
-                }
-            }
-        }
-    }
-
-    awaiting_ack = false;
-    LOG_ERR("Max retries exceeded");
-    return -ETIMEDOUT;
+    return ret;
 }
 
 /**
@@ -197,9 +160,32 @@ static void handle_packet(const uint8_t *buf, size_t len)
     uint16_t seq = buf[1] | (buf[2] << 8);
 
     switch (frame_type) {
+    case FRAME_HEARTBEAT:
+        /* Heartbeat frame - just acknowledge receipt */
+        LOG_DBG("Heartbeat received");
+        /* Update client active state */
+        client_active = true;
+        break;
+
     case FRAME_ACK:
-        /* ACK from receiver - not used in current protocol */
-        awaiting_ack = false;
+        /* ACK from sender - handled in transport_udp */
+        break;
+
+    case FRAME_WINDOW_ACK:
+        /* Window ACK from receiver - handled in transport_udp */
+        if (len >= 4) {
+            uint16_t window = buf[1] | (buf[2] << 8);
+            transport_udp_notify_window_ack(window);
+        }
+        break;
+
+    case FRAME_FILE_CRC:
+        /* CRC result from receiver - handled in transport_udp */
+        if (len >= 6) {
+            uint32_t crc = buf[1] | (buf[2] << 8) | (buf[3] << 16) | (buf[4] << 24);
+            uint8_t status = buf[5];
+            transport_udp_notify_crc_result(crc, status);
+        }
         break;
 
     case FRAME_FILE_START_UDP:
@@ -215,6 +201,10 @@ static void handle_packet(const uint8_t *buf, size_t len)
             memcpy(filename, &buf[4], fn_len);
             uint32_t file_size = buf[4 + fn_len] | (buf[5 + fn_len] << 8) |
                                 (buf[6 + fn_len] << 16) | (buf[7 + fn_len] << 24);
+
+            /* Reset CRC for new file */
+            receive_crc32 = 0;
+            receiving_file = true;
 
             /* File transfer start received */
             send_ack(expected_seq);
@@ -234,6 +224,10 @@ static void handle_packet(const uint8_t *buf, size_t len)
                 break;
             }
             if (seq == expected_seq) {
+                /* Update CRC */
+                if (receiving_file) {
+                    receive_crc32 = crc32_ieee_update(receive_crc32, &buf[5], data_len);
+                }
                 transport_udp_notify_data(&buf[5], data_len);
                 expected_seq++;
             }
@@ -243,16 +237,47 @@ static void handle_packet(const uint8_t *buf, size_t len)
 
     case FRAME_FILE_END_UDP:
         /* File transfer end */
-        /* File transfer end received */
-        send_ack(expected_seq);
-        transport_udp_notify_file_end();
+        /* Format: type(1) + seq(2) + fn_len(1) + filename(fn_len) + crc32(4) */
+        {
+            uint8_t fn_len = buf[3];
+            uint32_t sent_crc = 0;
+
+            if (len >= 4 + fn_len + 4) {
+                sent_crc = buf[4 + fn_len] | (buf[5 + fn_len] << 8) |
+                          (buf[6 + fn_len] << 16) | (buf[7 + fn_len] << 24);
+            }
+
+            receiving_file = false;
+
+            /* Verify CRC */
+            uint8_t status = 0;
+            if (receive_crc32 != sent_crc) {
+                LOG_ERR("CRC mismatch: expected 0x%08x, got 0x%08x", sent_crc, receive_crc32);
+                status = 1;  /* Error */
+            }
+
+            /* Send CRC result */
+            send_crc_result(receive_crc32, status);
+
+            /* Send ACK */
+            send_ack(expected_seq);
+            transport_udp_notify_file_end();
+
+            /* Reset for next file */
+            expected_seq = 0;
+            receive_crc32 = 0;
+        }
         break;
 
     case FRAME_TRANSFER_DONE_UDP:
         /* All files transferred */
-        /* Transfer complete received */
-        send_ack(expected_seq);
+        send_ack(0xFFFF);
         transport_udp_notify_transfer_done();
+        break;
+
+    case FRAME_AT_RESPONSE:
+        /* AT command response from server - just log for debug */
+        LOG_DBG("AT response received: %d bytes", len);
         break;
 
     default:
@@ -306,6 +331,10 @@ static void udp_server_thread(void *p1, void *p2, void *p3)
 
     LOG_INF("UDP server listening on port %d (sock=%d)", WIFI_AP_UDP_PORT, server_sock);
 
+    /* Initialize window ACK timer */
+    window_ack_timer_init();
+    k_timer_start(&window_ack_timer, K_MSEC(CONFIG_CLIP_UDP_WINDOW_ACK_INTERVAL_MS), K_NO_WAIT);
+
     while (server_running) {
         /* Blocking recv with 1 second timeout */
         memset(udp_recv_buf, 0, sizeof(udp_recv_buf));
@@ -328,10 +357,14 @@ static void udp_server_thread(void *p1, void *p2, void *p3)
             if (client_len > 0) {
                 transport_udp_update_client_addr((struct sockaddr *)&client_addr, client_len);
                 transport_udp_update_active(true);
+                client_active = true;
             }
             handle_packet(udp_recv_buf, ret);
         }
     }
+
+    /* Stop window ACK timer */
+    k_timer_stop(&window_ack_timer);
 
     if (server_sock >= 0) {
         zsock_close(server_sock);
@@ -352,8 +385,9 @@ int wifi_udp_init(void)
     client_len = sizeof(client_addr);
     memset(&client_addr, 0, sizeof(client_addr));
     expected_seq = 0;
-    awaiting_ack = false;
-    retry_count = 0;
+    receive_crc32 = 0;
+    receiving_file = false;
+    receive_window_size = CONFIG_CLIP_UDP_INITIAL_WINDOW_SIZE;
     return 0;
 }
 
@@ -371,7 +405,7 @@ int wifi_udp_start(void)
                     K_THREAD_STACK_SIZEOF(udp_stack),
                     udp_server_thread,
                     NULL, NULL, NULL,
-                    UDP_THREAD_PRIORITY, 0, K_NO_WAIT);
+                    CONFIG_CLIP_UDP_THREAD_PRIORITY, 0, K_NO_WAIT);
 
     k_thread_name_set(&udp_thread_data, "wifi_udp");
 
