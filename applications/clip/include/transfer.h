@@ -12,6 +12,9 @@
 #include <zephyr/kernel.h>
 #include "transport.h"
 
+/* Transfer configuration */
+#define TRANSFER_MAX_FILE_RETRIES  5  /* Max file-level retransmissions before abort */
+
 /* Transfer states */
 enum transfer_state {
     TRANSFER_STATE_IDLE = 0,

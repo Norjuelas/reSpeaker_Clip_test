@@ -14,7 +14,6 @@
 #include "transfer.h"
 #include "storage.h"
 #include "transport.h"
-#include "transport_udp.h"
 #include "clip.h"
 #include "ble.h"
 #include "audio.h"
@@ -644,20 +643,17 @@ process_next_file:
                         int file_retry = 0;
                         bool file_ok = false;
 
-                        while (!file_ok && file_retry < UDP_MAX_RETRIES &&
+                        while (!file_ok && file_retry < TRANSFER_MAX_FILE_RETRIES &&
                                transfer_thread_running &&
                                current_transfer.state == TRANSFER_STATE_TRANSMITTING) {
                             file_retry++;
-                            LOG_WRN("File NACK, retransmitting (%d/%d)", file_retry, UDP_MAX_RETRIES);
+                            LOG_WRN("File NACK, retransmitting (%d/%d)", file_retry, TRANSFER_MAX_FILE_RETRIES);
 
                             /* Seek back to file start */
                             fs_seek(&transfer_file, 0, FS_SEEK_SET);
                             current_transfer.bytes_transferred = 0;
 
-                            /* Reset transport file state (CRC, seq) */
-                            transport_udp_reset_file_state();
-
-                            /* Resend FILE_START */
+                            /* Resend FILE_START (will reset transport file state) */
                             send_file_ready_event(current_transfer.session_id,
                                                    last_transferred_file,
                                                    current_transfer.total_bytes);
