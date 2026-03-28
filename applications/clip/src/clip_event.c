@@ -15,6 +15,7 @@
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/drivers/regulator.h>
+#include <zephyr/mgmt/mcumgr/mgmt/callbacks.h>
 #include <nrfx_clock.h>
 #include "clip_event.h"
 #include "clip.h"
@@ -99,10 +100,32 @@ static enum clip_event_result execute_transition(enum clip_event event,
 /* Init                                                                        */
 /* ========================================================================== */
 
+/* MCUmgr DFU callback — notifies display on OTA start/pending */
+static enum mgmt_cb_return mcumgr_dfu_cb(uint32_t event, enum mgmt_cb_return prev_status,
+                                          int32_t *rc, uint16_t *group, bool *abort_more,
+                                          void *data, size_t data_size)
+{
+    if (event == MGMT_EVT_OP_IMG_MGMT_DFU_STARTED) {
+        LOG_INF("MCUmgr: DFU upload started");
+        clip_post_event(CLIP_EVENT_OTA_START);
+    } else if (event == MGMT_EVT_OP_IMG_MGMT_DFU_PENDING) {
+        LOG_INF("MCUmgr: DFU upload complete, pending reboot");
+    }
+
+    return MGMT_CB_OK;
+}
+
+static struct mgmt_callback mcumgr_dfu_cb_handler = {
+    .callback = mcumgr_dfu_cb,
+    .event_id = MGMT_EVT_OP_IMG_MGMT_DFU_STARTED | MGMT_EVT_OP_IMG_MGMT_DFU_PENDING,
+};
+
 int clip_event_init(void)
 {
     atomic_set(&g_state, CLIP_STATE_IDLE);
     k_sem_init(&event_notify_sem, 0, 1);
+
+    mgmt_callback_register(&mcumgr_dfu_cb_handler);
 
     LOG_INF("Event dispatcher initialized");
     return 0;

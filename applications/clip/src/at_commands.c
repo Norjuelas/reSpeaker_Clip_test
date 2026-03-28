@@ -579,6 +579,8 @@ static int cmd_dfu_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
         return create_json_response(false, "Failed to set boot mode", NULL, response, len);
     }
 
+    clip_post_event(CLIP_EVENT_OTA_START);
+
     ret = create_json_response(true, NULL, "{\"dfu\":\"rebooting\"}", response, len);
 
     /* Schedule reboot after response is sent */

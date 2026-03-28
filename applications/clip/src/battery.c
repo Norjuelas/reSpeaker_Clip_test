@@ -15,6 +15,7 @@
 
 #include "battery.h"
 #include "clip.h"
+#include "clip_event.h"
 #include "display.h"
 #include "ble.h"
 #include "transfer.h"
@@ -168,6 +169,7 @@ static void pmic_event_callback(const struct device *dev, struct gpio_callback *
 {
 	if (pins & BIT(NPM13XX_EVENT_VBUS_DETECTED)) {
 		LOG_INF("PMIC event: VBUS detected");
+		clip_post_event(CLIP_EVENT_USB_CONNECTED);
 	}
 	if (pins & BIT(NPM13XX_EVENT_VBUS_REMOVED)) {
 		LOG_INF("PMIC event: VBUS removed");

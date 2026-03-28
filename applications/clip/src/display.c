@@ -987,8 +987,23 @@ static void handle_event(enum ui_event event)
 		set_ui_state(UI_STATE_POWER_OFF);
 		break;
 
+	case UI_EVENT_USB_CONNECTED:
+		set_ui_state(UI_STATE_USB_CONNECTED);
+		k_work_schedule(&display_timeout_work, K_MSEC(DISPLAY_STATUS_TIMEOUT_MS));
+		break;
+
+	case UI_EVENT_OTA_START:
+		set_ui_state(UI_STATE_OTA);
+		break;
+
+	case UI_EVENT_OTA_DONE:
+		set_ui_state(UI_STATE_STATUS_BAR);
+		k_work_schedule(&display_timeout_work, K_MSEC(DISPLAY_STATUS_TIMEOUT_MS));
+		break;
+
 	case UI_EVENT_TIMEOUT:
-		if (g_ui_state == UI_STATE_STATUS_BAR) {
+		if (g_ui_state == UI_STATE_STATUS_BAR ||
+		    g_ui_state == UI_STATE_USB_CONNECTED) {
 			if (ble_is_bonded()) {
 				set_ui_state(UI_STATE_OFF);
 			} else {
@@ -1092,6 +1107,28 @@ static void render_current_state(void)
 		render_pairing_guide(display_buffer);
 		flush_display();
 		break;
+
+	case UI_STATE_USB_CONNECTED:
+	{
+		clear_screen(display_buffer);
+		/* Centered text */
+		int y1 = (OLED_HEIGHT - 28) / 2;
+		int y2 = y1 + 12 + 4;
+		draw_string_6x12(display_buffer, "USB", 30, y1);
+		draw_string_6x12(display_buffer, "Connected", 14, y2);
+		flush_display();
+		break;
+	}
+
+	case UI_STATE_OTA:
+	{
+		clear_screen(display_buffer);
+		/* Centered text */
+		int y = (OLED_HEIGHT - 12) / 2;
+		draw_string_6x12(display_buffer, "OTA...", 26, y);
+		flush_display();
+		break;
+	}
 
 	default:
 		break;
