@@ -15,6 +15,9 @@
 
 #include "battery.h"
 #include "clip.h"
+#include "display.h"
+#include "ble.h"
+#include "transfer.h"
 
 LOG_MODULE_REGISTER(battery, CONFIG_CLIP_LOG_LEVEL);
 
@@ -146,6 +149,15 @@ static void read_and_update(void)
 			}
 		}
 	}
+
+	/* Update display with current status */
+	struct display_status ds = {
+		.battery_percent = last_percent,
+		.battery_charging = last_charging,
+		.ble_connected = ble_is_connected(),
+		.transferring = transfer_is_active(),
+	};
+	display_update_status(&ds);
 }
 
 /* NPM1300 event callback — called from system work queue context */
