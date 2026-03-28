@@ -28,7 +28,7 @@ LOG_MODULE_REGISTER(config, CONFIG_CLIP_LOG_LEVEL);
 #define SETTING_AGC_ENABLED     "config/agc_enabled"
 #define SETTING_AGC_TARGET      "config/agc_target"
 #define SETTING_DEREVERB        "config/dereverb_enabled"
-#define SETTING_BRIGHTNESS        "config/oled_brightness"
+#define SETTING_BRIGHTNESS      "config/oled_brightness"
 #define SETTING_TIME_UNIX       "time/unix_timestamp"
 
 /* Config entry for settings handler */

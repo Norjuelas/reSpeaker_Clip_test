@@ -973,7 +973,6 @@ static void handle_event(enum ui_event event)
 
 	case UI_EVENT_STATUS_SHOW:
 		set_ui_state(UI_STATE_STATUS_BAR);
-		g_status_bar_start_ms = k_uptime_get();
 		k_work_schedule(&display_timeout_work, K_MSEC(DISPLAY_STATUS_TIMEOUT_MS));
 		break;
 

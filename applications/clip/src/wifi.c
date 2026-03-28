@@ -243,7 +243,10 @@ static int wifi_start_dhcp_server(struct net_if *iface)
 	struct in_addr pool_start;
 	int ret;
 
-	net_addr_pton(AF_INET, WIFI_AP_DHCP_POOL_START, &pool_start);
+	/* Derive pool start from server IP (192.168.4.1 -> 192.168.4.2) */
+	net_addr_pton(AF_INET, CONFIG_NET_CONFIG_MY_IPV4_ADDR, &pool_start);
+	pool_start.s_addr = htonl(ntohl(pool_start.s_addr) + 1);
+
 	ret = net_dhcpv4_server_start(iface, &pool_start);
 	if (ret && ret != -EALREADY)
 	{
@@ -251,7 +254,7 @@ static int wifi_start_dhcp_server(struct net_if *iface)
 	}
 	else
 	{
-		LOG_INF("DHCP server started, pool: %s/1", WIFI_AP_DHCP_POOL_START);
+		LOG_INF("DHCP server started");
 	}
 
 	return ret;
@@ -302,12 +305,12 @@ int wifi_on(void)
 		return ret;
 	}
 
-	/* Configure static IP address on the interface */
+	/* Configure static IP from Kconfig macros */
 	{
 		struct in_addr addr, netmask, gw;
-		net_addr_pton(AF_INET, WIFI_AP_IP_ADDR, &addr);
-		net_addr_pton(AF_INET, "255.255.255.0", &netmask);
-		net_addr_pton(AF_INET, WIFI_AP_IP_ADDR, &gw);
+		net_addr_pton(AF_INET, CONFIG_NET_CONFIG_MY_IPV4_ADDR, &addr);
+		net_addr_pton(AF_INET, CONFIG_NET_CONFIG_MY_IPV4_NETMASK, &netmask);
+		net_addr_pton(AF_INET, CONFIG_NET_CONFIG_MY_IPV4_GW, &gw);
 		ret = net_if_ipv4_addr_add(iface, &addr, NET_ADDR_MANUAL, 0);
 		if (ret && ret != -EALREADY)
 		{
@@ -329,7 +332,7 @@ int wifi_on(void)
 	}
 
 	LOG_INF("WiFi AP started: SSID=%s ch=%d IP=%s port=%d",
-			ap_ssid, WIFI_AP_CHANNEL, WIFI_AP_IP_ADDR, WIFI_AP_UDP_PORT);
+			ap_ssid, WIFI_AP_CHANNEL, CONFIG_NET_CONFIG_MY_IPV4_ADDR, WIFI_AP_UDP_PORT);
 
 	return 0;
 }
@@ -401,7 +404,7 @@ const char *wifi_get_password(void)
 
 const char *wifi_get_ip_address(void)
 {
-	return WIFI_AP_IP_ADDR;
+	return CONFIG_NET_CONFIG_MY_IPV4_ADDR;
 }
 
 bool wifi_is_sta_connected(void)

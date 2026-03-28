@@ -255,12 +255,6 @@ int clip_init(void)
         LOG_ERR("Event dispatcher init failed: %d", err);
         return err;
     }
-    
-    err = wifi_on();
-    if (err) {
-        LOG_ERR("WiFi on failed: %d", err);
-        /* Continue anyway - WiFi is optional */
-    }
 
     /* Clear status */
     g_ctx.status.battery_percent = 0;
@@ -299,9 +293,6 @@ void clip_main_loop(void)
 
 int main(void)
 {
-#ifdef CLOCK_FEATURE_HFCLK_DIVIDE_PRESENT
-    nrfx_clock_divider_set(NRF_CLOCK_DOMAIN_HFCLK, NRF_CLOCK_HFCLK_DIV_1);
-#endif
     /* Print version and build info at startup */
     LOG_INF("Clip2 Firmware v%s", APP_VERSION_STRING);
     LOG_INF("Build: %s %s", __DATE__, __TIME__);

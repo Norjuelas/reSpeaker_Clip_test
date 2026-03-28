@@ -19,12 +19,6 @@
 #define WIFI_AP_REG_DOMAIN "US"
 
 /**
- * @brief DHCP server configuration
- */
-#define WIFI_AP_IP_ADDR "192.168.4.1"
-#define WIFI_AP_DHCP_POOL_START "192.168.4.10"
-
-/**
  * @brief UDP file transfer server configuration
  */
 #define WIFI_AP_UDP_PORT 8089
