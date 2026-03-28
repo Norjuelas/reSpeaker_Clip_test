@@ -132,6 +132,9 @@
 		status = "okay";
 		/* Long press 3s to wake from hibernate mode */
 		ship-to-active-time-ms = <3008>;
+		/* NPM1300 GPIO1 → gpio0.10 for interrupt (GPOIRQ mode) */
+		host-int-gpios = <&gpio0 10 GPIO_ACTIVE_HIGH>;
+		pmic-int-pin = <1>;
 
 		npm1300_gpio: gpio-controller {
 			compatible = "nordic,npm1300-gpio";

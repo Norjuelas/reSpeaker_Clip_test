@@ -26,6 +26,7 @@
 #include "wifi_udp.h"
 #include "transport_udp.h"
 #include "clip_event.h"
+#include "battery.h"
 
 LOG_MODULE_REGISTER(main, CONFIG_CLIP_LOG_LEVEL);
 
@@ -151,6 +152,12 @@ int clip_init(void)
         return err;
     }
 
+    /* Initialize battery monitoring (needs BLE for BAS service) */
+    err = battery_init();
+    if (err) {
+        LOG_WRN("Battery init failed: %d", err);
+    }
+
     /* Initialize transport layer */
     err = transport_init();
     if (err) {
@@ -256,9 +263,7 @@ int clip_init(void)
         return err;
     }
 
-    /* Clear status */
-    g_ctx.status.battery_percent = 0;
-    g_ctx.status.battery_charging = false;
+    /* Clear status (battery_percent/charging set by battery_init) */
     g_ctx.status.recording_time = 0;
     g_ctx.status.free_space = 0;
     g_ctx.status.session_count = 0;
