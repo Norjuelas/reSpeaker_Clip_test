@@ -19,10 +19,8 @@
 
 /* Default values */
 #define CONFIG_DEFAULT_MODE          0  /* MODE_NORMAL */
-#define CONFIG_DEFAULT_NOISE         15
 #define CONFIG_DEFAULT_AUTODEL       -1
 #define CONFIG_DEFAULT_DEREVERB      false
-#define CONFIG_DEFAULT_BRIGHTNESS    128
 
 /**
  * @brief Initialize configuration system

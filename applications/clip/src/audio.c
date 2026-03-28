@@ -107,6 +107,7 @@ static K_MUTEX_DEFINE(audio_energy_mutex);
 /* Statistics */
 static struct audio_stats stats = {0};
 static int64_t encode_time_total = 0;
+static int64_t dsp_time_total = 0;
 
 /* Data callback */
 static audio_data_callback_t data_callback = NULL;
@@ -436,6 +437,7 @@ static int audio_start_recording_internal(enum audio_mode mode)
     memset(&stats, 0, sizeof(stats));
     stats.encode_time_min_ms = INT64_MAX;
     encode_time_total = 0;
+    dsp_time_total = 0;
 
     /* Reset file index */
     current_file_index = 1;
@@ -690,8 +692,10 @@ void audio_recording_thread(void *p1, void *p2, void *p3)
                 continue;
             }
 
-            /* Process PCM data according to mode */
+            /* Process PCM data according to mode (DSP: merge, denoise, dereverb) */
+            int64_t dsp_start = k_uptime_get();
             int16_t *pcm_data = process_pcm_frame((int16_t *)buffer, AUDIO_OPUS_FRAME_SIZE);
+            dsp_time_total += k_uptime_get() - dsp_start;
 
             /* Check encoder state */
             if (!opus_encoder) {
@@ -743,10 +747,11 @@ void audio_recording_thread(void *p1, void *p2, void *p3)
 
             /* Print encode time every 10 seconds (500 frames at 20ms/frame) */
             if (stats.frames_encoded % 500 == 0) {
-                int64_t avg_time = encode_time_total / stats.frames_encoded;
-                LOG_INF("Encode: avg=%lld ms, min=%lld, max=%lld (%u frames)",
-                        avg_time, stats.encode_time_min_ms, stats.encode_time_max_ms,
-                        stats.frames_encoded);
+                int64_t avg_enc = encode_time_total / stats.frames_encoded;
+                int64_t avg_dsp = dsp_time_total / stats.frames_encoded;
+                LOG_INF("Encode: avg=%lld ms, min=%lld, max=%lld | DSP: avg=%lld ms (%u frames)",
+                        avg_enc, stats.encode_time_min_ms, stats.encode_time_max_ms,
+                        avg_dsp, stats.frames_encoded);
             }
 
             /* Calculate energy level from PCM data */

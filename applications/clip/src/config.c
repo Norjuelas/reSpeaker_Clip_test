@@ -144,10 +144,10 @@ static int mount_littlefs(void)
 static void config_set_defaults(struct clip_context *ctx)
 {
     ctx->config.mode = MODE_NORMAL;
-    ctx->config.noise_suppress = CONFIG_DEFAULT_NOISE;
+    ctx->config.noise_suppress = CONFIG_CLIP_DEFAULT_NOISE;
     ctx->config.auto_delete_days = -1;
     ctx->config.dereverb_enabled = false;
-    ctx->config.oled_brightness = CONFIG_DEFAULT_BRIGHTNESS;
+    ctx->config.oled_brightness = CONFIG_CLIP_DEFAULT_BRIGHTNESS;
 }
 
 int config_init(void)
