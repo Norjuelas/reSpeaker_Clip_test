@@ -4,151 +4,128 @@
 
 ### 1.1 System Context
 
-The reSpeaker Clip is an embedded audio recording device built on Zephyr RTOS, running on the Nordic nRF5340 dual-core microcontroller. It provides high-quality audio capture with BLE synchronization to mobile devices.
+The reSpeaker Clip is an embedded audio recording device built on Zephyr RTOS, running on the Nordic nRF5340 dual-core microcontroller. It provides high-quality audio capture with BLE and WiFi synchronization to mobile devices.
 
 **External Actors:**
-- **End User**: Interacts via button and display
-- **Mobile App**: Interacts via BLE GATT
-- **SD Card**: Stores audio recordings
-- **Charging Source**: Powers device
+- **End User**: Interacts via button and CH1115 OLED display
+- **Mobile App**: Interacts via BLE GATT or WiFi UDP
+- **SD Card**: Stores audio recordings (FAT32)
+- **Charging Source**: Powers device via USB-C
 
 **System Boundaries:**
-- Hardware: nRF5340, PMIC, microphones, SD card
-- Firmware: Zephyr RTOS + custom application
-- Protocol: BLE AT command protocol
+- Hardware: nRF5340, NPM1300 PMIC, PDM microphones, SD card, nRF7002 WiFi
+- Firmware: Zephyr RTOS v3.2.1 (via NCS) + custom application
+- Protocols: BLE AT command protocol, CLIP UDP transfer protocol
 
 ### 1.2 Architectural Drivers
 
 **Primary Drivers:**
-1. **Memory Constraints**: Only 192KB non-secure SRAM, 192KB flash
-2. **Real-Time Audio**: Must process audio with < 50ms latency
-3. **Power Efficiency**: > 8 hours recording on 500mAh battery
-4. **BLE Throughput**: > 20 KB/s file transfer
-5. **UI Simplicity**: Single button, minimal display
+1. **Memory Constraints**: 192KB non-secure SRAM, 192KB flash for application
+2. **Real-Time Audio**: Must process audio with < 20ms per-frame budget
+3. **Power Efficiency**: CPU boost system (128MHz recording / 64MHz idle)
+4. **Dual Transport**: BLE for always-available control, WiFi UDP for fast file transfer
+5. **UI Simplicity**: Single button, 88x48 OLED display, haptic motor
 
 **Quality Attributes:**
-- Performance: Low latency audio processing
-- Reliability: Graceful error handling
-- Maintainability: Modular design
-- Testability: Clear interfaces between modules
+- Performance: Event-driven architecture, reference-counted CPU frequency scaling
+- Reliability: File-level retransmit with per-file CRC32, DMIC timeout recovery
+- Maintainability: Table-driven state machine, transport abstraction layer
+- Power Efficiency: WiFi manual start/stop, microphone power gating, PMIC ship mode
 
-### 1.3 Quality Attributes
+### 1.3 Design Principles
 
-| Attribute | Priority | Tactics |
-|-----------|----------|---------|
-| Performance | High | Double buffering, DMA, priority threads |
-| Reliability | High | Error detection, graceful degradation |
-| Power Efficiency | High | Low power states, PMIC control |
-| Maintainability | Medium | Modular design, clear interfaces |
-| Testability | Medium | Unit tests, integration tests |
-
-### 1.4 Design Principles
-
-1. **Separation of Concerns**: Each module has single responsibility
-2. **Layered Architecture**: Clear abstraction between layers
-3. **Data Hiding**: Modules expose only necessary interfaces
-4. **Resource Management**: Explicit ownership of buffers/memory
-5. **Error Isolation**: Errors contained, don't cascade
-6. **Real-Time Safe**: No blocking in high-priority threads
+1. **Event-Driven Main Loop**: All state transitions and side effects processed in the main thread via `k_msgq` event queue and `k_sem` notification
+2. **Table-Driven State Machine**: State transitions defined in a static lookup table (`transition_table[][]`) with transition actions in a single `switch` statement
+3. **Transport Abstraction**: BLE and UDP backends implement a common `transport_ops` interface
+4. **CPU Boost (Reference Counted)**: 128MHz during recording, 64MHz idle; `clip_cpu_boost_acquire()` / `clip_cpu_boost_release()` via `atomic_t` counter
+5. **Kconfig Per-Mode Parameters**: Bitrate and complexity are compile-time per-mode constants, not runtime configurable
+6. **Graceful Degradation**: Optional subsystems (storage, WiFi, display, button) fail softly; init continues
 
 ## 2. High-Level Architecture
 
 ### 2.1 Layered Architecture
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                Application Layer                         │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐ │
-│  │ Recording    │  │ Command      │  │ State        │ │
-│  │ Controller   │  │ Handler      │  │ Machine      │ │
-│  └──────────────┘  └──────────────┘  └──────────────┘ │
-├─────────────────────────────────────────────────────────┤
-│                  Service Layer                           │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐ │
-│  │ BLE GATT     │  │ AT Command   │  │ Session      │ │
-│  │ Server       │  │ Parser       │  │ Manager      │ │
-│  └──────────────┘  └──────────────┘  └──────────────┘ │
-├─────────────────────────────────────────────────────────┤
-│                Processing Layer                         │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐ │
-│  │ Audio        │  │ SpeexDSP     │  │ Opus         │ │
-│  │ Capture      │  │ Processor    │  │ Encoder      │ │
-│  └──────────────┘  └──────────────┘  └──────────────┘ │
-├─────────────────────────────────────────────────────────┤
-│            Hardware Abstraction Layer (HAL)             │
-│  ┌────────┐ ┌────────┐ ┌────────┐ ┌────────┐ ┌───────┐│
-│  │ PDM    │ │ SD     │ │ BLE    │ │ GPIO   │ │ PMIC  ││
-│  │ Driver │ │ Card   │ │ Stack  │ │ Driver │ │ Driver││
-│  └────────┘ └────────┘ └────────┘ └────────┘ └───────┘│
-├─────────────────────────────────────────────────────────┤
-│               Zephyr RTOS Kernel                         │
-│  Threads │ Semaphores │ Timers │ Memory Pool │ WorkQ   │
-└─────────────────────────────────────────────────────────┘
++---------------------------------------------------------+
+|                   Application Layer                      |
+|  +-------------+  +-------------+  +-----------------+  |
+|  | Event       |  | AT Server   |  | Button          |  |
+|  | Dispatcher  |  | (26 cmds)   |  | Handler         |  |
+|  +-------------+  +-------------+  +-----------------+  |
++---------------------------------------------------------+
+|                    Service Layer                         |
+|  +-------------+  +-------------+  +-----------------+  |
+|  | Transport   |  | Transfer    |  | Config          |  |
+|  | (BLE + UDP) |  | Manager     |  | (Settings/NVS)  |  |
+|  +-------------+  +-------------+  +-----------------+  |
++---------------------------------------------------------+
+|                  Processing Layer                        |
+|  +-------------+  +-------------+  +-----------------+  |
+|  | Audio       |  | SpeexDSP    |  | Opus            |  |
+|  | Capture     |  | (NS + DR)   |  | Encoder         |  |
+|  +-------------+  +-------------+  +-----------------+  |
++---------------------------------------------------------+
+|             Hardware Abstraction Layer                   |
+|  +-------+  +-------+  +-------+  +------+  +--------+ |
+|  | PDM   |  | SD    |  | BLE   |  | WiFi |  | PMIC   | |
+|  | DMIC  |  | FAT32 |  | Stack |  | nRF  |  | NPM1300| |
+|  +-------+  +-------+  +-------+  +------+  +--------+ |
++---------------------------------------------------------+
+|                 Zephyr RTOS Kernel                       |
+|  k_msgq | k_sem | k_mutex | k_thread | k_mem_slab      |
++---------------------------------------------------------+
 ```
 
 ### 2.2 Component Diagram
 
 ```
-┌──────────────────────────────────────────────────────────┐
-│                      Mobile App                          │
-└───────────────────┬──────────────────────────────────────┘
-                    │ BLE (GATT)
-┌───────────────────▼──────────────────────────────────────┐
-│              reSpeaker Clip Device                       │
-│                                                          │
-│  ┌─────────────────────────────────────────────────┐   │
-│  │              User Interface                     │   │
-│  │  ┌──────────┐  ┌──────────┐  ┌──────────────┐  │   │
-│  │  │ Button   │  │ Display  │  │ Haptic       │  │   │
-│  │  │ Handler  │  │ Manager  │  │ Motor        │  │   │
-│  │  └────┬─────┘  └────┬─────┘  └──────────────┘  │   │
-│  └───────┼─────────────┼───────────────────────────┘   │
-│          │             │                                │
-│  ┌───────▼─────────────▼───────┐                        │
-│  │      Application Core       │                        │
-│  │  ┌──────────────────────┐   │                        │
-│  │  │ Recording Controller │   │                        │
-│  │  └──────┬───────────────┘   │                        │
-│  │         │                    │                        │
-│  │  ┌──────▼───────────────┐   │                        │
-│  │  │ State Machine        │   │                        │
-│  │  └──────┬───────────────┘   │                        │
-│  │         │                    │                        │
-│  │  ┌──────▼───────────────┐   │                        │
-│  │  │ Command Handler      │   │                        │
-│  │  └──────┬───────────────┘   │                        │
-│  └─────────┼────────────────────┘                        │
-│            │                                            │
-│  ┌─────────▼─────────────────────────────────────────┐ │
-│  │                  Services                          │ │
-│  │  ┌──────────┐  ┌──────────┐  ┌──────────────┐   │ │
-│  │  │ BLE      │  │ Session  │  │ Config       │   │ │
-│  │  │ Service  │  │ Manager  │  │ Manager      │   │ │
-│  │  └────┬─────┘  └────┬─────┘  └──────────────┘   │ │
-│  └───────┼─────────────┼────────────────────────────┘ │
-│          │             │                                │
-│  ┌───────▼─────────────▼───────┐                        │
-│  │      Audio Pipeline          │                        │
-│  │  ┌──────┐  ┌──────┐  ┌────┐ │                        │
-│  │  │ PDM  │→│ DSP  │→│    │ │                        │
-│  │  │ MIC  │  │      │  │    │ │                        │
-│  │  └──────┘  └──────┘  │    │ │                        │
-│  │                      │Opus│ │                        │
-│  │  ┌──────────┐        │    │ │                        │
-│  │  │ Storage  │←───────┤    │ │                        │
-│  │  │ Manager  │        └────┘ │                        │
-│  │  └──────────┘                │                        │
-│  └──────────────────────────────┘                        │
-│                                                          │
-│  ┌─────────────────────────────────────────────────┐   │
-│  │               Hardware HAL                       │   │
-│  └─────────────────────────────────────────────────┘   │
-└──────────────────────────────────────────────────────────┘
-                    │
-                    ▼
-           ┌────────────────┐
-           │   SD Card      │
-           └────────────────┘
++----------------------------------------------------------+
+|                      Mobile App                          |
++------------------------+---------------------------------+
+                         | BLE (GATT) / WiFi (UDP)
++------------------------v---------------------------------+
+|               reSpeaker Clip Device                      |
+|                                                         |
+|  +---------------------------------------------------+ |
+|  |               User Interface                      | |
+|  |  +----------+  +----------+  +------------------+  | |
+|  |  | Button   |  | Display  |  | Haptic Motor     |  | |
+|  |  | (input   |  | (CH1115  |  | (PMIC GPIO,      |  | |
+|  |  |  driver) |  |  OLED)   |  |  optional)       |  | |
+|  |  +----+-----+  +----+-----+  +------------------+  | |
+|  +-------|-------------|-------------------------------+ |
+|          |             |                                 |
+|  +-------v-------------v-------------------------------+ |
+|  |              Event Dispatcher                      | |
+|  |  Table-driven state machine in main thread         | |
+|  |  States: UNINITIALIZED, IDLE, RECORDING,           | |
+|  |          TRANSMITTING, WIFI_SYNC, PAUSED, ERROR     | |
+|  +-------|-------------------------------------------+ |
+|          |                                               |
+|  +-------v-------+  +----------------+  +-------------+  |
+|  | AT Server     |  | Transport      |  | Transfer    |  |
+|  | (dedicated    |  | Abstraction    |  | Manager     |  |
+|  |  thread)      |  | Layer          |  | (dedicated  |  |
+|  | 26 commands   |  | BLE | UDP      |  |  thread)    |  |
+|  +---------------+  +----------------+  +-------------+  |
+|                                                         |
+|  +---------------------------------------------------+ |
+|  |              Audio Pipeline                         | |
+|  |  PDM DMIC -> SpeexDSP (merge+NS+DR) -> Opus       | |
+|  |  (dedicated thread, 32KB stack)                   | |
+|  +---------------------------------------------------+ |
+|                                                         |
+|  +---------------------------------------------------+ |
+|  |  Config (Zephyr Settings on LittleFS)              | |
+|  |  Storage (FAT32 on SD card)                        | |
+|  |  WiFi AP (nRF7002, 5GHz ch36)                      | |
+|  |  UDP Server (port 8089, dedicated thread)          | |
+|  +---------------------------------------------------+ |
+|                                                         |
+|  +---------------------------------------------------+ |
+|  |               Hardware HAL                          | |
+|  +---------------------------------------------------+ |
++----------------------------------------------------------+
 ```
 
 ### 2.3 Technology Stack
@@ -156,2398 +133,795 @@ The reSpeaker Clip is an embedded audio recording device built on Zephyr RTOS, r
 | Layer | Technology | Version |
 |-------|-----------|---------|
 | RTOS | Zephyr | 3.2.1 (via NCS) |
-| MCU | Nordic nRF5340 | - |
-| Audio Codec | Opus | 1.6.1 |
-| Audio DSP | SpeexDSP | 1.2.1 (custom) |
-| Build System | CMake / West | - |
+| MCU | Nordic nRF5340 | Dual-core (App + Net) |
+| Audio Codec | Opus | Embedded build |
+| Audio DSP | SpeexDSP | Custom (noise suppress + dereverb) |
+| WiFi | nRF7002 | AP mode (5GHz) |
+| Display | CH1115 | I2C, 88x48 |
+| PMIC | NPM1300 | I2C, battery + regulators |
+| Build System | CMake / West | LTO + -Oz |
 | Language | C | C11 |
 
 ## 3. Module Decomposition
 
-### 3.1 Hardware Abstraction Layer
+### 3.1 Main Application (main.c)
 
-#### 3.1.1 PDM Microphone Driver
+**Purpose**: Application initialization and event loop.
 
-**Purpose**: Capture audio from PDM microphones
+The main thread runs a blocking event loop using `k_msgq` for events and `k_sem` for wake-up notification. All state transitions and side effects (audio start/stop, haptic, display, WiFi on/off) are handled in this thread, which has a large enough stack for WiFi operations.
 
-**Responsibilities:**
-- Configure PDM/I2S interface
-- Manage double buffers
-- Handle overflow/underrun
-- Provide audio data to pipeline
+**Initialization Order** (`clip_init()`):
+1. Config (Zephyr Settings on LittleFS)
+2. BLE (`bt_enable` must complete before other threads start)
+3. Transport layer + BLE transport + UDP transport
+4. Audio subsystem (creates audio thread)
+5. Storage (SD card FAT32)
+6. Transfer subsystem (creates transfer thread)
+7. WiFi module (does NOT start AP; only initializes SSID)
+8. WiFi UDP server (creates UDP thread)
+9. AT command registration + AT server thread
+10. Button handler (custom input driver)
+11. Display (CH1115 OLED)
+12. Event dispatcher
 
-**Interface:**
+**Main Loop** (`clip_main_loop()`):
 ```c
-int pdm_mic_init(const struct pdm_mic_config *config);
-int pdm_mic_start(void);
-int pdm_mic_stop(void);
-int pdm_mic_read(int16_t *buffer, size_t frames);
-```
-
-**Configuration:**
-- Sample rate: 16 kHz
-- Channels: 1 (mono) or 2 (stereo)
-- Buffer size: 2048 frames (double-buffered)
-- Interface: I2S compatible PDM
-
-**Dependencies:** Zephyr I2S driver
-
----
-
-#### 3.1.2 SD Card Driver
-
-**Purpose**: File system access on SD card
-
-**Responsibilities:**
-- Mount/unmount FAT32 filesystem
-- File I/O operations
-- Directory management
-- Error detection and reporting
-
-**Interface:**
-```c
-int sd_card_mount(void);
-int sd_card_unmount(void);
-int sd_card_write(const char *path, const void *data, size_t len);
-int sd_card_read(const char *path, void *data, size_t len);
-```
-
-**Configuration:**
-- File system: FAT32
-- Mount point: `/SD:/`
-- Block size: 512 bytes
-- Write buffer: 4 KB
-
-**Dependencies:** Zephyr FAT filesystem, SDHC-SPI driver
-
----
-
-#### 3.1.3 BLE Controller
-
-**Purpose**: BLE stack management
-
-**Responsibilities:**
-- Initialize BLE stack
-- Manage advertising
-- Handle connections
-- GATT server operations
-
-**Interface:**
-```c
-int ble_init(void);
-int ble_start_advertising(void);
-int ble_stop_advertising(void);
-int ble_send_notification(uint16_t handle, const uint8_t *data, uint16_t len);
-```
-
-**Configuration:**
-- Service UUID: 6E400001-B5A3-F393-E0A9-E50E24DCCA9E
-- MTU: Negotiated (up to 517)
-- Bonding: Required
-- Encryption: Required
-
-**Dependencies:** Zephyr BLE stack
-
----
-
-#### 3.1.4 PMIC Driver (NPM1300)
-
-**Purpose**: Power management IC control
-
-**Responsibilities:**
-- Monitor battery voltage
-- Detect charging state
-- Control power regulators
-- Manage GPIOs
-
-**Interface:**
-```c
-int pmic_init(void);
-int pmic_get_battery(uint8_t *percent);
-int pmic_is_charging(bool *charging);
-int pmic_set_regulator(enum pmic_regulator reg, bool enable);
-```
-
-**Configuration:**
-- I2C address: 0x6b
-- Regulators: BUCK1, BUCK2, LDO1, LDO2
-- GPIOs: 5 configurable
-
-**Dependencies:** Zephyr I2C driver
-
----
-
-#### 3.1.5 GPIO Driver
-
-**Purpose**: GPIO pin control
-
-**Responsibilities:**
-- Configure GPIO pins
-- Handle interrupts
-- Button input
-- LED output (if any)
-
-**Interface:**
-```c
-int gpio_init(void);
-int gpio_set_pin(uint32_t pin, int value);
-int gpio_get_pin(uint32_t pin);
-int gpio_configure_interrupt(uint32_t pin, gpio_callback_t callback);
-```
-
-**Key Pins:**
-- GPIO1.15: User button (input, pull-up)
-- GPIO1.14: Microphone power enable
-- GPIO1.8: OLED power enable
-- GPIO0.29: WiFi RF switch
-
-**Dependencies:** Zephyr GPIO driver
-
----
-
-#### 3.1.6 I2C/SPI Drivers
-
-**Purpose**: Communication with peripherals
-
-**Responsibilities:**
-- I2C bus management (PMIC, OLED)
-- SPI bus management (external flash)
-- Transaction management
-
-**Interface:**
-```c
-int i2c_write(uint8_t addr, const uint8_t *data, uint16_t len);
-int i2c_read(uint8_t addr, uint8_t *data, uint16_t len);
-int spi_write(const uint8_t *data, uint16_t len);
-int spi_read(uint8_t *data, uint16_t len);
-```
-
-**Dependencies:** Zephyr I2C/SPI drivers
-
----
-
-### 3.2 Audio Processing Layer
-
-#### 3.2.1 Audio Capture Module
-
-**Purpose**: Manage audio input pipeline
-
-**Responsibilities:**
-- Initialize PDM microphone
-- Handle audio interrupts
-- Fill circular buffer
-- Detect overflows
-
-**Interface:**
-```c
-int audio_capture_init(const struct audio_config *config);
-int audio_capture_start(void);
-int audio_capture_stop(void);
-int audio_capture_read(int16_t *buffer, size_t frames);
-```
-
-**Thread:** Audio thread (priority 5)
-
-**Data Flow:**
-```
-PDM MIC → I2S Driver → Audio Buffer → Circular Buffer
-```
-
----
-
-#### 3.2.2 SpeexDSP Processing Module
-
-**Purpose**: Audio signal processing
-
-**Responsibilities:**
-- Noise suppression
-- Dereverberation
-- Automatic gain control
-- Pre-processing for encoder
-
-**Interface:**
-```c
-int speexdsp_init(const struct speexdsp_config *config);
-int speexdsp_process(int16_t *input, int16_t *output, size_t frames);
-int speexdsp_set_ns_level(int level_db);
-int speexdsp_set_agc(bool enable, int target, int max_gain);
-```
-
-**Configuration:**
-- Noise suppression: 0-60 dB
-- Dereverberation: on/off, level, decay
-- AGC: on/off, target level, max gain
-
-**Memory:** ~10KB for state
-
-**Dependencies:** lib/speexdsp/
-
----
-
-#### 3.2.3 Opus Encoder Module
-
-**Purpose**: Opus audio encoding
-
-**Responsibilities:**
-- Initialize Opus encoder
-- Encode audio frames
-- Manage encoder state
-- Handle errors
-
-**Interface:**
-```c
-int opus_encoder_init(int sample_rate, int channels, int bitrate);
-int opus_encoder_encode(const int16_t *pcm, uint8_t *opus, size_t *len);
-int opus_encoder_set_bitrate(int bitrate);
-int opus_encoder_set_complexity(int complexity);
-void opus_encoder_cleanup(void);
-```
-
-**Configuration:**
-- Sample rate: 16 kHz
-- Channels: 1 (mono) or 2 (stereo)
-- Bitrate: 12000-64000 bps
-- Frame size: 20 ms (320 samples)
-- Complexity: 0-10
-
-**Memory:** ~20KB for state
-
-**Dependencies:** lib/opus/
-
----
-
-#### 3.2.4 Mode Processing Module
-
-**Purpose**: Handle different recording modes
-
-**Responsibilities:**
-- Mono/Stereo/Merge processing
-- Normal/Enhanced file splitting
-- Bitrate adaptation
-
-**Interface:**
-```c
-int mode_processor_init(enum recording_mode mode);
-int mode_processor_process(const int16_t *input, int16_t *output, size_t frames);
-int mode_processor_get_channels(void);
-int mode_processor_get_bitrate(void);
-```
-
-**Modes:**
-- **Mono**: Single microphone, 1 channel
-- **Stereo**: Dual microphones, 2 channels
-- **Merge**: Stereo input, mixed to mono
-
-**File Splitting:**
-- Normal: 10 minutes per file
-- Enhanced: 2 minutes per file
-
----
-
-### 3.3 Storage Management Layer
-
-#### 3.3.1 File System Module
-
-**Purpose**: High-level file operations
-
-**Responsibilities:**
-- Create session directories
-- Write audio files
-- Manage file metadata
-- Handle errors
-
-**Interface:**
-```c
-int fs_init(void);
-int fs_create_session(const char *session_id, struct session *session);
-int fs_write_audio(const char *session_id, const uint8_t *data, size_t len);
-int fs_write_metadata(const char *session_id, const struct session_meta *meta);
-int fs_delete_session(const char *session_id);
-```
-
-**Directory Structure:**
-```
-/SD:/REC/
-├── YYYYMMDDHHMMSS/
-│   ├── session.json
-│   ├── files.lst
-│   ├── marks.bin
-│   ├── 001.opus
-│   ├── 002.opus
-│   └── ...
-```
-
----
-
-#### 3.3.2 Session Manager
-
-**Purpose**: Manage recording sessions
-
-**Responsibilities:**
-- Create new sessions
-- Track active session
-- Update session metadata
-- Finalize sessions
-
-**Interface:**
-```c
-int session_mgr_create(const char *session_id, struct session **out);
-int session_mgr_add_file(struct session *session, const char *filename, size_t size);
-int session_mgr_add_mark(struct session *session, const struct mark *mark);
-int session_mgr_finalize(struct session *session);
-int session_mgr_list(struct session_list **out);
-int session_mgr_get(const char *session_id, struct session **out);
-int session_mgr_delete(const char *session_id);
-```
-
-**Session Lifecycle:**
-```
-IDLE → CREATING → RECORDING → FINALIZING → COMPLETED
-```
-
----
-
-#### 3.3.3 Bookmark Manager
-
-**Purpose**: Manage recording bookmarks
-
-**Responsibilities:**
-- Add bookmarks
-- Store bookmarks (marks.bin)
-- Retrieve bookmarks
-- Serialize/deserialize
-
-**Interface:**
-```c
-int bookmark_mgr_init(const char *session_id);
-int bookmark_mgr_add(const struct mark *mark);
-int bookmark_mgr_list(struct mark **marks, int *count);
-int bookmark_mgr_save(void);
-int bookmark_mgr_cleanup(void);
-```
-
-**Binary Format:**
-```
-[4 bytes magic "MRK1"]
-[4 bytes count]
-[Entry 1]...
-```
-
----
-
-#### 3.3.4 Purge Policy Manager
-
-**Purpose**: Auto-delete old sessions
-
-**Responsibilities:**
-- Check auto-delete policy
-- Identify purgeable sessions
-- Execute purge
-
-**Interface:**
-```c
-int purge_init(void);
-int purge_check(void);  // Call periodically
-int purge_get_purgeable(struct purge_info *info);
-int purge_execute(void);
-int purge_set_policy(enum purge_policy policy, int days);
-```
-
-**Policies:**
-- `off`: Manual only
-- `0`: Delete after transfer
-- `1-30`: Delete N days after transfer
-
----
-
-### 3.4 Communication Layer
-
-#### 3.4.1 BLE GATT Server
-
-**Purpose**: BLE GATT service implementation
-
-**Responsibilities:**
-- Register GATT service
-- Handle writes (commands)
-- Send notifications (responses, data)
-- Manage connection
-
-**Interface:**
-```c
-int ble_gatt_init(void);
-int ble_gatt_send_response(const char *json, size_t len);
-int ble_gatt_send_data(const uint8_t *data, size_t len);
-int ble_gatt_get_mtu(uint16_t *mtu);
-```
-
-**Characteristics:**
-- Command Receive: Write only
-- Response Send: Notify
-- File Data: Notify
-
----
-
-#### 3.4.2 AT Command Parser
-
-**Purpose**: Parse AT commands
-
-**Responsibilities:**
-- Parse command syntax
-- Validate parameters
-- Dispatch to handler
-- Format responses
-
-**Interface:**
-```c
-int at_parser_init(void);
-int at_parser_parse(const char *cmd, struct at_command *out);
-int at_parser_execute(const struct at_command *cmd, char **response);
-void at_parser_cleanup(void);
-```
-
-**Command Structure:**
-```c
-struct at_command {
-    enum at_type type;        // EXEC, SET, GET
-    char name[16];            // Command name
-    char *value;              // Parameter value
-};
-```
-
----
-
-#### 3.4.3 JSON Serializer/Deserializer
-
-**Purpose**: JSON parsing and generation
-
-**Responsibilities:**
-- Parse JSON requests
-- Generate JSON responses
-- Handle errors
-
-**Interface:**
-```c
-int json_to_dict(const char *json, struct json_obj **out);
-int json_get_string(struct json_obj *obj, const char *key, char **out);
-int json_get_int(struct json_obj *obj, const char *key, int *out);
-char *json_from_response(const struct response *resp);
-void json_free(struct json_obj *obj);
-```
-
-**Implementation:** Minimal JSON parser (no heavy dependencies)
-
----
-
-#### 3.4.4 File Transfer Manager
-
-**Purpose**: Manage file transfer over BLE
-
-**Responsibilities:**
-- Transfer state machine
-- Chunk reading and sending
-- Progress tracking
-- Pause/resume/cancel
-
-**Interface:**
-```c
-int xfer_init(void);
-int xfer_start(const char *path);
-int xfer_pause(void);
-int xfer_resume(void);
-int xfer_cancel(void);
-int xfer_get_progress(struct xfer_progress *progress);
-int xfer_set_chunk_size(size_t size);
-```
-
-**State Machine:**
-```
-IDLE → TRANSMITTING → PAUSED → COMPLETED → IDLE
-                    ↓                 ↓
-                  CANCEL            ERROR
-```
-
-**Non-Blocking:** Allows AT command processing during transfer
-
----
-
-### 3.5 Application Layer
-
-#### 3.5.1 Recording Controller
-
-**Purpose**: Main recording logic
-
-**Responsibilities:**
-- Start/stop recording
-- Manage audio pipeline
-- Handle bookmarks
-- Coordinate modules
-
-**Interface:**
-```c
-int rec_init(void);
-int rec_start(enum recording_mode mode);
-int rec_stop(void);
-int rec_add_mark(const char *note);
-bool rec_is_recording(void);
-int rec_get_duration(uint32_t *seconds);
-```
-
-**State Machine:**
-```
-IDLE → RECORDING → IDLE
-```
-
-**Triggers:**
-- AT+START command
-- AT+STOP command
-- Button long press
-
----
-
-#### 3.5.2 Command Handler
-
-**Purpose:** Process AT commands
-
-**Responsibilities:**
-- Dispatch commands
-- Call appropriate handlers
-- Generate responses
-- Handle errors
-
-**Interface:**
-```c
-int cmd_handler_init(void);
-int cmd_handler_process(const char *cmd, char **response);
-void cmd_handler_register(const char *name, cmd_func_t func);
-```
-
-**Command Registry:**
-```c
-struct cmd_entry {
-    const char *name;
-    cmd_func_t handler;
-    enum cmd_type type;  // EXEC, SET, GET
-};
-```
-
-**Example Command:**
-```c
-static int cmd_gstat(const struct at_command *cmd, char **response)
-{
-    struct gstat_data data = {
-        .state = state_to_string(current_state),
-        .battery = battery_percent,
-        .charging = battery_charging,
-        ...
-    };
-    return json_encode_success(&data, response);
-}
-```
-
----
-
-#### 3.5.3 State Machine Manager
-
-**Purpose**: Global device state
-
-**Responsibilities:**
-- Manage device states
-- Handle transitions
-- Notify state changes
-- Validate state-dependent operations
-
-**Interface:**
-```c
-int state_init(void);
-int state_transition(enum device_state new_state);
-enum device_state state_get_current(void);
-const char *state_to_string(enum device_state state);
-int state_register_callback(state_change_callback_t cb);
-```
-
-**States:**
-```c
-enum device_state {
-    STATE_UNINITIALIZED,
-    STATE_IDLE,
-    STATE_RECORDING,
-    STATE_TRANSMITTING,
-    STATE_PAUSED,
-    STATE_ERROR
-};
-```
-
-**Transition Validation:**
-```c
-static bool is_valid_transition(enum device_state from, enum device_state to)
-{
-    switch (from) {
-    case STATE_IDLE:
-        return to == STATE_RECORDING || to == STATE_TRANSMITTING;
-    case STATE_RECORDING:
-        return to == STATE_IDLE;
-    case STATE_TRANSMITTING:
-        return to == STATE_PAUSED || to == STATE_IDLE;
-    ...
+while (true) {
+    clip_event_wait(K_MSEC(1000));   // Wait for events or 1s timeout
+    clip_event_process();            // Process all pending events
+    if (clip_event_get_state() == CLIP_STATE_RECORDING) {
+        g_ctx.status.recording_time++;
     }
 }
 ```
 
----
+### 3.2 Event Dispatcher (clip_event.c)
 
-#### 3.5.4 Configuration Manager
+**Purpose**: Central table-driven state machine. All state transitions and side effects are handled here. Button and AT command modules only post events.
 
-**Purpose**: Persistent configuration storage
-
-**Responsibilities:**
-- Load/save configuration
-- Provide config access
-- Handle defaults
-- Factory reset
-
-**Interface:**
+**States:**
 ```c
-int config_init(void);
-int config_load(void);
-int config_save(void);
-int config_get(const char *key, void *value, size_t len);
-int config_set(const char *key, const void *value, size_t len);
-int config_reset(void);
-```
-
-**Storage:** Zephyr NVS (Non-Volatile Storage)
-
-**Keys:**
-- `bitrate`: uint16
-- `complexity`: uint8
-- `mode`: string
-- `noise`: uint8
-- `dereverb`: string
-- `agc`: string
-- `chunksize`: uint16
-- `autodel`: string
-
----
-
-### 3.6 User Interface Layer
-
-#### 3.6.1 Button Input Handler
-
-**Purpose**: Handle user button input
-
-**Responsibilities:**
-- Detect button presses
-- Differentiate short/long press
-- Trigger actions
-- Provide feedback
-
-**Interface:**
-```c
-int button_init(void);
-int button_set_callback(button_event_t event, button_callback_t cb);
-void button_irq_handler(void);  // Interrupt handler
+enum clip_state {
+    CLIP_STATE_UNINITIALIZED = 0,
+    CLIP_STATE_IDLE,
+    CLIP_STATE_RECORDING,
+    CLIP_STATE_TRANSMITTING,
+    CLIP_STATE_WIFI_SYNC,
+    CLIP_STATE_PAUSED,
+    CLIP_STATE_ERROR,
+};
 ```
 
 **Events:**
 ```c
-enum button_event {
-    BUTTON_SHORT_PRESS,  // < 1 second
-    BUTTON_LONG_PRESS,   // >= 1 second
+enum clip_event {
+    CLIP_EVENT_START = 0,        // Start recording
+    CLIP_EVENT_STOP,             // Stop recording
+    CLIP_EVENT_PAUSE,            // Pause recording
+    CLIP_EVENT_RESUME,           // Resume recording
+    CLIP_EVENT_MARK,             // Add bookmark
+    CLIP_EVENT_WIFI_ON,          // Turn on WiFi AP
+    CLIP_EVENT_WIFI_OFF,         // Turn off WiFi AP
+    CLIP_EVENT_POWER_OFF_SHOW,   // Show power-off screen
+    CLIP_EVENT_POWER_OFF_EXEC,   // Execute power-off (ship mode)
+    CLIP_EVENT_STATUS_SHOW,      // Show status display
+    CLIP_EVENT_USB_CONNECTED,    // USB cable plugged in
+    CLIP_EVENT_OTA_START,        // OTA update started
+    CLIP_EVENT_OTA_DONE,         // OTA update completed
 };
 ```
 
-**Device Tree Configuration:**
-```dts
-usr_btn: button {
-    compatible = "input-device-gpio";
-    gpios = <&gpio1 15 GPIO_ACTIVE_LOW>;
-    label = "User Button";
-    long-press-ms = <1000>;
+**Transition Table** (excerpt):
+```
+                  START  STOP   PAUSE  RESUME MARK   WIFI_ON WIFI_OFF
+UNINITIALIZED       --     --     --     --    --      --       --
+IDLE              REC     --     --     --    --    WIFI       --
+RECORDING           --   IDLE   PAUSED   --   SAME     --       --
+TRANSMITTING        --     --     --     --    --      --       --
+WIFI_SYNC           --     --     --     --    --      --     IDLE
+PAUSED              --   IDLE    --    REC   SAME     --       --
+```
+
+**CPU Boost System:**
+```c
+// Reference-counted: 128MHz when count > 0, 64MHz when count == 0
+void clip_cpu_boost_acquire(void);  // Called on recording start
+void clip_cpu_boost_release(void);  // Called on recording stop
+```
+
+**Event Submission:**
+```c
+// Non-blocking (for button presses)
+int clip_post_event(enum clip_event event);
+
+// Blocking with result (for AT commands)
+int clip_post_event_sync(enum clip_event event, struct clip_event_result_info *info);
+```
+
+### 3.3 AT Server (at_server.c, at_commands.c)
+
+**Purpose**: Parse and dispatch AT commands from BLE and UDP transports.
+
+**Architecture**: The AT server runs on a dedicated thread (priority 7, stack 4096). Commands arrive via a `k_msgq` queue (up to 10 items). Each queue item carries the raw command bytes, length, and transport type for response routing.
+
+**Command Types:**
+```c
+#define AT_CMD_TYPE_TEST   0  // AT+CMD=?  - Query
+#define AT_CMD_TYPE_SET    1  // AT+CMD=... - Set
+#define AT_CMD_TYPE_EXEC   2  // AT+CMD     - Execute
+#define AT_CMD_TYPE_READ   3  // AT+CMD?    - Read
+```
+
+**Command Registration:**
+```c
+struct at_command {
+    const char *name;           // e.g., "GSTAT"
+    uint8_t flags;              // AT_CMD_SET | AT_CMD_QUERY | AT_CMD_EXEC
+    at_cmd_handler_t handler;
 };
 ```
 
-**Logic:**
-```
-GPIO Interrupt → Timer Start → Button Release → Check Duration
-                                       ↓
-                    Duration >= 1s? ──Yes→ LONG_PRESS
-                              │No
-                              ↓
-                         SHORT_PRESS
+**Registered Commands (26):**
+
+| Command | Operations | Description |
+|---------|-----------|-------------|
+| GSTAT | QUERY | Get device status (state, battery, session, time) |
+| DEVICE | QUERY | Get device info (model, serial) |
+| VERSION | QUERY | Get firmware version |
+| TIME | SET, QUERY | Set/get time (Unix timestamp or YYYYMMDDHHMMSS) |
+| MODE | SET, QUERY | Set/get recording mode (normal/enhanced) |
+| NOISE | SET, QUERY | Set/get noise suppression level (dB) |
+| DEREVERB | SET, QUERY | Enable/disable dereverberation |
+| AUTODEL | SET, QUERY | Set/get auto-delete days |
+| BRIGHTNESS | SET, QUERY | Set/get OLED brightness (0-255) |
+| POWEROFF | EXEC | Enter PMIC ship mode |
+| FACTORY | EXEC | Factory reset (config + format SD + reboot) |
+| PAIR | SET | Clear BLE bonds |
+| REBOOT | EXEC | Reboot device (optionally clear bonds) |
+| START | EXEC | Start recording |
+| STOP | EXEC | Stop recording |
+| PAUSE | EXEC | Pause recording |
+| RESUME | EXEC | Resume recording |
+| MARK | EXEC | Add bookmark at current position |
+| LIST | QUERY | List sessions (paginated) |
+| MARKS | QUERY | Get bookmarks for a session |
+| DOWNLOAD | EXEC | Start file transfer |
+| CANCEL | EXEC | Cancel file transfer |
+| DELETE | EXEC | Delete a session |
+| PURGE | EXEC | Purge old sessions by auto-delete policy |
+| PURGEABLE | QUERY | Get count of purgeable sessions |
+| FORMAT | EXEC | Format SD card |
+| WIFI | QUERY | Get WiFi info (SSID, IP, status) |
+
+**Response Format**: JSON over the originating transport.
+```json
+{"ok":true,"msg":"...","data":{...}}
+{"ok":false,"msg":"Error description"}
 ```
 
-**Actions:**
-- **Long Press**: Toggle recording (start/stop)
-- **Short Press**: Add bookmark (during recording)
+**Factory Reset Flow**: `config_factory_reset()` (reset NVS defaults) -> `storage_format_card()` (FAT32 format) -> delayed `sys_reboot(SYS_REBOOT_COLD)` (sends response first, then reboots via `k_work_delayable`).
 
-**Integration:**
+### 3.4 Transport Abstraction Layer (transport.h, transport.c)
+
+**Purpose**: Abstract BLE and UDP transports behind a common interface.
+
+**Transport Types:**
 ```c
-static void button_callback(enum button_event event)
-{
-    switch (event) {
-    case BUTTON_LONG_PRESS:
-        if (rec_is_recording()) {
-            rec_stop();
-        } else {
-            rec_start(current_config.mode);
-        }
-        break;
-    case BUTTON_SHORT_PRESS:
-        if (rec_is_recording()) {
-            rec_add_mark(NULL);
-        }
-        break;
-    }
-}
+#define TRANSPORT_TYPE_BLE  0
+#define TRANSPORT_TYPE_UDP  1
 ```
 
----
-
-#### 3.6.2 Display Manager
-
-**Purpose**: Update display content
-
-**Responsibilities:**
-- Render display content
-- Update on events
-- Format information
-- Manage display state
-
-**Interface:**
+**Transport Operations:**
 ```c
-int display_init(void);
-int display_update(enum device_state state,
-                   const struct battery_info *batt,
-                   uint32_t rec_time);
-int display_show_error(const char *error);
-int display_clear(void);
+struct transport_ops {
+    int (*send)(const uint8_t *data, uint16_t len);
+    int (*send_file_data)(const uint8_t *data, uint16_t len);
+    int (*send_file_start)(const char *session_id, const char *filename, uint32_t size);
+    int (*send_file_end)(const char *filename);
+    int (*send_transfer_done)(const char *session_id, uint32_t file_count);
+    bool (*is_connected)(void);
+    void *(*get_conn)(void);
+};
 ```
 
----
+**Priority**: `transport_get_active()` returns BLE if connected, otherwise UDP. This allows seamless fallback between transports.
 
-#### 3.6.3 OLED Display Driver (Future)
-
-**Purpose**: CH1115 OLED driver
-
-**Responsibilities:**
-- Initialize CH1115 over I2C
-- Draw text and graphics
-- Manage display buffer
-- Update display
-
-**Interface:**
+**Registration**: Transports register at init time:
 ```c
-int oled_init(void);
-int oled_clear(void);
-int oled_write(uint8_t x, uint8_t y, const char *text);
-int oled_update(void);
+transport_register(transport_ble_get());
+transport_register(transport_udp_get());
 ```
+
+### 3.5 Audio Pipeline (audio.c)
+
+**Purpose**: PDM microphone capture, DSP processing, Opus encoding, and storage writing.
+
+**Audio Thread** (priority 0, stack 32768): The audio thread blocks on `audio_start_sem` when idle. When recording, it reads DMIC blocks, processes PCM, encodes Opus, writes to storage, and manages segment files.
+
+**Pipeline:**
+```
+PDM DMIC (16kHz, 2ch, 20ms frames)
+    |
+    v
+process_pcm_frame():
+    STEREO mode: pass through (no DSP)
+    MERGE mode: (L + R) / 2 -> SpeexDSP (noise suppress + dereverb, NO AGC)
+    |
+    v
+Opus Encoder (20ms frames, 320 samples)
+    |
+    v
+Storage write (2-byte length header + Opus packet)
+```
+
+**Recording Modes:**
+
+| Mode | Audio Mode | Channels | Bitrate | Complexity | DSP |
+|------|-----------|----------|---------|------------|-----|
+| Normal | STEREO | 2 (stereo Opus) | 32kbps (16k/ch) | 0 | None |
+| Enhanced | MERGE | 1 (mono Opus) | 32kbps | 1 | Noise suppress + dereverb |
+
+Bitrate and complexity are Kconfig per-mode constants, not runtime configurable:
+- Normal: `CONFIG_CLIP_NORMAL_BITRATE=16000`, `CONFIG_CLIP_NORMAL_COMPLEXITY=0`
+- Enhanced: `CONFIG_CLIP_ENHANCED_BITRATE=32000`, `CONFIG_CLIP_ENHANCED_COMPLEXITY=1`
+
+**Audio Constants:**
+```c
+#define AUDIO_SAMPLE_RATE     16000
+#define AUDIO_SAMPLE_BITS      16
+#define AUDIO_CHANNELS         2
+#define AUDIO_FRAME_MS         20
+#define AUDIO_OPUS_FRAME_SIZE  320  // 16000 * 0.020
+#define AUDIO_BLOCK_SIZE       1280 // ((16/8) * (16000 * 20/1000)) * 2
+#define AUDIO_MAX_PACKET_SIZE  4000
+```
+
+**Segment File Management**: Recording is split into segment files. Segment duration adapts to transfer state:
+- During sync: `CLIP_AUDIO_SEGMENT_DURATION_SYNC` (60s)
+- Not syncing: `CLIP_AUDIO_SEGMENT_DURATION_NO_SYNC` (300s)
+- When transfer starts mid-file: immediate slice if file exceeds sync duration
+
+**Pause/Resume**: Pause stops DMIC, powers off microphone, closes current file. Resume creates a new segment file with incremented index, powers on microphone, restarts DMIC.
+
+**Audio Visualization**: Energy level (0-10) calculated from RMS of each frame, sent as BLE notifications every ~200ms. 13-sample history packed into 7 bytes (4 bits per sample).
+
+**DMIC Recovery**: After 5 consecutive timeouts, the DMIC is retriggered automatically.
+
+**Memory**: Audio buffers allocated from `K_MEM_SLAB_DEFINE_STATIC(audio_mem_slab, AUDIO_BLOCK_SIZE, 16, 4)` (16 blocks of 1280 bytes).
+
+### 3.6 Storage (storage.c)
+
+**Purpose**: SD card file management with FAT32 filesystem.
+
+**Mount Point**: `/SD:`
+**Base Path**: `/SD:/REC/`
+
+**Directory Structure:**
+```
+/SD:/REC/
++-- 20260328120530/          # Session directory (YYYYMMDDHHMMSS)
+|   +-- session.json         # Session metadata (channels, sample_rate, duration, files, synced)
+|   +-- marks.bin            # Binary bookmarks
+|   +-- 0001.opus            # Segment files (2-byte length header + Opus frames)
+|   +-- 0002.opus
+|   +-- ...
++-- 20260328140000/
+|   +-- ...
+```
+
+**Write Buffer**: 4KB buffered writes (`CONFIG_CLIP_STORAGE_CHUNK_SIZE=4096`) for efficient SD card I/O.
+
+**Session Lifecycle**: `storage_create_session()` -> `storage_create_file()` -> `storage_write_frame()` -> `storage_close_file()` -> `storage_close_session()`
+
+**File Coordination**: A `file_closed_sem` signals the transfer thread when a file is closed and ready for transfer, enabling live recording sync.
+
+**Bookmarks**: Binary format (`marks.bin`) with 4-byte magic "MRK1", 4-byte count, then entries.
+
+### 3.7 Transfer (transfer.c)
+
+**Purpose**: File-level transfer over BLE or UDP with retransmit support.
+
+**Transfer Thread** (priority 5, stack 16384): Triggered by `transfer_start()` via semaphore. Reads files from SD card in chunks (`CONFIG_CLIP_TRANSFER_CHUNK_SIZE=4096`) and sends via the active transport.
+
+**Features:**
+- File-level retransmit (up to `TRANSFER_MAX_FILE_RETRIES=5` retries)
+- Per-file CRC32 verification
+- Pause/resume/cancel
+- Continuous mode (transfer while recording)
+- Progress tracking (bytes, files, percent)
+- Resume from specific file (reconnect scenario)
+
+**Transfer States:**
+```c
+enum transfer_state {
+    TRANSFER_STATE_IDLE = 0,
+    TRANSFER_STATE_TRANSMITTING,
+    TRANSFER_STATE_PAUSED,
+    TRANSFER_STATE_COMPLETED,
+    TRANSFER_STATE_ERROR
+};
+```
+
+**Chunk Buffer**: Static 4KB buffer avoids stack allocation.
+
+### 3.8 WiFi Module (wifi.c)
+
+**Purpose**: WiFi AP mode control for nRF7002.
+
+**Configuration:**
+```c
+#define WIFI_AP_SSID_PREFIX "ClipAP_"     // + 4 hex digits of chip ID
+#define WIFI_AP_PASSWORD "12345678"
+#define WIFI_AP_CHANNEL 36               // 5GHz
+#define WIFI_AP_MAX_CLIENTS 1
+#define WIFI_AP_REG_DOMAIN "US"
+#define WIFI_AP_UDP_PORT 8089
+```
+
+**Static IP**: `192.168.4.1/24`
+
+**Manual Start**: WiFi radio is NOT started at boot (`CONFIG_NRF_WIFI_IF_AUTO_START=n`). `wifi_on()` brings up the interface and starts the AP. `wifi_off()` stops AP and powers off radio. This saves ~30mA when WiFi is not in use.
+
+**BLE/WiFi Coexistence**: `CONFIG_NRF70_SR_COEX=y` with PTA configuration for 5GHz band.
+
+### 3.9 UDP Server (wifi_udp.c)
+
+**Purpose**: Receive AT commands and ACK frames from WiFi clients.
+
+**UDP Thread** (priority 5, stack 4096): Listens on port 8089, dispatches incoming packets.
+
+**Protocol** (CLIP UDP Transfer Protocol, see `docs/udp_protocol.md`):
+- Server sends: DATA, FILE_START, FILE_END, TRANSFER_DONE, AT_RESP, HEARTBEAT
+- Server receives: ACK, HEARTBEAT, AT commands (plain text)
+
+**Heartbeat**: Server sends heartbeat every 5s. Connection timeout after 30s without heartbeat.
+
+### 3.10 Configuration (config.c)
+
+**Purpose**: Persistent configuration via Zephyr Settings subsystem on LittleFS.
+
+**Storage Backend**: LittleFS mounted at `/lfs`, settings stored at `/lfs/settings/run`.
+
+**Settings Keys (5):**
+
+| Key | Settings Path | Type | Default | Description |
+|-----|--------------|------|---------|-------------|
+| CONFIG_KEY_MODE (0x03) | config/mode | uint8_t | 0 (normal) | Recording mode |
+| CONFIG_KEY_NOISE (0x04) | config/noise_suppress | uint8_t | 15 | Noise suppression (dB) |
+| CONFIG_KEY_AUTODEL (0x06) | config/auto_delete_days | int8_t | -1 (off) | Auto-delete days |
+| CONFIG_KEY_DEREVERB (0x09) | config/dereverb_enabled | bool | false | Dereverberation |
+| CONFIG_KEY_BRIGHTNESS (0x0A) | config/oled_brightness | uint8_t | 128 | OLED brightness |
+
+**Time Persistence**: Unix timestamp saved to `time/unix_timestamp`. On boot, time is restored from storage and advanced by elapsed uptime. This allows session IDs to remain meaningful across reboots.
+
+**Factory Reset**: Resets all 5 config keys to Kconfig defaults and saves.
+
+### 3.11 BLE Module (ble.c, transport_ble.c)
+
+**Purpose**: BLE GATT service with AT command protocol.
+
+**Service UUID**: Nordic UART Service (NUS) compatible.
+
+**Characteristics:**
+- Command Receive: Write (AT commands from client)
+- Response Send: Notify (JSON responses)
+- File Data: Notify (binary file transfer data)
+- Audio Visualization: Notify (packed energy level data)
+
+**Pairing**: BLE SMP with bonding, 1 max paired device, encrypted connection.
+
+### 3.12 Button Handler (button.c)
+
+**Purpose**: Translate button hardware events into device events.
+
+**Driver**: Custom GPIO input driver (`CONFIG_INPUT_CLIP`) with own thread (stack 512, priority 5).
+
+**Button Events and Actions:**
+
+| Event | State | Action |
+|-------|-------|--------|
+| Single click | RECORDING / PAUSED | `CLIP_EVENT_MARK` (bookmark) |
+| Single click | IDLE / ERROR / WIFI_SYNC | `CLIP_EVENT_STATUS_SHOW` |
+| Long press | RECORDING | `CLIP_EVENT_STOP` |
+| Long press | IDLE / ERROR | `CLIP_EVENT_START` |
+| Long press level 1/2/3 | Any | `CLIP_EVENT_POWER_OFF_SHOW` |
+| Release (after power-off show) | Any | `CLIP_EVENT_POWER_OFF_EXEC` |
+
+**Power-Off Sequence**: Two-step shutdown. Hold button shows power-off confirmation screen. Release triggers PMIC ship mode via `regulator_parent_ship_mode()`.
+
+### 3.13 Display Controller (display.c)
+
+**Purpose**: Event-driven CH1115 OLED display with UI state machine.
 
 **Specifications:**
 - Controller: CH1115
 - Resolution: 88x48 pixels
 - Interface: I2C
 - Address: 0x3c
-- Reset GPIO: gpio1.9
 
-**Display Layout:**
-```
-┌──────────────────────┐
-│  reSpeaker Clip      │  Row 0 (header)
-│                      │  Row 1
-│  State: RECORDING    │  Row 2
-│  [REC] 01:23:45      │  Row 3
-│                      │  Row 4
-│  Batt: 85% ⚡        │  Row 5
-│  Mode: Enhanced      │  Row 6
-└──────────────────────┘
-```
-
-**Current Status**: Use UART serial output for development
-
----
-
-#### 3.6.4 Haptic Motor Driver
-
-**Purpose**: Haptic feedback
-
-**Responsibilities:**
-- Control vibration motor
-- Generate patterns
-- Manage timing
-
-**Interface:**
+**UI States:**
 ```c
-int haptic_init(void);
-int haptic_pulse(uint16_t duration_ms);
-int haptic_pattern(const uint16_t *pattern, int count);
+enum ui_state {
+    UI_STATE_OFF,              // Display off
+    UI_STATE_PAIRING_GUIDE,    // BLE not bonded
+    UI_STATE_STATUS_BAR,       // Battery, connection, mode
+    UI_STATE_REC_WAVE,         // Recording with wave animation (enhanced)
+    UI_STATE_REC_DOT,          // Recording with dot animation (normal)
+    UI_STATE_MARKING,          // Bookmark flash
+    UI_STATE_PAUSED,           // Paused recording
+    UI_STATE_POWER_OFF,        // Power-off confirmation
+    UI_STATE_USB_CONNECTED,    // USB plugged in
+    UI_STATE_OTA,              // OTA in progress
+};
 ```
 
-**Implementation Status:**
-- **Current Implementation**: Via LOG_INF() macros (logging feedback)
-- **Future Implementation**: Actual motor control via PMIC GPIO2 (BUCK1 enable)
+**Animations:**
+- Normal mode: dot animation (slower, simpler)
+- Enhanced mode: wave animation using real-time audio energy levels (13-bar histogram from BLE audio vis data)
+- Bookmark: flash animation
+- Status: auto-timeout after 3 seconds
+
+**Brightness**: Configurable via `CONFIG_KEY_BRIGHTNESS` (0-255).
+
+### 3.14 Haptic Motor (haptic.c)
+
+**Purpose**: Haptic feedback via PMIC GPIO.
+
+**Hardware**: nRF5340 P1.06 -> NPM1300 GPIO1 -> BUCK1 (MOTOR_3V3) enable.
+
+**Kconfig**: `CONFIG_CLIP_HAPTIC_MOTOR_ENABLED=n` (disabled by default).
 
 **Patterns:**
-- Recording start: 100ms single pulse
-- Recording stop: 50ms double pulse
-- Bookmark: 30ms triple pulse
-- Error: 200ms long pulse
 
-**Current Implementation (Logging):**
-```c
-int haptic_pulse(uint16_t duration_ms)
-{
-    LOG_INF("[HAPTIC] Pulse: %u ms", duration_ms);
-    return 0;
-}
+| Pattern | Description | Duration |
+|---------|-------------|----------|
+| HAPTIC_SHORT | Single tap | 100ms |
+| HAPTIC_DOUBLE | Double tap | 100ms on, 100ms off, 100ms on |
+| HAPTIC_LONG | Long pulse | 500ms |
+| HAPTIC_ALERT | Alert sequence | 150ms x2 + 400ms |
 
-int haptic_pattern(const uint16_t *pattern, int count)
-{
-    LOG_INF("[HAPTIC] Pattern: %d pulses", count);
-    for (int i = 0; i < count; i++) {
-        LOG_INF("[HAPTIC]   Pulse %d: %u ms", i, pattern[i]);
-    }
-    return 0;
-}
-```
-
-**Future Implementation (Motor Control):**
-```c
-int haptic_pulse(uint16_t duration_ms)
-{
-    // Enable motor via PMIC GPIO2
-    gpio_set_pin(PMIC_GPIO_MOTOR, 1);
-    k_sleep(K_MSEC(duration_ms));
-    gpio_set_pin(PMIC_GPIO_MOTOR, 0);
-    return 0;
-}
-```
-
-**Control:** Via PMIC GPIO2 (BUCK1 enable)
-
----
+**Usage**: Recording start/stop/bookmark use HAPTIC_SHORT. Power-off uses HAPTIC_DOUBLE.
 
 ## 4. Data Flow Architecture
 
 ### 4.1 Audio Recording Flow
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                      Audio Recording Pipeline                │
-├─────────────────────────────────────────────────────────────┤
-│                                                             │
-│  PDM Microphone                                             │
-│  (I2S compatible, 16kHz)                                    │
-│         │                                                   │
-│         ▼                                                   │
-│  I2S Driver (DMA)                                           │
-│  ┌──────────────┐  ┌──────────────┐                        │
-│  │  Buffer A    │  │  Buffer B    │  Double buffering      │
-│  │  (2048 fr)   │  │  (2048 fr)   │                        │
-│  └──────────────┘  └──────────────┘                        │
-│         │                                                   │
-│         ▼                                                   │
-│  Audio Capture Module                                       │
-│  (ISR fills circular buffer)                                │
-│         │                                                   │
-│         ▼                                                   │
-│  Circular Buffer (32KB)                                     │
-│  ┌──────────────────────────────────────────┐              │
-│  │  [Frame1][Frame2][Frame3]...[FrameN]     │              │
-│  └──────────────────────────────────────────┘              │
-│         │                                                   │
-│         ▼                                                   │
-│  Mode Processor                                             │
-│  (Mono/Stereo/Merge)                                        │
-│         │                                                   │
-│         ▼                                                   │
-│  SpeexDSP                                                   │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐                 │
-│  │ Noise    │→│ Dereverb │→│ AGC      │                 │
-│  │ Suppress │  │          │  │          │                 │
-│  └──────────┘  └──────────┘  └──────────┘                 │
-│         │                                                   │
-│         ▼                                                   │
-│  Opus Encoder                                               │
-│  (20ms frames, 320 samples)                                 │
-│         │                                                   │
-│         ▼                                                   │
-│  ┌─────────────────────────────────────────────┐           │
-│  │  [2 bytes len][Opus frame][2 bytes len]...  │           │
-│  └─────────────────────────────────────────────┘           │
-│         │                                                   │
-│         ▼                                                   │
-│  Storage Manager                                            │
-│  ┌─────────────────────────────────────────────┐           │
-│  │  Split into files (2min/10min)              │           │
-│  │  Write to SD: /SD:/REC/SESSION/NNN.opus     │           │
-│  └─────────────────────────────────────────────┘           │
-│                                                             │
-└─────────────────────────────────────────────────────────────┘
+PDM DMIC (16kHz, 2ch, stereo)
+    |
+    v  (DMA, memory slab buffers)
+Audio Thread: dmic_read() -> buffer (1280 bytes)
+    |
+    v
+process_pcm_frame():
+    STEREO: pass through unchanged
+    MERGE:  (L + R) / 2 -> SpeexDSP preprocess (noise suppress + dereverb)
+    |
+    v
+Opus Encoder (20ms frame, 320 samples)
+    |
+    v
+storage_write_frame():
+    [2-byte length][Opus packet] -> write buffer -> SD card
+    |
+    v
+Segment file check:
+    If frames_in_file >= segment_duration -> close file, open new segment
 ```
 
-**Buffer Sizes:**
-- PDM buffer: 2048 frames × 2 channels × 2 bytes = 8 KB × 2 = 16 KB
-- Circular buffer: 32 KB
-- Opus output: ~500 bytes/frame × 50 frames = 25 KB
-
----
-
-### 4.2 File Transfer Flow
+### 4.2 Command Processing Flow
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                    File Transfer Pipeline                   │
-├─────────────────────────────────────────────────────────────┤
-│                                                             │
-│  SD Card File                                               │
-│  ┌─────────────────────────────────────────────┐           │
-│  │  001.opus (720 KB)                          │           │
-│  └─────────────────────────────────────────────┘           │
-│         │                                                   │
-│         ▼                                                   │
-│  File Open                                                  │
-│  (fp = fopen("/SD:/REC/SESSION/001.opus", "r"))             │
-│         │                                                   │
-│         ▼                                                   │
-│  Transfer Loop                                              │
-│  ┌─────────────────────────────────────────────┐           │
-│  │  while (!feof(fp)) {                         │           │
-│  │      chunk = read(fp, chunk_size);          │           │
-│  │      if (chunk < chunk_size) {              │           │
-│  │          // Last chunk                      │           │
-│  │      }                                      │           │
-│  │      send_via_ble(chunk);                   │           │
-│  │      update_progress();                     │           │
-│  │  }                                          │           │
-│  └─────────────────────────────────────────────┘           │
-│         │                                                   │
-│         ▼                                                   │
-│  BLE GATT Notification                                      │
-│  (Characteristic: 6E400004-B5A3-F393-E0A9-E50E24DCCA9E)     │
-│         │                                                   │
-│         ▼                                                   │
-│  Mobile App                                                 │
-│  (Reconstructs file)                                        │
-│                                                             │
-└─────────────────────────────────────────────────────────────┘
+Mobile App
+    |
+    +--[BLE]--> ble_write_cb() --> at_server_submit_cmd(data, len, TRANSPORT_TYPE_BLE)
+    |                                       |
+    |                                       v  (k_msgq_put)
+    |                              AT Server Thread
+    |                              parse_command() -> lookup handler -> execute
+    |                                       |
+    |                                       v
+    |                              Response via transport_send_to()
+    |
+    +--[UDP]--> wifi_udp handle_packet() --> at_server_submit_cmd(data, len, TRANSPORT_TYPE_UDP)
+                                            |
+                                            v  (k_msgq_put)
+                                           AT Server Thread
+                                           parse_command() -> lookup handler -> execute
+                                            |
+                                            v
+                                           transport_udp_send_response()
 ```
 
-**Non-Blocking Command Handling:**
-```
-Transfer in progress...
-    ↓
-AT+GSTAT received
-    ↓
-Pause transfer temporarily
-    ↓
-Process AT+GSTAT → Send response
-    ↓
-Resume transfer
-```
-
----
-
-### 4.3 Command Processing Flow
+### 4.3 File Transfer Flow (UDP)
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                    Command Processing                       │
-├─────────────────────────────────────────────────────────────┤
-│                                                             │
-│  Mobile App                                                 │
-│  (Write to Command Characteristic)                          │
-│         │                                                   │
-│         ▼                                                   │
-│  BLE GATT Write Callback                                    │
-│  (ble_gatt_write_cb)                                       │
-│         │                                                   │
-│         ▼                                                   │
-│  AT Parser                                                  │
-│  ┌─────────────────────────────────────────────┐           │
-│  │  Parse: AT+BITRATE=24000                    │           │
-│  │  type: SET                                  │           │
-│  │  name: BITRATE                              │           │
-│  │  value: "24000"                             │           │
-│  └─────────────────────────────────────────────┘           │
-│         │                                                   │
-│         ▼                                                   │
-│  Command Handler                                            │
-│  ┌─────────────────────────────────────────────┐           │
-│  │  Lookup: "BITRATE" → cmd_bitrate_handler    │           │
-│  │  Execute: Set bitrate to 24000              │           │
-│  │  Save to NVS                                │           │
-│  └─────────────────────────────────────────────┘           │
-│         │                                                   │
-│         ▼                                                   │
-│  Response Generator                                         │
-│  ┌─────────────────────────────────────────────┐           │
-│  │  {"ok": true, "value": 24000}               │           │
-│  └─────────────────────────────────────────────┘           │
-│         │                                                   │
-│         ▼                                                   │
-│  BLE GATT Notification                                      │
-│  (Send to Response Characteristic)                          │
-│         │                                                   │
-│         ▼                                                   │
-│  Mobile App                                                 │
-│  (Receive and parse JSON)                                   │
-│                                                             │
-└─────────────────────────────────────────────────────────────┘
+AT+DOWNLOAD=session_id
+    |
+    v
+transfer_start() --> transfer thread triggered (semaphore)
+    |
+    v
+For each file in session:
+    send_file_start() --> [FILE_START frame]
+    For each 4KB chunk:
+        send_file_data() --> [DATA frames with seq numbers]
+        Wait for ACK
+        If NACK: retransmit file (up to 5 retries)
+    send_file_end() --> [FILE_END frame]
+    |
+    v
+send_transfer_done() --> [TRANSFER_DONE frame]
 ```
-
----
 
 ### 4.4 Button Event Flow
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                      Button Event Flow                      │
-├─────────────────────────────────────────────────────────────┤
-│                                                             │
-│  User Presses Button                                        │
-│  (GPIO1.15 goes LOW)                                       │
-│         │                                                   │
-│         ▼                                                   │
-│  GPIO Interrupt                                             │
-│  (gpio1.15 IRQ handler)                                     │
-│         │                                                   │
-│         ▼                                                   │
-│  Button Driver                                              │
-│  ┌─────────────────────────────────────────────┐           │
-│  │  Start Timer                                │           │
-│  │  Wait for GPIO HIGH (release)               │           │
-│  │  Check timer value                          │           │
-│  │      └─ ≥ 1000ms → LONG_PRESS               │           │
-│  │      └─ < 1000ms → SHORT_PRESS              │           │
-│  └─────────────────────────────────────────────┘           │
-│         │                                                   │
-│         ▼                                                   │
-│  Recording Controller                                       │
-│  ┌─────────────────────────────────────────────┐           │
-│  │  if (LONG_PRESS) {                          │           │
-│  │      if (recording) {                       │           │
-│  │          rec_stop();                        │           │
-│  │      } else {                               │           │
-│  │          rec_start(current_mode);           │           │
-│  │      }                                      │
-│  │  } else if (SHORT_PRESS) {                  │           │
-│  │      if (recording) {                       │
-│  │          rec_add_mark(NULL);                │           │
-│  │      }                                      │
-│  │  }                                          │           │
-│  └─────────────────────────────────────────────┘           │
-│         │                                                   │
-│         ▼                                                   │
-│  Haptic Feedback                                            │
-│  (Pulse motor for confirmation)                             │
-│         │                                                   │
-│         ▼                                                   │
-│  Display Update                                             │
-│  (Show new state)                                           │
-│                                                             │
-└─────────────────────────────────────────────────────────────┘
+GPIO interrupt (P1.15, active-low)
+    |
+    v
+Input driver (own thread, priority 5)
+    |
+    v
+button_event_callback():
+    Map action to clip_event
+    clip_post_event() --> k_msgq_put + k_sem_give
+    |
+    v
+Main thread: clip_event_process()
+    Lookup transition_table[current_state][event]
+    execute_transition():
+        audio_start/stop_recording()
+        haptic_play_pattern()
+        display_post_event()
 ```
 
 ## 5. Thread Architecture
 
-### 5.1 Thread Responsibilities
+### 5.1 Thread Overview
 
-```c
-// Zephyr thread priorities: -15 (cooperative) to 7 (preemptive)
-
-┌─────────────────────────────────────────────────────────────┐
-│                      Thread Architecture                    │
-├─────────────────────────────────────────────────────────────┤
-│                                                             │
-│  Priority -15: Cooperative (never preempts)                 │
-│  ┌──────────────────────┐                                  │
-│  │ (None - use preemptive for responsiveness)              │
-│  └──────────────────────┘                                  │
-│                                                             │
-│  Priority 0: Main Thread                                   │
-│  ┌──────────────────────┐                                  │
-│  │ - Initialization     │                                  │
-│  │ - Status monitoring  │                                  │
-│  │ - Low priority tasks │                                  │
-│  └──────────────────────┘                                  │
-│                                                             │
-│  Priority 3: SD Card Thread                                │
-│  ┌──────────────────────┐                                  │
-│  │ - Async file I/O     │                                  │
-│  │ - Write operations   │                                  │
-│  └──────────────────────┘                                  │
-│                                                             │
-│  Priority 5: Audio Thread                                  │
-│  ┌──────────────────────┐                                  │
-│  │ - Audio capture      │                                  │
-│  │ - DSP processing     │                                  │
-│  │ - Opus encoding      │                                  │
-│  └──────────────────────┘                                  │
-│                                                             │
-│  Priority 6: Button Handler Thread                         │
-│  ┌──────────────────────┐                                  │
-│  │ - Button debouncing  │                                  │
-│  │ - Event detection    │                                  │
-│  └──────────────────────┘                                  │
-│                                                             │
-│  Priority 7: BLE Thread (Zephyr internal)                  │
-│  ┌──────────────────────┐                                  │
-│  │ - BLE stack          │                                  │
-│  │ - GATT operations    │                                  │
-│  └──────────────────────┘                                  │
-│                                                             │
-└─────────────────────────────────────────────────────────────┘
-```
-
-### 5.2 Thread Priorities
-
-| Thread | Priority | Stack Size | Preemptible |
-|--------|----------|------------|-------------|
-| Main | 0 | 8 KB | Yes |
-| SD Card | 3 | 4 KB | Yes |
-| Audio | 5 | 32 KB | Yes |
-| Button | 6 | 2 KB | Yes |
-| BLE | 7 | 8 KB | Yes (internal) |
+| Thread | Priority | Stack Size | Purpose |
+|--------|----------|------------|---------|
+| Main (event loop) | 0 | 6144 (CONFIG_MAIN_STACK_SIZE) | Event processing, state transitions, WiFi on/off |
+| Audio recording | 0 | 32768 (CONFIG_CLIP_AUDIO_STACK_SIZE) | DMIC read, DSP, Opus encode, storage write |
+| AT Server | 7 | 4096 (CONFIG_CLIP_AT_SERVER_STACK_SIZE) | AT command parsing and dispatch |
+| Transfer | 5 | 16384 (CONFIG_CLIP_TRANSFER_STACK_SIZE) | File transfer (read + send chunks) |
+| UDP Server | 5 | 4096 (CONFIG_CLIP_UDP_THREAD_STACK_SIZE) | WiFi UDP packet handling |
+| Input driver | 5 | 512 (CONFIG_INPUT_GPIO_BUTTON_THREAD_STACK_SIZE) | Button debounce and event detection |
+| Display UI | - | - | Zephyr display subsystem thread |
+| BLE stack | - | 4096 (CONFIG_BT_RX_STACK_SIZE) | Zephyr BLE internal |
+| WPA supplicant | - | 10240 (CONFIG_WIFI_NM_WPA_SUPPLICANT_THREAD_STACK_SIZE) | WiFi auth |
 
 **Priority Rationale:**
-- **BLE (7)**: Highest priority for reliable communication
-- **Button (6)**: Responsive UI
-- **Audio (5)**: Real-time processing, but tolerates brief delays
-- **SD Card (3)**: Important but not time-critical
-- **Main (0)**: Background tasks, monitoring
+- **AT Server (7)**: Highest app priority for responsive command processing
+- **Transfer (5)** / **UDP (5)** / **Input (5)**: Mid-priority for I/O operations
+- **Audio (0)** / **Main (0)**: Audio needs large stack; main needs stack for WiFi ops
 
-### 5.3 Inter-Thread Communication
-
-**Semaphores (k_sem):**
-- Audio buffer ready signal
-- SD write completion
-- BLE send completion
-
-**Work Queues (k_work):**
-- Defer work from ISR
-- Display updates
-- Progress notifications
+### 5.2 Inter-Thread Communication
 
 **Message Queues (k_msgq):**
-- Audio data to encoder
-- Commands to handler
+- `clip_ev_msgq`: Device events (button -> main thread), 8 items
+- `at_ctx.msgq`: AT commands (BLE/UDP -> AT server thread), 10 items
 
-**Example: Audio Thread Communication**
-```c
-// Producer (ISR)
-void i2s_callback(const struct device *dev, void *user_data)
-{
-    k_sem_give(&audio_data_ready);
-}
-
-// Consumer (Audio Thread)
-void audio_thread(void)
-{
-    while (1) {
-        k_sem_take(&audio_data_ready, K_FOREVER);
-        process_audio();
-    }
-}
-```
-
-### 5.4 Synchronization Primitives
-
-**Memory Slabs (k_mem_slab):**
-- Fixed-size audio blocks
-- Efficient allocation
+**Semaphores (k_sem):**
+- `event_notify_sem`: Main loop wake-up (1 slot, binary)
+- `audio_start_sem`: Audio thread start/pause/resume signal
+- `stop_done_sem`: Audio thread stop-completion signal
+- `transfer_trigger_sem`: Transfer thread start signal
+- `file_closed_sem`: Storage -> transfer coordination
 
 **Mutexes (k_mutex):**
-- Session manager access
-- Configuration access
-- Display access
+- `audio_state_mutex`: Protects recording_active, is_paused, session_id
+- `audio_energy_mutex`: Protects energy level and history
 
-**Atomic Variables:**
-- State flags
-- Progress counters
-- Battery level
+**Atomic Variables (atomic_t):**
+- `g_state`: Device state (lock-free read via `atomic_get`)
+- `g_boost_refcnt`: CPU boost reference count
 
-**Example: Safe State Access**
-```c
-static enum device_state current_state;
-static k_mutex state_lock;
+**Work Queues (k_work):**
+- `reboot_work`: Delayed reboot (allows AT response to be sent first)
 
-enum device_state state_get_current(void)
-{
-    enum device_state state;
-    k_mutex_lock(&state_lock, K_FOREVER);
-    state = current_state;
-    k_mutex_unlock(&state_lock);
-    return state;
-}
-```
+## 6. State Machine Design
 
-## 6. Memory Architecture
-
-### 6.1 Memory Layout
-
-**nRF5340 Total SRAM: 512KB**
-- 64KB allocated to BLE core (dedicated)
-- **448KB available for application**
+### 6.1 Device State Machine
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                 Application SRAM (448 KB)                   │
-├─────────────────────────────────────────────────────────────┤
-│                                                             │
-│  ┌───────────────────────────────────────────────────┐     │
-│  │  Thread Stacks (96 KB)                            │     │
-│  │  ├─ Main: 16 KB                                  │     │
-│  │  ├─ SD Card: 8 KB                                │     │
-│  │  ├─ Audio: 64 KB                                 │     │
-│  │  ├─ Button: 4 KB                                 │     │
-│  │  └─ BLE: 4 KB (application callbacks)            │     │
-│  └───────────────────────────────────────────────────┘     │
-│                                                             │
-│  ┌───────────────────────────────────────────────────┐     │
-│  │  Audio Buffer (64 KB)                             │     │
-│  │  └─ 32 blocks × 2 KB each                        │     │
-│  └───────────────────────────────────────────────────┘     │
-│                                                             │
-│  ┌───────────────────────────────────────────────────┐     │
-│  │  Codec State (30 KB)                              │     │
-│  │  ├─ Opus Encoder: 20 KB                           │     │
-│  │  └─ SpeexDSP: 10 KB                              │     │
-│  └───────────────────────────────────────────────────┘     │
-│                                                             │
-│  ┌───────────────────────────────────────────────────┐     │
-│  │  Buffers (24 KB)                                  │     │
-│  │  ├─ SD Card write: 8 KB                           │     │
-│  │  ├─ Protocol buffer: 8 KB                         │     │
-│  │  └─ Transfer chunk: 8 KB (configurable)           │     │
-│  └───────────────────────────────────────────────────┘     │
-│                                                             │
-│  ┌───────────────────────────────────────────────────┐     │
-│  │  Heap / Dynamic (64 KB)                           │     │
-│  │  └─ Malloc pool                                   │     │
-│  └───────────────────────────────────────────────────┘     │
-│                                                             │
-│  ┌───────────────────────────────────────────────────┐     │
-│  │  Global Data (~30 KB)                             │     │
-│  │  ├─ Session data: 10 KB                           │     │
-│  │  ├─ Configuration: 5 KB                           │     │
-│  │  ├─ State machine: 2 KB                           │     │
-│  │  └─ Other: 13 KB                                  │     │
-│  └───────────────────────────────────────────────────┘     │
-│                                                             │
-│  ┌───────────────────────────────────────────────────┐     │
-│  │  Reserved (~140 KB)                               │     │
-│  └───────────────────────────────────────────────────┘     │
-│                                                             │
-└─────────────────────────────────────────────────────────────┘
-
-┌─────────────────────────────────────────────────────────────┐
-│                  BLE Core SRAM (64 KB)                      │
-│                        (Dedicated)                          │
-└─────────────────────────────────────────────────────────────┘
+  +----------------+
+  | UNINITIALIZED  |
+  +-------+--------+
+          | boot
+          v
+  +-------+--------+  START      +------------+
+  |      IDLE      |------------>| RECORDING  |
+  +---+----+----+--+            +-----+------+
+      |    |    |                      |
+      |    |    |  STOP                 | STOP
+      |    |    +<---------------------+
+      |    |
+      |    |  WIFI_ON
+      |    v
+      |  +---------------+  WIFI_OFF
+      |  |   WIFI_SYNC    |<----------+
+      |  +---------------+
+      |
+      |  (TRANSMITTING managed by transfer subsystem, not device state)
+      |
+      |  PAUSE (during RECORDING)
+      v
+  +---+----+----+--+
+  |    PAUSED     |  RESUME -> RECORDING
+  +------+--------+  STOP -> IDLE
+         |
+         | Error
+         v
+  +------+--------+
+  |     ERROR     |  START -> IDLE
+  +---------------+
 ```
 
-### 6.2 Buffer Management
+**Valid Transitions:**
 
-**Audio Buffer (Circular Buffer):**
-```c
-#define AUDIO_BLOCK_SIZE  2048  // frames
-#define AUDIO_BLOCK_COUNT 8
-#define AUDIO_BUFFER_SIZE (AUDIO_BLOCK_SIZE * AUDIO_BLOCK_COUNT)
+| From | To | Trigger | Side Effects |
+|------|-----|---------|-------------|
+| IDLE | RECORDING | START | audio_start, haptic, display rec |
+| RECORDING | IDLE | STOP | audio_stop, haptic, display idle |
+| RECORDING | PAUSED | PAUSE | audio_pause, haptic, display pause |
+| PAUSED | RECORDING | RESUME | audio_resume, haptic, display rec |
+| PAUSED | IDLE | STOP | audio_stop, haptic, display idle |
+| IDLE | WIFI_SYNC | WIFI_ON | wifi_on() |
+| WIFI_SYNC | IDLE | WIFI_OFF | wifi_off() |
+| ERROR | IDLE | START | (transition only) |
+| Any | (same) | MARK | audio_add_bookmark, display mark |
+| Any | (same) | STATUS_SHOW | display status |
+| Any | (same) | POWER_OFF_SHOW | display power-off screen |
+| Any | (same) | POWER_OFF_EXEC | haptic, PMIC ship mode |
 
-struct audio_buffer {
-    int16_t data[AUDIO_BUFFER_SIZE];
-    size_t read_pos;
-    size_t write_pos;
-    k_sem sem_ready;
-};
-```
+### 6.2 Transfer State Machine
 
-**Memory Pool (Dynamic Blocks):**
-```c
-#define BLOCK_SIZE 1024
-#define BLOCK_COUNT 16
-
-K_MEM_POOL_DEFINE(audio_pool, BLOCK_SIZE, BLOCK_SIZE, BLOCK_COUNT, 4);
-
-void *allocate_block(void)
-{
-    return k_mem_pool_malloc(&audio_pool, BLOCK_SIZE);
-}
-```
-
-### 6.3 Memory Pools
-
-**Audio Blocks:**
-- Size: 2 KB
-- Count: 16
-- Total: 32 KB
-- Purpose: Audio data pipeline
-
-**SD Card Blocks:**
-- Size: 1 KB
-- Count: 4
-- Total: 4 KB
-- Purpose: File write buffering
-
-### 6.4 Stack Sizing
-
-**Thread Stack Analysis:**
-
-| Thread | Utilization | Max | Reserved |
-|--------|-------------|-----|----------|
-| Main | ~6 KB | 16 KB | 10 KB headroom |
-| Audio | ~48 KB | 64 KB | 16 KB headroom |
-| SD Card | ~4 KB | 8 KB | 4 KB headroom |
-| Button | ~2 KB | 4 KB | 2 KB headroom |
-| BLE callbacks | ~2 KB | 4 KB | 2 KB headroom |
-
-**Stack Usage Analysis:**
-- Audio thread has largest stack (Opus + SpeexDSP call chains)
-- Monitor with `CONFIG_STACK_SENTINEL`
-- Adjust based on runtime analysis
-
-## 7. State Machine Design
-
-### 7.1 Global State Machine
+Managed independently by the transfer subsystem. Does not affect device state directly.
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                    Device State Machine                     │
-├─────────────────────────────────────────────────────────────┤
-│                                                             │
-│   ┌──────────────┐                                         │
-│   │UNINITIALIZED │                                         │
-│   └──────┬───────┘                                         │
-│          │ boot_complete                                   │
-│          ▼                                                 │
-│   ┌──────────────┐  long_press/AT+START  ┌──────────┐    │
-│   │     IDLE     │─────────────────────────→│RECORDING  │    │
-│   └──────┬───────┘                         └─────┬────┘    │
-│          │                                       │         │
-│          │ AT+DOWNLOAD                          │ long_press/AT+STOP
-│          │                                       │         │
-│          ▼                                       │         │
-│   ┌──────────────┐                         ┌─────┴─────┐    │
-│   │TRANSMITTING  │←────────────────────────│    IDLE    │    │
-│   └──────┬───────┘    AT+PAUSE             └───────────┘    │
-│          │                                                       │
-│          │ AT+PAUSE                                    │        │
-│          ▼                                                       │
-│   ┌──────────────┐                                         │
-│   │    PAUSED    │────────────────┐                        │
-│   └──────┬───────┘                 │                        │
-│          │                         │                        │
-│          │ AT+RESUME               │ AT+CANCEL/Error        │
-│          │                         ▼                        │
-│          └────────────►TRANSMITTING          IDLE            │
-│                              │                │               │
-│                              │ completion/    │               │
-│                              │ Error          │               │
-│                              ▼                │               │
-│                           ┌─────┴─────────────┘               │
-│                           │     IDLE                         │
-│                           └─────────────────────────────────┘ │
-│                                                             │
-└─────────────────────────────────────────────────────────────┘
+  +--------+  transfer_start()  +---------------+
+  |  IDLE  |------------------->| TRANSMITTING  |
+  +---+----+                    +---+-----+-----+
+      ^                             |       |
+      |                             |       | cancel
+      |        transfer_cancel()    |       |
+      +-----------------------------+       |
+      |                                     |
+      |        completion                   v
+      +------------------------------+  ERROR  |
+                                     +--------+
 ```
 
-**State Transitions:**
-
-| From | To | Trigger | Action |
-|------|-----|---------|--------|
-| UNINITIALIZED | IDLE | Boot complete | Init complete |
-| IDLE | RECORDING | Button long press, AT+START | Create session, start audio |
-| RECORDING | IDLE | Button long press, AT+STOP | Finalize session, stop audio |
-| IDLE | TRANSMITTING | AT+DOWNLOAD | Open file, start transfer |
-| TRANSMITTING | PAUSED | AT+PAUSE, disconnect | Pause transfer |
-| PAUSED | TRANSMITTING | AT+RESUME | Resume transfer |
-| TRANSMITTING | IDLE | Completion, AT+CANCEL | Close file |
-| Any | ERROR | Error condition | Report error |
-| ERROR | IDLE | Recovery | Reset state |
-
-### 7.2 Recording State Machine
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    Recording State Machine                  │
-├─────────────────────────────────────────────────────────────┤
-│                                                             │
-│    ┌─────────┐  long_press (≥1s) / AT+START    ┌─────────┐ │
-│    │   IDLE  │ ──────────────────────────────> │RECORDING│ │
-│    └─────────┘                                   └────┬────┘ │
-│         ▲                                             │     │
-│         │          long_press (≥1s) / AT+STOP          │     │
-│         │ <───────────────────────────────────────────┘     │
-│         │                                                   │
-│         │                                                   │
-│    short_press (<1s)  ── Add bookmark (only during RECORDING)
-│                                                             │
-└─────────────────────────────────────────────────────────────┘
-```
-
-**Recording-Specific Actions:**
-- **IDLE → RECORDING**:
-  1. Create session directory
-  2. Initialize session.json
-  3. Start audio pipeline
-  4. Enable button bookmarks
-  5. Update display
-
-- **RECORDING → IDLE**:
-  1. Stop audio pipeline
-  2. Close all files
-  3. Finalize session.json
-  4. Disable button bookmarks
-  5. Update display
-
-- **During RECORDING (short press)**:
-  1. Get current timestamp
-  2. Calculate offset
-  3. Add bookmark to marks.bin
-  4. Send notification
-  5. Haptic feedback
-
-### 7.3 Transfer State Machine
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    Transfer State Machine                   │
-├─────────────────────────────────────────────────────────────┤
-│                                                             │
-│    ┌──────────┐      AT+DOWNLOAD=file      ┌─────────────┐  │
-│    │   IDLE   │ ──────────────────────────>│TRANSMITTING │  │
-│    └──────────┘                             └──────┬──────┘  │
-│         ▲                                         │         │
-│         │         AT+PAUSE / Disconnect            │         │
-│         │                 │                       │         │
-│         │                 ▼                       │         │
-│         │          ┌───────────┐                  │         │
-│         │          │  PAUSED   │                  │         │
-│         │          └─────┬─────┘                  │         │
-│         │                │                        │         │
-│         │    ┌───────────┴────────────┐           │         │
-│         │    │                        │           │         │
-│         │    ▼                        ▼           │         │
-│         │ AT+RESUME              AT+CANCEL       │         │
-│         │    │                        │          │         │
-│         │    └────────────────────────┼──────────┘         │
-│         │                             │                    │
-│         └─────────────────────────────┼────────────────────┘
-│                                       │
-│         ┌─────────────────────────────┴────────────────┐   │
-│         │                  Completion / Error          │   │
-│         ▼                                               │   │
-│    ┌──────────┐                                         │   │
-│    │   IDLE   │<────────────────────────────────────────┘   │
-│    └──────────┘                                              │
-│                                                             │
-└─────────────────────────────────────────────────────────────┘
-```
-
-**Transfer-Specific Actions:**
-
-- **IDLE → TRANSMITTING**:
-  1. Open file
-  2. Get file size
-  3. Initialize transfer context
-  4. Send start response
-
-- **During TRANSMITTING**:
-  1. Read chunk (chunk_size bytes)
-  2. Send via BLE notify
-  3. Update progress
-  4. Check for pause command
-  5. Repeat until EOF
-
-- **TRANSMITTING → PAUSED**:
-  1. Stop sending data
-  2. Keep file open
-  3. Save current position
-
-- **PAUSED → TRANSMITTING**:
-  1. Resume sending from saved position
-  2. Continue until EOF
-
-- **TRANSMITTING/PAUSED → IDLE**:
-  1. Close file
-  2. Create .transferred marker
-  3. Send completion response
-  4. Clear transfer context
-
-### 7.4 BLE Connection State Machine
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                   BLE Connection State Machine              │
-├─────────────────────────────────────────────────────────────┤
-│                                                             │
-│    ┌─────────────┐                                         │
-│    │DISCONNECTED │<─────────────────────────┐              │
-│    └──────┬──────┘                          │              │
-│           │ Connect / Auto-advertise        │              │
-│           ▼                                 │              │
-│    ┌─────────────┐                         │              │
-│    │ CONNECTING  │                         │              │
-│    └──────┬──────┘                         │              │
-│           │ Connected                      │              │
-│           ▼                                 │              │
-│    ┌─────────────┐   Bonding required?   ┌──┴──────┐     │
-│    │ CONNECTED   │ ────────────────────>│PAIRING  │     │
-│    └──────┬──────┘                      └─────┬────┘     │
-│           │                                    │          │
-│           │ Paired                             │          │
-│           ▼                                    │          │
-│    ┌─────────────┐                            │          │
-│    │   BONDED    │<───────────────────────────┘          │
-│    └──────┬──────┘                                        │
-│           │                                               │
-│           │ Disconnect / AT+PAIR=reset                    │
-│           └───────────────────────────────────────────────┘
-│                                                             │
-└─────────────────────────────────────────────────────────────┘
-```
-
-**Connection-Specific Actions:**
-
-- **DISCONNECTED**:
-  - Auto-advertise
-  - Wait for connection
-
-- **CONNECTED**:
-  - Check if bonded
-  - Start pairing if needed
-  - Notify app of connection
-
-- **PAIRING**:
-  - Execute LE Secure Connections
-  - Wait for pairing completion
-  - Store bond information
-
-- **BONDED**:
-  - Full access to commands
-  - Allow file transfer
-  - Auto-reconnect on disconnect
-
-## 8. Error Handling Strategy
-
-### 8.1 Error Categories
-
-| Category | Examples | Severity | Recovery |
-|----------|----------|----------|----------|
-| Audio Overflow | PDM buffer overflow | Low | Skip frame |
-| Audio Underrun | Encoder starvation | Medium | Stop recording |
-| SD Card Error | Write failure | High | Stop recording, preserve data |
-| BLE Disconnect | Connection lost | Medium | Pause transfer, reconnect |
-| Low Battery | < 10% charge | High | Prevent new recording |
-| Storage Full | No space | High | Prevent recording |
-| File Not Found | Session missing | Low | Return error |
-| Encoder Error | Opus failure | High | Stop recording |
-
-### 8.2 Error Detection
-
-**Audio Errors:**
-```c
-// Detect overflow in ISR
-if (i2s_status & I2S_STATUS_OVERFLOW) {
-    error_count.audio_overflow++;
-    // Skip current frame
-}
-```
-
-**SD Card Errors:**
-```c
-int result = fs_write(&file, data, len);
-if (result < 0) {
-    error_set(ERROR_SD_WRITE);
-    return result;
-}
-```
-
-**BLE Errors:**
-```c
-int result = bt_gatt_notify(conn, &tx_params);
-if (result == -EIO) {
-    error_set(ERROR_BLE_DISCONNECT);
-    transfer_pause();
-}
-```
-
-### 8.3 Error Recovery
-
-**Graceful Degradation:**
-- Audio overflow: Skip frame, continue
-- Transfer paused: Auto-resume on reconnect
-- Low battery: Allow recording to complete, prevent new
-
-**Resource Cleanup:**
-- On recording error: Close files, finalize session
-- On transfer error: Delete partial file, return to IDLE
-- On memory error: Reboot device
-
-**Error Reporting:**
-- LOG_ERR() for debugging
-- JSON error response to app
-- Display error state on screen
-
-### 8.4 Error Reporting
-
-**Logging:**
-```c
-LOG_ERR("SD card write error: %d", result);
-```
-
-**JSON Response:**
-```json
-{
-  "ok": false,
-  "error": "SD card write error"
-}
-```
-
-**Display:**
-```
-State: ERROR
-Error: SD card error
-```
-
-### 8.5 Graceful Degradation
-
-**Recording with Issues:**
-- Encountered SD card error → Stop recording, preserve what was recorded
-- Encountered encoder error → Stop recording, keep valid data
-- Low battery → Allow current recording to finish
-
-**Transfer with Issues:**
-- BLE disconnect → Pause transfer, wait for reconnect
-- Reconnect timeout → Return to IDLE, don't create .transferred
-- App cancel → Clean up, don't mark as transferred
-
-## 9. User Interface Implementation
-
-### 9.1 Button Input Handler
-
-**Device Tree Configuration:**
-```dts
-/ {
-    gpio_keys {
-        compatible = "gpio-keys";
-        user_button: button_0 {
-            label = "User Button";
-            gpios = <&gpio1 15 GPIO_ACTIVE_LOW>;
-            long-press-ms = <1000>;
-        };
-    };
-};
-```
-
-**Event Definitions:**
-```c
-#define BUTTON_SHORT_PRESS  0  // < 1 second
-#define BUTTON_LONG_PRESS   1  // >= 1 second
-```
-
-**Callback Registration:**
-```c
-static void button_callback(enum button_event event, void *user_data)
-{
-    switch (event) {
-    case BUTTON_SHORT_PRESS:
-        if (state_get_current() == STATE_RECORDING) {
-            rec_add_mark(NULL);
-        }
-        break;
-    case BUTTON_LONG_PRESS:
-        if (state_get_current() == STATE_RECORDING) {
-            rec_stop();
-        } else {
-            rec_start(current_config.mode);
-        }
-        break;
-    }
-}
-
-void init_button(void)
-{
-    button_set_callback(BUTTON_SHORT_PRESS, button_callback, NULL);
-    button_set_callback(BUTTON_LONG_PRESS, button_callback, NULL);
-}
-```
-
----
-
-### 9.2 Display System
-
-#### 9.2.1 UART Serial Output (Initial Implementation)
-
-Display content via serial logging for debugging:
-
-```c
-void display_update(rec_state_t state, battery_info_t *batt, uint32_t rec_time)
-{
-    LOG_INF("========================================");
-    LOG_INF("      reSpeaker Clip");
-    LOG_INF("");
-    LOG_INF("  State: %s", state_to_string(state));
-    if (state == RECORDING) {
-        uint32_t hours = rec_time / 3600;
-        uint32_t mins = (rec_time % 3600) / 60;
-        uint32_t secs = rec_time % 60;
-        LOG_INF("  [REC] %02u:%02u:%02u", hours, mins, secs);
-    }
-    LOG_INF("");
-    LOG_INF("  Batt: %u%% %s", batt->percent,
-            batt->charging ? "[CHARGING]" : "");
-    LOG_INF("  Mode: %s", mode_to_string(current_mode));
-    LOG_INF("  %s %s", bitrate_to_string(current_bitrate),
-            channels_to_string(current_channels));
-    LOG_INF("========================================");
-}
-```
-
-**Output Example:**
-```
-========================================
-      reSpeaker Clip
-
-  State: RECORDING
-  [REC] 00:05:23
-
-  Batt: 85% [CHARGING]
-  Mode: Enhanced
-  48kHz Stereo
-========================================
-```
-
----
-
-#### 9.2.2 OLED Display Layout (Future Implementation)
-
-**CH1115 Specifications:**
-- Controller: CH1115
-- Resolution: 88 × 48 pixels
-- Interface: I2C
-- Address: 0x3c
-- Font: 6 × 8 pixels (typical)
-- Rows: 48 / 8 = 6 text rows
-- Columns: 88 / 6 = ~14 characters
-
-**Display Layout:**
-```
-Row 0: reSpeaker Clip    (Header)
-Row 1: (empty)
-Row 2: State: RECORDING  (Current state)
-Row 3: [REC] 00:05:23    (Icon + Time)
-Row 4: (empty)
-Row 5: Batt: 85% ⚡      (Battery + charging)
-Row 6: Mode: Enhanced    (Settings)
-Row 7: 48kHz Stereo      (Bitrate/channels)
-```
-
-**Display Update Function:**
-```c
-void oled_display_update(rec_state_t state,
-                        battery_info_t *batt,
-                        uint32_t rec_time)
-{
-    char line[16];
-
-    // Row 0: Header
-    oled_write(0, 0, "reSpeaker Clip");
-
-    // Row 2: State
-    snprintf(line, sizeof(line), "State: %s",
-             state_to_string_short(state));
-    oled_write(0, 2, line);
-
-    // Row 3: Time (if recording)
-    if (state == RECORDING) {
-        uint32_t hours = rec_time / 3600;
-        uint32_t mins = (rec_time % 3600) / 60;
-        uint32_t secs = rec_time % 60;
-        snprintf(line, sizeof(line), "[REC] %02u:%02u:%02u",
-                 hours, mins, secs);
-        oled_write(0, 3, line);
-    }
-
-    // Row 5: Battery
-    snprintf(line, sizeof(line), "Batt: %u%% %s",
-             batt->percent,
-             batt->charging ? "+" : "");
-    oled_write(0, 5, line);
-
-    // Row 6: Mode
-    snprintf(line, sizeof(line), "Mode: %s",
-             mode_to_string(current_mode));
-    oled_write(0, 6, line);
-
-    // Row 7: Bitrate/Channels
-    snprintf(line, sizeof(line), "%ukHz %s",
-             sample_rate / 1000,
-             channels_to_string_short(current_channels));
-    oled_write(0, 7, line);
-}
-```
-
----
-
-### 9.3 Display Update Triggers
-
-Display updates on:
-- State changes (immediate)
-- Recording time increment (every second)
-- Battery level change (> 5% change)
-- Mode/settings changes (immediate)
-- Error conditions (immediate)
-
-**Implementation:**
-```c
-static struct k_work display_work;
-
-static void display_work_handler(struct k_work *work)
-{
-    display_update(current_state, &battery_info, recording_time);
-}
-
-void schedule_display_update(void)
-{
-    k_work_submit(&display_work);
-}
-
-// Timer for periodic updates
-void display_timer_callback(struct k_timer *timer)
-{
-    schedule_display_update();
-}
-
-K_TIMER_DEFINE(display_timer, display_timer_callback, NULL);
-
-// Start 1-second periodic updates
-void display_start_periodic(void)
-{
-    k_timer_start(&display_timer, K_SECONDS(1), K_SECONDS(1));
-}
-```
-
----
-
-### 9.4 Haptic Feedback Patterns
-
-**Current Implementation (Logging):**
-```c
-void haptic_feedback(enum haptic_event event)
-{
-    switch (event) {
-    case HAPTIC_RECORDING_START:
-        LOG_INF("[HAPTIC] Recording start: 100ms pulse");
-        haptic_pulse(100);  // Currently logs, future: motor control
-        break;
-    case HAPTIC_RECORDING_STOP:
-        LOG_INF("[HAPTIC] Recording stop: 50ms double pulse");
-        haptic_double_pulse(50, 50);  // Currently logs
-        break;
-    case HAPTIC_BOOKMARK:
-        LOG_INF("[HAPTIC] Bookmark: 30ms triple pulse");
-        haptic_triple_pulse(30, 30);  // Currently logs
-        break;
-    case HAPTIC_ERROR:
-        LOG_INF("[HAPTIC] Error: 200ms long pulse");
-        haptic_pulse(200);  // Currently logs
-        break;
-    }
-}
-```
-
-**Future Implementation (Motor Control):**
-```c
-// Same API, but haptic_pulse() will actually control motor
-void haptic_pulse(uint16_t duration_ms)
-{
-    // Enable motor via PMIC GPIO2
-    gpio_set_pin(PMIC_GPIO_MOTOR, 1);
-    k_sleep(K_MSEC(duration_ms));
-    gpio_set_pin(PMIC_GPIO_MOTOR, 0);
-}
-```
-
-## 10. Integration Points
-
-### 10.1 Zephyr RTOS Integration
-
-**Kconfig Integration:**
-```kconfig
-source "Kconfig.zephyr"
-
-# Audio Configuration
-config AUDIO_DMIC_MODE
-    int "DMIC Mode"
-    default 0
-
-config SAMPLE_RATE
-    int "Sample Rate"
-    default 16000
-
-# Opus Configuration
-config OPUS_BITRATE
-    int "Opus Bitrate"
-    default 24000
-
-# Recording Configuration
-config RECORDING_MODE
-    int "Recording Mode"
-    default 0  # 0=normal, 1=enhanced
-```
-
-**Devicetree Integration:**
-```dts
-&pdm0 {
-    status = "okay";
-    label = "PDM_0";
-};
-
-&i2c1 {
-    status = "okay";
-    pmic: npm1300@6b {
-        compatible = "nordic,npm1300";
-        reg = <0x6b>;
-        label = "NPM1300";
-    };
-};
-```
-
----
-
-### 10.2 Opus Codec Integration
-
-**Header:**
-```c
-#include <opus/opus.h>
-```
-
-**Initialization:**
-```c
-OpusEncoder *opus_enc;
-int opus_error;
-
-opus_enc = opus_encoder_create(SAMPLE_RATE,
-                                CHANNELS,
-                                OPUS_APPLICATION_VOIP,
-                                &opus_error);
-
-opus_encoder_ctl(opus_enc, OPUS_SET_BITRATE(bitrate));
-opus_encoder_ctl(opus_enc, OPUS_SET_COMPLEXITY(complexity));
-```
-
-**Encoding:**
-```c
-uint8_t opus_out[MAX_PACKET_SIZE];
-opus_int32 pcm[MAX_FRAME_SIZE];
-
-// Read PCM samples...
-read_pcm_samples(pcm, FRAME_SIZE);
-
-// Encode
-int len = opus_encode(opus_enc,
-                      pcm,
-                      FRAME_SIZE,
-                      opus_out,
-                      MAX_PACKET_SIZE);
-
-// Write opus_out (len bytes) to file
-```
-
----
-
-### 10.3 SpeexDSP Integration
-
-**Header:**
-```c
-#include <speex/speex_preprocess.h>
-```
-
-**Initialization:**
-```c
-SpeexPreprocessState *st;
-
-st = speex_preprocess_init(FRAME_SIZE, SAMPLE_RATE);
-
-// Set parameters
-int noise_suppress = 30;  // dB
-speex_preprocess_ctl(st, SPEEX_PREPROCESS_SET_NOISE_SUPPRESS,
-                      &noise_suppress);
-
-int agc_level = 8000;
-speex_preprocess_ctl(st, SPEEX_PREPROCESS_SET_AGC_TARGET,
-                      &agc_level);
-```
-
-**Processing:**
-```c
-// For each frame
-speex_preprocess_run(st, pcm_frame);
-```
-
----
-
-### 10.4 BLE Stack Integration
-
-**Service Registration:**
-```c
-static struct bt_uuid_128 ble_service_uuid = {
-    .uuid = BT_UUID_INIT_128(
-        0x9E, 0xCC, 0x4D, 0x24, 0x0E, 0xE5, 0xA9, 0xE0,
-        0x93, 0xF3, 0xA3, 0xB5, 0x01, 0x00, 0x40, 0x6E
-    )
-};
-
-BT_GATT_SERVICE_DEFINE(clip_svc,
-    BT_GATT_CHARACTERISTIC(
-        &cmd_recv_uuid.uuid,
-        BT_GATT_CHRC_WRITE,
-        BT_GATT_PERM_WRITE,
-        NULL, cmd_write_cb, NULL
-    ),
-    BT_GATT_CHARACTERISTIC(
-        &resp_send_uuid.uuid,
-        BT_GATT_CHRC_NOTIFY,
-        BT_GATT_PERM_READ,
-        NULL, NULL, NULL
-    ),
-    BT_GATT_CHARACTERISTIC(
-        &file_data_uuid.uuid,
-        BT_GATT_CHRC_NOTIFY,
-        BT_GATT_PERM_READ,
-        NULL, NULL, NULL
-    )
-);
-```
-
-**Write Callback:**
-```c
-static ssize_t cmd_write_cb(struct bt_conn *conn,
-                            const struct bt_gatt_attr *attr,
-                            const void *buf, uint16_t len,
-                            uint16_t offset, uint8_t flags)
-{
-    char cmd[512];
-    char *response = NULL;
-
-    memcpy(cmd, buf, len);
-    cmd[len] = '\0';
-
-    // Process command
-    int result = cmd_handler_process(cmd, &response);
-
-    // Send response
-    ble_send_response(response);
-
-    free(response);
-    return len;
-}
-```
-
-## 11. Configuration Management
-
-### 11.1 Kconfig System (Build-Time)
-
-**Configuration Options:**
-```kconfig
-# Audio Configuration
-config AUDIO_SAMPLE_RATE
-    int "Audio Sample Rate (Hz)"
-    default 16000
-    range 8000 48000
-
-config_AUDIO_CHANNELS
-    int "Audio Channels"
-    default 1  # Mono
-    range 1 2
-
-# Opus Configuration
-config_OPUS_BITRATE
-    int "Opus Bitrate (bps)"
-    default 24000
-
-config_OPUS_COMPLEXITY
-    int "Opus Complexity (0-10)"
-    default 5
-    range 0 10
-
-# SpeexDSP Configuration
-config_SPEEXDSP_NOISE_SUPPRESS
-    int "Noise Suppression (dB)"
-    default 0
-    range 0 60
-```
-
-### 11.2 Runtime Configuration (NVS)
-
-**NVS Keys:**
-```c
-// NVS key definitions
-#define NVS_BITRATE     0x01
-#define NVS_COMPLEXITY  0x02
-#define NVS_MODE        0x03
-#define NVS_NOISE       0x04
-#define NVS_DEREVERB    0x05
-#define NVS_AGC         0x06
-#define NVS_CHUNKSIZE   0x07
-#define NVS_AUTODEL     0x08
-```
-
-**Load Configuration:**
-```c
-struct config {
-    uint16_t bitrate;
-    uint8_t complexity;
-    char mode[8];
-    uint8_t noise_suppress;
-    char dereverb[16];
-    char agc[16];
-    uint16_t chunk_size;
-    char autodel[8];
-};
-
-int config_load(struct config *cfg)
-{
-    // Load from NVS or use defaults
-    if (nvs_read(NVS_BITRATE, &cfg->bitrate, sizeof(cfg->bitrate)) != 0) {
-        cfg->bitrate = CONFIG_OPUS_BITRATE;  // Default
-    }
-    // ... load other values
-    return 0;
-}
-```
-
-**Save Configuration:**
-```c
-int config_save(const struct config *cfg)
-{
-    nvs_write(NVS_BITRATE, &cfg->bitrate, sizeof(cfg->bitrate));
-    // ... save other values
-    return 0;
-}
-```
-
-### 11.3 Factory Defaults
-
-```c
-static const struct config factory_defaults = {
-    .bitrate = 24000,
-    .complexity = 5,
-    .mode = "normal",
-    .noise_suppress = 0,
-    .dereverb = "off",
-    .agc = "off",
-    .chunk_size = 500,
-    .autodel = "off",
-};
-```
-
-### 11.4 Factory Reset Implementation
-
-```c
-int config_factory_reset(void)
-{
-    // Clear all NVS
-    nvs_clear();
-
-    // Restore defaults
-    config_save(&factory_defaults);
-
-    // Clear BLE bonds
-    bt_unpair(BT_ID_DEFAULT, NULL);
-
-    // Delete all recordings
-    fs_delete_all_sessions();
-
-    // Reboot
-    sys_reboot(SYS_REBOOT_COLD);
-
-    return 0;
-}
-```
-
-## 12. Testing Architecture
-
-### 12.1 Unit Testing Strategy
-
-**Frameworks:**
-- Zephyr Ztest: Built-in unit testing
-- Unity: Lightweight C test framework
-
-**Testable Modules:**
-- AT command parser
-- JSON serializer/deserializer
-- Bookmark manager
-- Configuration manager
-
-**Example Test:**
-```c
-void test_at_parser_exec(void)
-{
-    struct at_command cmd;
-    int result = at_parser_parse("AT+GSTAT", &cmd);
-
-    zassert_equal(result, 0, "Parse failed");
-    zassert_str_equal(cmd.name, "GSTAT", "Wrong command");
-    zassert_equal(cmd.type, AT_EXEC, "Wrong type");
-}
-```
-
-### 12.2 Integration Testing
-
-**Test Scenarios:**
-1. Full recording cycle (start → record → stop)
-2. File transfer (download entire session)
-3. Command during transfer (non-blocking)
-4. Bookmark during recording
-5. Auto-delete policy
-
-**Test Environment:**
-- Real hardware (reSpeaker Clip)
-- SD card
-- BLE sniffer (nRF Sniffer or Wireshark)
-
-### 12.3 System Testing (tests/clip/)
-
-**Multi-Image Test Suite:**
-- BLE connection test
-- Button input test
-- SD card test
-- Microphone test
-
-**Running Tests:**
-```sh
-west build --build-dir build-test --board clip/nrf5340/cpuapp --pristine tests/clip
-west flash --build-dir build-test && nrfutil device reset
-```
-
-### 12.4 Performance Testing
-
-**Metrics:**
-- Audio latency (PDM → Opus output)
-- Transfer speed (KB/s)
-- Memory usage (heap, stack)
-- Battery current (mA)
-
-**Tools:**
-- Zephyr profiler
-- Logic analyzer (for timing)
-- Power meter (for current)
-- BLE sniffer (for throughput)
-
-## Appendix A: Module Dependencies
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    Dependency Graph                         │
-├─────────────────────────────────────────────────────────────┤
-│                                                             │
-│  Recording Controller                                       │
-│       ├─→ Audio Pipeline                                   │
-│       │      ├─→ PDM Driver (HAL)                         │
-│       │      ├─→ SpeexDSP                                 │
-│       │      └─→ Opus Encoder                             │
-│       ├─→ Session Manager                                 │
-│       │      └─→ File System (HAL)                        │
-│       ├─→ State Machine                                   │
-│       ├─→ Display Manager                                 │
-│       │      └─→ UART Driver (HAL)                        │
-│       └─→ Button Handler                                  │
-│              └─→ GPIO Driver (HAL)                        │
-│                                                             │
-│  Command Handler                                           │
-│       ├─→ AT Parser                                       │
-│       ├─→ JSON Handler                                    │
-│       ├─→ Config Manager                                  │
-│       │      └─→ NVS (Zephyr)                             │
-│       ├─→ BLE GATT Service                                │
-│       │      └─→ BLE Stack (Zephyr)                       │
-│       └─→ File Transfer Manager                           │
-│              └─→ File System (HAL)                        │
-│                                                             │
-└─────────────────────────────────────────────────────────────┘
-```
-
-## Appendix B: API Specifications
-
-### Recording Controller API
-
-```c
-// Initialize recording subsystem
-int rec_init(void);
-
-// Start recording
-int rec_start(enum recording_mode mode);
-
-// Stop recording
-int rec_stop(void);
-
-// Add bookmark
-int rec_add_mark(const char *note);
-
-// Check if recording
-bool rec_is_recording(void);
-
-// Get recording duration
-int rec_get_duration(uint32_t *seconds);
-```
-
-### Command Handler API
-
-```c
-// Initialize command handler
-int cmd_handler_init(void);
-
-// Process AT command
-int cmd_handler_process(const char *cmd, char **response);
-
-// Register custom command
-int cmd_handler_register(const char *name, cmd_func_t func);
-```
-
-### Session Manager API
-
-```c
-// Create new session
-int session_mgr_create(const char *session_id, struct session **out);
-
-// Add file to session
-int session_mgr_add_file(struct session *session, const char *filename, size_t size);
-
-// Add bookmark to session
-int session_mgr_add_mark(struct session *session, const struct mark *mark);
-
-// Finalize session
-int session_mgr_finalize(struct session *session);
-
-// Delete session
-int session_mgr_delete(const char *session_id);
-```
-
-## Appendix C: Configuration Reference
-
-### Build-Time Configuration (Kconfig)
-
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| CONFIG_AUDIO_SAMPLE_RATE | int | 16000 | Audio sample rate (Hz) |
-| CONFIG_AUDIO_CHANNELS | int | 1 | Number of channels (1=mono, 2=stereo) |
-| CONFIG_OPUS_BITRATE | int | 24000 | Opus bitrate (bps) |
-| CONFIG_OPUS_COMPLEXITY | int | 5 | Opus complexity (0-10) |
-| CONFIG_SPEEXDSP_NOISE_SUPPRESS | int | 0 | Noise suppression (dB) |
-| CONFIG_RECORDING_MODE | int | 0 | Recording mode (0=normal, 1=enhanced) |
-
-### Runtime Configuration (NVS)
+## 7. Error Handling Strategy
+
+### 7.1 Error Categories
+
+| Category | Example | Severity | Recovery |
+|----------|---------|----------|----------|
+| DMIC Timeout | 5 consecutive timeouts | Low | Auto-retrigger DMIC |
+| DMIC Read Error | I2S error | Medium | Stop recording |
+| Opus Encode Error | opus_encode() < 0 | High | Drop frame, continue |
+| SD Card Write Error | fs_write() failure | High | Close file, continue without storage |
+| SD Card Init Error | Mount failure | Low | Continue without storage |
+| BLE Disconnect | Connection lost | Medium | Transfer pause (BLE) |
+| WiFi Init Error | AP start failure | Low | Continue without WiFi |
+| Invalid State Transition | Event not allowed | Low | Log warning, return CLIP_EVENT_INVALID |
+
+### 7.2 Graceful Degradation
+
+**Init failures**: Most subsystems (storage, WiFi, display, button, transfer) log a warning and continue if initialization fails. Only BLE and audio init are treated as hard failures.
+
+**Recording with issues**: DMIC timeouts trigger auto-recovery. SD write errors close the current file but recording continues. Opus encode errors drop individual frames.
+
+**Transfer with issues**: File-level retransmit up to 5 retries. Transfer aborts after exhausting retries for a single file.
+
+## 8. Configuration Reference
+
+### 8.1 Build-Time Configuration (Kconfig)
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| CLIP_NORMAL_BITRATE | 16000 | Normal mode Opus bitrate per channel (bps) |
+| CLIP_NORMAL_COMPLEXITY | 0 | Normal mode Opus complexity (0-10) |
+| CLIP_ENHANCED_BITRATE | 32000 | Enhanced mode Opus bitrate (bps) |
+| CLIP_ENHANCED_COMPLEXITY | 1 | Enhanced mode Opus complexity (0-10) |
+| CLIP_DEFAULT_NOISE | 15 | Default noise suppression (dB) |
+| CLIP_DEFAULT_DEREVERB | n | Default dereverberation enabled |
+| CLIP_DEFAULT_AUTODEL | -1 | Default auto-delete days (-1=off) |
+| CLIP_DEFAULT_BRIGHTNESS | 128 | Default OLED brightness (0-255) |
+| CLIP_HAPTIC_MOTOR_ENABLED | n | Enable haptic motor |
+| CLIP_AT_SERVER_QUEUE_SIZE | 10 | AT command queue depth |
+| CLIP_AT_SERVER_STACK_SIZE | 4096 | AT server thread stack (bytes) |
+| CLIP_AT_SERVER_PRIORITY | 7 | AT server thread priority |
+| CLIP_AT_MAX_CMD_LEN | 256 | Maximum AT command length |
+| CLIP_AT_MAX_RESPONSE_LEN | 1024 | Maximum AT response length |
+| CLIP_AUDIO_STACK_SIZE | 32768 | Audio thread stack (bytes) |
+| CLIP_AUDIO_THREAD_PRIORITY | 0 | Audio thread priority |
+| CLIP_AUDIO_SEGMENT_DURATION_SYNC | 60 | Segment duration during transfer (seconds) |
+| CLIP_AUDIO_SEGMENT_DURATION_NO_SYNC | 300 | Segment duration without transfer (seconds) |
+| CLIP_TRANSFER_STACK_SIZE | 16384 | Transfer thread stack (bytes) |
+| CLIP_TRANSFER_THREAD_PRIORITY | 5 | Transfer thread priority |
+| CLIP_TRANSFER_CHUNK_SIZE | 4096 | Transfer chunk size (bytes) |
+| CLIP_UDP_THREAD_STACK_SIZE | 4096 | UDP server thread stack (bytes) |
+| CLIP_UDP_THREAD_PRIORITY | 5 | UDP server thread priority |
+| CLIP_UDP_RECV_BUF_SIZE | 1024 | UDP receive buffer size |
+| CLIP_UDP_MAX_DATA_SIZE | 1024 | UDP maximum data per packet |
+| CLIP_UDP_HEARTBEAT_INTERVAL_MS | 5000 | UDP heartbeat interval |
+| CLIP_UDP_CONNECTION_TIMEOUT_MS | 30000 | UDP connection timeout |
+| CLIP_STORAGE_CHUNK_SIZE | 4096 | Storage write buffer size |
+
+### 8.2 Runtime Configuration (Zephyr Settings on LittleFS)
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| bitrate | uint16 | 24000 | Opus bitrate (bps) |
-| complexity | uint8 | 5 | Opus complexity (0-10) |
-| mode | string | "normal" | Recording mode |
-| noise | uint8 | 0 | Noise suppression (dB) |
-| dereverb | string | "off" | Dereverberation settings |
-| agc | string | "off" | AGC settings |
-| chunksize | uint16 | 500 | Transfer chunk size (bytes) |
-| autodel | string | "off" | Auto-delete policy |
+| config/mode | uint8_t | 0 | Recording mode (0=normal, 1=enhanced) |
+| config/noise_suppress | uint8_t | 15 | Noise suppression level (dB) |
+| config/auto_delete_days | int8_t | -1 | Auto-delete days (-1=off, 0-30) |
+| config/dereverb_enabled | bool | false | Dereverberation enabled |
+| config/oled_brightness | uint8_t | 128 | OLED brightness (0-255) |
+| time/unix_timestamp | int64_t | - | Synced time (for session IDs) |
+
+## 9. Memory Architecture
+
+### 9.1 Key Memory Consumers
+
+| Component | Size | Allocation |
+|-----------|------|-----------|
+| Audio thread stack | 32 KB | Static (K_THREAD_STACK_DEFINE) |
+| Transfer thread stack | 16 KB | Static |
+| Audio memory slab | 16 x 1280 B = 20 KB | Static (K_MEM_SLAB_DEFINE_STATIC) |
+| AT server thread stack | 4 KB | Static |
+| UDP server thread stack | 4 KB | Static |
+| Main thread stack | 6 KB | Static (CONFIG_MAIN_STACK_SIZE) |
+| Heap | 128 KB | Static (CONFIG_HEAP_MEM_POOL_SIZE) |
+| Transfer chunk buffer | 4 KB | Static |
+| Opus encoder state | ~20 KB | Heap (opus_encoder_create) |
+| SpeexDSP preprocessor | ~10 KB | Heap (speex_preprocess_state_init) |
+| Storage write buffer | 4 KB | Static |
+
+### 9.2 Flash Storage
+
+| Partition | Size | Purpose |
+|-----------|------|---------|
+| MCUboot | 64 KB | Secure bootloader |
+| Secure image | 256 KB | Application firmware |
+| Non-secure image | 192 KB | Network core + WiFi |
+| External SPI flash (lfs-storage) | ~6.8 MB | LittleFS (settings, OTA patches) |
+
+## 10. Hardware Interfaces
+
+### 10.1 Key GPIO Pins
+
+| Pin | Function | Direction |
+|-----|----------|-----------|
+| GPIO1.15 | User button | Input, pull-up, active-low |
+| GPIO1.14 | Microphone power enable | Output |
+| GPIO1.8 | OLED display power enable | Output |
+| GPIO1.9 | OLED display reset | Output |
+| GPIO0.29 | WiFi RF switch power | Output |
+| GPIO1.6 | Haptic motor (PMIC GPIO1) | Output |
+
+### 10.2 I2C Devices
+
+| Bus | Address | Device |
+|-----|---------|--------|
+| I2C1 | 0x6b | NPM1300 PMIC (battery, regulators, 5 GPIOs) |
+| I2C2 | 0x3c | CH1115 OLED display (88x48) |
+
+### 10.3 SPI Devices
+
+| Bus | Device | Chip Select |
+|-----|--------|------------|
+| SPI3 | PY25Q64H external flash (64MB) | GPIO0.20 |
+| SPI4 | SD card (SDHC-SPI) | GPIO0.9 |
+
+### 10.4 PMIC Regulators (NPM1300)
+
+| Regulator | Output | Purpose | Control |
+|-----------|--------|---------|---------|
+| BUCK1 | MOTOR_3V3 | Vibration motor power | PMIC GPIO2 |
+| BUCK2 | VDD_3V3 | Main system power | Always-on |
+| LDO1 | VDDMIC_1V8 | Microphone power | Always-on |
+| LDO2 | VDD_SD | SD card power | Always-on |

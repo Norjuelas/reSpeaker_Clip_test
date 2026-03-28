@@ -29,8 +29,8 @@ Three command types are supported:
 | Type | Format | Example | Description |
 |------|--------|---------|-------------|
 | EXEC | `AT+XX` | `AT+GSTAT` | Execute operation without parameters |
-| SET | `AT+XX=<value>` | `AT+BITRATE=24000` | Set parameter value |
-| GET | `AT+XX?` | `AT+BITRATE?` | Query current parameter value |
+| SET | `AT+XX=<value>` | `AT+MODE=enhanced` | Set parameter value |
+| GET | `AT+XX?` | `AT+MODE?` | Query current parameter value |
 
 ### 1.4 Response Format
 
@@ -131,52 +131,59 @@ Format: `AT+XX`
 
 Execute an operation or retrieve status:
 - `AT+GSTAT` - Get device status
-- `AT+START` - Start recording (uses mode parameter)
-- `AT+STOP` - Stop recording
-- `AT+PAUSE` - Pause file transfer
-- `AT+RESUME` - Resume file transfer
-- `AT+CANCEL` - Cancel file transfer
-- `AT+PROGRESS` - Query transfer progress
-- `AT+PURGE` - Delete transferred sessions
+- `AT+DEVICE` - Get device name
 - `AT+VERSION` - Get version info
+- `AT+START` - Start recording (uses current mode)
+- `AT+STOP` - Stop recording
+- `AT+MARK` - Add bookmark
+- `AT+PAUSE` - Pause recording
+- `AT+RESUME` - Resume recording
+- `AT+CANCEL` - Cancel transfer
+- `AT+LIST` - List sessions/files
+- `AT+MARKS` - Get session bookmarks
+- `AT+DOWNLOAD` - Download file
+- `AT+DELETE` - Delete session
+- `AT+PURGEABLE` - Query cleanable sessions
+- `AT+PURGE` - Delete transferred sessions
+- `AT+FORMAT` - Format SD card
+- `AT+POWEROFF` - Power off device
+- `AT+FACTORY` - Factory reset
 - `AT+REBOOT` - Reboot device
+- `AT+WIFI` - Start WiFi AP (equivalent to `AT+WIFI=on`)
 
 #### SET Commands (With Parameters)
 Format: `AT+XX=<value>`
 
 Set configuration or execute with parameters:
-- `AT+BITRATE=<bps>` - Set Opus bitrate
-- `AT+COMPLEXITY=<0-10>` - Set encoding complexity
 - `AT+MODE=<normal|enhanced>` - Set recording mode
 - `AT+NOISE=<0-60>` - Set noise suppression level
-- `AT+DEREVERB=<on/off>,<level>,<decay>` - Set dereverberation
-- `AT+AGC=<on/off>,<target>,<max_gain>` - Set AGC
-- `AT+CHUNKSIZE=<bytes>` - Set transfer chunk size
+- `AT+DEREVERB=<on|off>` - Enable/disable dereverberation
 - `AT+AUTODEL=<off|0|1-30>` - Set auto-delete policy
+- `AT+BRIGHTNESS=<0-255>` - Set OLED brightness
 - `AT+TIME=<unix_ts>` - Set system time
-- `AT+PAIR=<reset>` - Manage pairing
+- `AT+PAIR=<reset>` - Reset BLE pairing
 - `AT+FACTORY=<confirm>` - Factory reset
-- `AT+START=<mode>` - Start recording with mode
+- `AT+START=<mode>` - Start recording with mode override
 - `AT+MARK=<note>` - Add bookmark with note
 - `AT+DELETE=<session>` - Delete session
-- `AT+LIST=<session>` - List session files
+- `AT+LIST=<session>` - List session details
 - `AT+MARKS=<session>` - Get session bookmarks
 - `AT+DOWNLOAD=<session/file>` - Download file
+- `AT+WIFI=<on|off>` - Start/stop WiFi AP
 
 #### GET Commands (Query)
 Format: `AT+XX?`
 
 Query current configuration:
-- `AT+BITRATE?` - Get current bitrate
-- `AT+COMPLEXITY?` - Get current complexity
+- `AT+DEVICE?` - Get device name
 - `AT+MODE?` - Get current mode
 - `AT+NOISE?` - Get noise suppression level
-- `AT+DEREVERB?` - Get dereverberation settings
-- `AT+AGC?` - Get AGC settings
-- `AT+CHUNKSIZE?` - Get current chunk size
+- `AT+DEREVERB?` - Get dereverberation setting
 - `AT+AUTODEL?` - Get auto-delete policy
+- `AT+BRIGHTNESS?` - Get OLED brightness
 - `AT+TIME?` - Get current time
 - `AT+PAIR?` - Get pairing status
+- `AT+WIFI?` - Get WiFi AP status
 
 ### 3.2 JSON Message Format
 
@@ -236,24 +243,30 @@ AT+GSTAT
   "ok": true,
   "data": {
     "state": "IDLE",
+    "recording": false,
+    "session": null,
+    "duration": 0,
     "battery": 85,
     "charging": true,
     "mode": "normal",
-    "bitrate": 48000,
-    "free_space": 1024000000,
-    "session_count": 3
+    "bitrate": 16000,
+    "free_space": 1024,
+    "device": "Clip"
   }
 }
 ```
 
 **Fields:**
-- `state`: Current device state (IDLE/RECORDING/TRANSMITTING/PAUSED/ERROR)
+- `state`: Current device state (IDLE/RECORDING/TRANSMITTING/WIFI_SYNC/PAUSED/ERROR)
+- `recording`: Whether actively recording (true/false)
+- `session`: Current session ID or null
+- `duration`: Current recording duration in seconds
 - `battery`: Battery percentage (0-100)
 - `charging`: Charging status (true/false)
 - `mode`: Recording mode (normal/enhanced)
-- `bitrate`: Current bitrate in bps
-- `free_space`: Available bytes on SD card
-- `session_count`: Number of recording sessions
+- `bitrate`: Bitrate for current mode (normal=16000, enhanced=32000)
+- `free_space`: Free space in MB
+- `device`: Device name string
 
 **Error Cases:**
 - Never fails (always returns current state)
@@ -342,8 +355,7 @@ AT+START=normal
   "ok": true,
   "data": {
     "session": "20240203100000",
-    "mode": "normal",
-    "bitrate": 48000
+    "mode": "normal"
   }
 }
 ```
@@ -777,66 +789,6 @@ AT+DOWNLOAD=20250225143000:016.opus
 
 ---
 
-##### AT+CHUNKSIZE - Set Chunk Size
-
-Configure data block size for file transfer.
-
-**Request (Set):**
-```
-AT+CHUNKSIZE=500
-```
-
-**Request (Get):**
-```
-AT+CHUNKSIZE?
-```
-
-**Response:**
-```json
-{
-  "ok": true,
-  "value": 500
-}
-```
-
-**Valid Range:** 100 - 4096 bytes
-**Default:** 500 bytes
-
-**Trade-offs:**
-- Smaller chunks: More frequent progress updates, slower transfer
-- Larger chunks: Faster transfer, higher memory usage
-
-**Error Cases:**
-- `6001`: Invalid chunk size (out of range)
-
----
-
-##### AT+PROGRESS - Query Transfer Progress
-
-Get current file transfer progress.
-
-**Request:**
-```
-AT+PROGRESS
-```
-
-**Response:**
-```json
-{
-  "ok": true,
-  "progress": 50,
-  "transferred": 360000,
-  "total": 720000
-}
-```
-
-**Fields:**
-- `progress`: Percentage complete (0-100)
-- `transferred`: Bytes transferred
-- `total`: Total file size
-
-**Note:** This command can be used during transfer (non-blocking).
-
 ---
 
 #### 3.3.5 Recording Control
@@ -1012,69 +964,6 @@ AT+AUTODEL?
 
 #### 3.3.7 Configuration
 
-##### AT+BITRATE - Set Bitrate
-
-Configure Opus encoding bitrate.
-
-**Request (Set):**
-```
-AT+BITRATE=24000
-```
-
-**Request (Get):**
-```
-AT+BITRATE?
-```
-
-**Response:**
-```json
-{
-  "ok": true,
-  "value": 24000
-}
-```
-
-**Valid Values:**
-- Mono: 12000, 16000, 24000, 32000
-- Stereo: 24000, 32000, 48000, 64000
-
-**Error Cases:**
-- `6003`: Invalid bitrate for current channel mode
-
----
-
-##### AT+COMPLEXITY - Encoding Complexity
-
-Configure Opus encoder complexity.
-
-**Request (Set):**
-```
-AT+COMPLEXITY=5
-```
-
-**Request (Get):**
-```
-AT+COMPLEXITY?
-```
-
-**Response:**
-```json
-{
-  "ok": true,
-  "value": 5
-}
-```
-
-**Valid Range:** 0 - 10
-**Default:** 5
-
-**Description:**
-- 0: Fastest encoding, lowest quality
-- 5: Balanced (default)
-- 10: Slowest encoding, highest quality
-
----
-
 ##### AT+MODE - Recording Mode
 
 Set recording mode preset.
@@ -1100,8 +989,10 @@ AT+MODE?
 **Valid Values:** "normal", "enhanced"
 
 **Mode Presets:**
-- **Normal**: Standard quality, 10-minute file segments
-- **Enhanced**: High quality, 2-minute file segments
+- **Normal**: Stereo (L+R channels), 16kbps/channel (32kbps total), complexity 0, no DSP processing, 10-minute file segments
+- **Enhanced**: Mono (L+R merged), 32kbps, complexity 1, DSP enabled (noise suppression + dereverberation), 2-minute file segments
+
+Bitrate and complexity are fixed per mode and configured at build time via Kconfig (`CONFIG_CLIP_NORMAL_BITRATE`, `CONFIG_CLIP_ENHANCED_BITRATE`, etc.). They cannot be changed at runtime.
 
 ---
 
@@ -1138,7 +1029,7 @@ Configure SpeexDSP dereverberation.
 
 **Request (Set):**
 ```
-AT+DEREVERB=on,40,20
+AT+DEREVERB=on
 ```
 
 **Request (Get):**
@@ -1146,47 +1037,23 @@ AT+DEREVERB=on,40,20
 AT+DEREVERB?
 ```
 
-**Response:**
+**Response (Set):**
 ```json
 {
   "ok": true,
-  "value": "on,40,20"
+  "data": {"dereverb": "on"}
 }
 ```
 
-**Parameters:** `<on|off>,<level>,<decay>`
-- `on|off`: Enable/disable
-- `level`: 0-100 (strength)
-- `decay`: 0-100 (decay factor)
-
----
-
-##### AT+AGC - Automatic Gain Control
-
-Configure SpeexDSP AGC.
-
-**Request (Set):**
-```
-AT+AGC=on,8000,30
-```
-
-**Request (Get):**
-```
-AT+AGC?
-```
-
-**Response:**
+**Response (Get):**
 ```json
 {
   "ok": true,
-  "value": "on,8000,30"
+  "data": {"dereverb": "off"}
 }
 ```
 
-**Parameters:** `<on|off>,<target>,<max_gain>`
-- `on|off`: Enable/disable
-- `target`: 0-32768 (target level)
-- `max_gain`: 0-60 dB (maximum gain)
+**Parameters:** `<on|off>` (or `1|0`)
 
 ---
 
@@ -1222,6 +1089,146 @@ AT+BRIGHTNESS?
 
 **Parameters:**
 - `value`: Integer 0–255 (0 = dimmest, 255 = maximum brightness, default = 128)
+
+---
+
+##### AT+DEVICE - Device Name
+
+Get the device name.
+
+**Request:**
+```
+AT+DEVICE
+```
+
+**Request (Query):**
+```
+AT+DEVICE?
+```
+
+**Response:**
+```json
+{
+  "ok": true,
+  "device": "Clip"
+}
+```
+
+---
+
+##### AT+WIFI - WiFi AP Control
+
+Control the WiFi Access Point for local file transfer.
+
+**Request (Start):**
+```
+AT+WIFI=on
+```
+
+**Request (Stop):**
+```
+AT+WIFI=off
+```
+
+**Request (Query):**
+```
+AT+WIFI?
+```
+
+**Response (Start):**
+```json
+{
+  "ok": true,
+  "data": {
+    "ssid": "ClipAP_A1B2",
+    "password": "12345678",
+    "ip": "192.168.4.1",
+    "port": 8089
+  }
+}
+```
+
+**Response (Stop):**
+```json
+{
+  "ok": true
+}
+```
+
+**Response (Query):**
+```json
+{
+  "ok": true,
+  "data": {
+    "running": true,
+    "ssid": "ClipAP_A1B2",
+    "password": "12345678",
+    "ip": "192.168.4.1",
+    "port": 8089,
+    "connected": true
+  }
+}
+```
+
+**Fields:**
+- `ssid`: WiFi SSID (ClipAP_XXXX, last 4 hex of chip ID)
+- `password`: WPA2 password (12345678)
+- `ip`: AP IP address (192.168.4.1)
+- `port`: UDP transfer port (8089)
+- `running`: Whether AP is active
+- `connected`: Whether a client is connected
+
+**State Change:** IDLE → WIFI_SYNC (on), WIFI_SYNC → IDLE (off)
+
+**Constraints:**
+- Cannot start WiFi while recording
+- Cannot start recording while WiFi is active
+
+---
+
+##### AT+FORMAT - Format SD Card
+
+Format the SD card using FATFS. Deletes all recordings.
+
+**Request:**
+```
+AT+FORMAT
+```
+
+**Response:**
+```json
+{
+  "ok": true
+}
+```
+
+**Error Cases:**
+- SD card not mounted
+- Cannot format while recording
+
+---
+
+##### AT+POWEROFF - Power Off
+
+Shut down the device (enters ship mode for ultra-low power).
+
+**Request:**
+```
+AT+POWEROFF
+```
+
+**Response:**
+```json
+{
+  "ok": true,
+  "data": {"poweroff": "shutting down"}
+}
+```
+
+**Side Effects:**
+- Displays power off animation
+- Enters PMIC ship mode (requires physical button press to wake)
+- All unsaved data is preserved
 
 ---
 
@@ -1360,8 +1367,9 @@ Critical design feature: Commands can be processed during file transfer!
 
 **Supported Commands During Transfer:**
 - `AT+GSTAT` - Query status (returns "TRANSMITTING" state)
-- `AT+PROGRESS` - Get transfer progress
 - `AT+CANCEL` - Cancel transfer
+- `AT+PAUSE` - Pause transfer
+- `AT+RESUME` - Resume paused transfer
 
 **Sequence:**
 ```
@@ -1370,11 +1378,11 @@ Device: {"ok":true}
 Device: <data chunk 1>
 Device: <data chunk 2>
 App: AT+GSTAT  (Non-blocking!)
-Device: {"ok":true, "state":"TRANSMITTING"}
+Device: {"ok":true, "data":{"state":"TRANSMITTING",...}}
 Device: <data chunk 3>
 Device: <data chunk 4>
 ...
-Device: {"ok":true, "done":true, "size":720000}
+Device: {"ok":true,"data":{"done":true,"size":720000}}
 ```
 
 ### 4.3 Data Format
@@ -1526,21 +1534,29 @@ App                          Device
 │          ▼                                                  │
 │  ┌──────────────┐  AT+START/Long press  ┌──────────┐       │
 │  │     IDLE     │<────────────────────────│RECORDING │       │
-│  └───────┬──────┘                        └─────┬────┘       │
-│          │                                      │            │
-│          │ AT+DOWNLOAD                          │ AT+STOP/   │
-│          │                                      │ Long press │
-│          ▼                                      │            │
-│  ┌──────────────┐                        ┌─────┴────┐       │
-│  │ TRANSMITTING │<───────────────────────│   IDLE   │       │
-│  └──────┬───────┘    AT+PAUSE            └──────────┘       │
-│          │                                  ▲                │
-│          │ AT+PAUSE                         │                │
-│          ▼                                  │                │
-│  ┌──────────────┐    AT+RESUME             │                │
-│  │    PAUSED    │──────────────────────────┘                │
-│  └──────┬───────┘                                       │
-│         │                                               │
+│  └──┬───┬──────┘                        └─────┬────┘       │
+│     │   │                                      │            │
+│     │   │ AT+WIFI=on                             │ AT+STOP/   │
+│     │   ▼                                      │ Long press │
+│     │ ┌──────────────┐                          │            │
+│     │ │  WIFI_SYNC  │                          │            │
+│     │ └──────┬───────┘                          ▼            │
+│     │        │                                      │            │
+│     │        │ AT+WIFI=off                          │            │
+│     │        ▼                                      │            │
+│     │     IDLE                                    ┌─────┴────┐       │
+│     │                                            │   IDLE   │       │
+│     │ AT+DOWNLOAD                                  └──────────┘       │
+│     │                                            │                    │
+│     ▼                                            ▼                    │
+│  ┌──────────────┐                        ┌──────────────┐       │
+│  │ TRANSMITTING │<───────────────────────│    PAUSED    │──────>│
+│  └──────┬───────┘    AT+PAUSE            └──────┬───────┘       │
+│          │                                  │       │               │
+│          │ AT+RESUME                         │ AT+CANCEL             │
+│          ▼                                  ▼       ▼               │
+│       IDLE <───────────────────────────────┘    IDLE               │
+│                                                             │
 │         │ AT+CANCEL / Error                             │
 │         ▼                                               │
 │  ┌──────────────┐                                       │
@@ -1552,11 +1568,17 @@ App                          Device
 
 **States:**
 - **UNINITIALIZED**: Booting, hardware initialization
-- **IDLE**: Ready to record or transfer
+- **IDLE**: Ready to record, transfer, or start WiFi
 - **RECORDING**: Actively recording audio
 - **TRANSMITTING**: Actively transferring file
-- **PAUSED**: Transfer paused
+- **WIFI_SYNC**: WiFi AP active, file transfer available
+- **PAUSED**: Recording paused
 - **ERROR**: Error state, requires intervention
+
+**Constraints:**
+- Cannot start WiFi while recording (RECORDING → WIFI_SYNC is invalid)
+- Cannot start recording while WiFi is active (WIFI_SYNC → RECORDING is invalid)
+- Only IDLE state can transition to RECORDING or WIFI_SYNC
 
 ### 5.2 Recording State Machine
 
@@ -2026,7 +2048,6 @@ Some errors include additional fields:
 | 5005 | "Nothing to resume" | Cannot resume (not paused) |
 | 5006 | "Connection lost" | BLE disconnected during transfer |
 | 5007 | "Transfer timeout" | Transfer took too long |
-| 5008 | "Invalid chunk size" | Chunk size out of range |
 
 #### Configuration Errors (6000-6999)
 
@@ -2035,8 +2056,7 @@ Some errors include additional fields:
 | 6000 | "Invalid configuration" | Generic config error |
 | 6001 | "Invalid value" | Parameter out of range |
 | 6002 | "Invalid policy" | Auto-delete policy invalid |
-| 6003 | "Invalid bitrate" | Bitrate not supported |
-| 6004 | "Invalid mode" | Recording mode invalid |
+| 6003 | "Invalid mode" | Recording mode invalid |
 | 6005 | "Configuration locked" | Cannot change during operation |
 | 6006 | "Read-only" | Cannot modify read-only setting |
 
@@ -2090,7 +2110,7 @@ To prevent BLE congestion:
 |--------|------|
 | Command buffer | 512 bytes |
 | Response buffer | 512 bytes |
-| File chunk buffer | 4096 bytes (configurable) |
+| File chunk buffer | 4096 bytes (compile-time via Kconfig) |
 | Audio buffer | 32KB |
 | SD card buffer | 4KB |
 
@@ -2148,10 +2168,10 @@ To prevent BLE congestion:
 **Transfer Failure Recovery:**
 ```
 1. Detect error (disconnect or timeout)
-2. Wait for reconnection (auto-reconnect)
-3. Query progress: AT+PROGRESS
-4. Resume: AT+RESUME
-5. If resume fails: AT+DOWNLOAD=<file> (restart)
+2. Device automatically cancels transfer on disconnect
+3. Wait for reconnection (auto-reconnect)
+4. Query session: AT+LIST=<session_id> (get synced count)
+5. Resume from next file: AT+DOWNLOAD=<session_id>:<next_file>
 ```
 
 **SD Card Error Recovery:**
@@ -2163,29 +2183,14 @@ To prevent BLE congestion:
 5. Retry operation
 ```
 
-## 12. Protocol Versioning
+## 12. Design Notes
 
-### 12.1 Version Scheme
-
-**Protocol Version:** `major.minor.patch`
-- `major`: Breaking changes (requires app update)
-- `minor`: New commands (backward compatible)
-- `patch`: Bug fixes (no API changes)
-
-**Current Version:** `1.0.0`
-
-### 12.2 Backward Compatibility
-
-**Rules:**
+**Notes:**
 - New commands are additive (old apps ignore unknown events)
-- Never remove existing commands
-- Never change command syntax in breaking ways
 - Optional fields can be added to responses
-
-**Deprecation Process:**
-1. Mark command as deprecated in documentation
-2. Maintain for 2 major versions
-3. Remove in major version increment
+- Bitrate and complexity are mode-specific (configured at build time via Kconfig), not individually configurable at runtime
+- Transfer chunk size is compile-time (`CONFIG_CLIP_TRANSFER_CHUNK_SIZE`)
+- AGC is not supported (SpeexDSP FIXED_POINT build limitation)
 
 ## Appendix A: Complete Command Reference
 
@@ -2196,31 +2201,30 @@ To prevent BLE congestion:
 | AT+GSTAT | EXEC | Get device status | 3.3.1 |
 | AT+TIME | GET/SET | System time | 3.3.1 |
 | AT+VERSION | EXEC | Version info | 3.3.1 |
-| AT+START | EXEC | Start recording | 3.3.2 |
+| AT+DEVICE | EXEC/GET | Device name | 3.3.7 |
+| AT+START | EXEC/SET | Start recording | 3.3.2 |
 | AT+STOP | EXEC | Stop recording | 3.3.2 |
-| AT+MARK | EXEC | Add bookmark | 3.3.2 |
-| AT+LIST | GET | List sessions/files | 3.3.3 |
+| AT+MARK | EXEC/SET | Add bookmark | 3.3.2 |
+| AT+LIST | GET/SET | List sessions/files | 3.3.3 |
 | AT+DELETE | SET | Delete session | 3.3.3 |
-| AT+MARKS | GET | Get bookmarks | 3.3.3 |
+| AT+MARKS | GET/SET | Get bookmarks | 3.3.3 |
 | AT+DOWNLOAD | SET | Download file | 3.3.4 |
-| AT+CHUNKSIZE | GET/SET | Transfer chunk size | 3.3.4 |
-| AT+PROGRESS | EXEC | Transfer progress | 3.3.4 |
-| AT+PAUSE | EXEC | Pause transfer | 3.3.5 |
-| AT+RESUME | EXEC | Resume transfer | 3.3.5 |
+| AT+PAUSE | EXEC | Pause recording | 3.3.5 |
+| AT+RESUME | EXEC | Resume recording | 3.3.5 |
 | AT+CANCEL | EXEC | Cancel transfer | 3.3.5 |
 | AT+PURGEABLE | EXEC | Query cleanable space | 3.3.6 |
 | AT+PURGE | EXEC | Delete transferred | 3.3.6 |
 | AT+AUTODEL | GET/SET | Auto-delete policy | 3.3.6 |
-| AT+BITRATE | GET/SET | Opus bitrate | 3.3.7 |
-| AT+COMPLEXITY | GET/SET | Encoding complexity | 3.3.7 |
+| AT+FORMAT | EXEC | Format SD card | 3.3.7 |
+| AT+POWEROFF | EXEC | Power off device | 3.3.7 |
+| AT+WIFI | EXEC/GET/SET | WiFi AP control | 3.3.7 |
 | AT+MODE | GET/SET | Recording mode | 3.3.7 |
 | AT+NOISE | GET/SET | Noise suppression | 3.3.7 |
 | AT+DEREVERB | GET/SET | Dereverberation | 3.3.7 |
-| AT+AGC | GET/SET | Automatic gain | 3.3.7 |
 | AT+BRIGHTNESS | GET/SET | OLED brightness | 3.3.7 |
-| AT+PAIR | GET/SET | BLE pairing | 3.3.8 |
-| AT+FACTORY | SET | Factory reset | 3.3.8 |
-| AT+REBOOT | EXEC | Reboot | 3.3.8 |
+| AT+PAIR | GET/SET | BLE pairing | 3.3.7 |
+| AT+FACTORY | SET | Factory reset | 3.3.7 |
+| AT+REBOOT | EXEC | Reboot | 3.3.7 |
 
 ## Appendix B: Example Sessions
 
@@ -2234,9 +2238,6 @@ App: AT+TIME=1706918430
 Device: {"ok":true}
 
 App: AT+MODE=enhanced
-Device: {"ok":true}
-
-App: AT+BITRATE=48000
 Device: {"ok":true}
 ```
 
@@ -2286,7 +2287,7 @@ Device: {"ok":true,"done":true,"size":3600000}
 | Audio buffer | 32 KB |
 | Opus encoder | 20 KB |
 | SpeexDSP | 10 KB |
-| Transfer buffer | 4 KB (configurable) |
+| Transfer buffer | 4 KB |
 | BLE stack | ~50 KB |
 | Total fixed | ~116 KB |
 

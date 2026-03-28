@@ -1,25 +1,28 @@
-# CLIP UDP Transfer Protocol v2
+# CLIP UDP Transfer Protocol
 
 ## Overview
 
-Reliable UDP file transfer protocol for the CLIP embedded device. Designed for
-efficiency (sliding window, high throughput) and safety (per-frame CRC32,
-selective ACK, automatic retransmission).
+Fire-and-forget UDP file transfer protocol for the CLIP embedded device. Designed for
+simplicity and minimal RAM footprint (~100 bytes static state, no frame buffering).
+
+**Strategy**: DATA frames are sent without per-frame acknowledgment. Each DATA frame
+includes a per-frame CRC32 for corruption detection. Full-file integrity is verified
+at FILE_END via an accumulated CRC32, with a FILE_ACK response from the client.
 
 **Network**: Device acts as WiFi AP (IP: 192.168.4.1), client connects to UDP
 port 8089. All communication is bidirectional on a single socket.
 
 ## Frame Types
 
-| Type | Value | Direction | Size | Description |
-|------|-------|-----------|------|-------------|
-| DATA | 0x01 | S→C | 9+N | File data with seq + per-frame CRC32 |
-| ACK | 0x02 | C→S | 5 | Cumulative ACK + selective bitmap + window |
-| FILE_START | 0x10 | S→C | 2+N+4 | Begin file transfer |
-| FILE_END | 0x11 | S→C | 5 | End file transfer (full-file CRC32) |
-| TRANSFER_DONE | 0x12 | S→C | 2+N+4 | All files complete |
-| AT_RESP | 0x20 | S→C | 3+N | AT command response (JSON) |
-| HEARTBEAT | 0x30 | Both | 5 | Keepalive |
+| Type | Value | Direction | Description |
+|------|-------|-----------|-------------|
+| DATA | 0x01 | S→C | File data with seq + per-frame CRC32 |
+| FILE_ACK | 0x03 | C→S | File verification result (OK/NACK) |
+| FILE_START | 0x10 | S→C | Begin file transfer |
+| FILE_END | 0x11 | S→C | End file transfer (full-file CRC32) |
+| TRANSFER_DONE | 0x12 | S→C | All files complete |
+| AT_RESP | 0x20 | S→C | AT command response (JSON) |
+| HEARTBEAT | 0x30 | Both | Keepalive |
 
 All multi-byte fields are **little-endian**.
 
@@ -29,7 +32,7 @@ All multi-byte fields are **little-endian**.
 
 ### DATA (0x01) — Server→Client
 
-Carries a chunk of file data with independent CRC verification.
+Carries a chunk of file data with per-frame CRC32 for corruption detection.
 
 ```
 Byte:  [0]   [1]  [2]  [3]  [4]  [5] [6] [7] [8]  [9 ... 9+N-1]
@@ -40,39 +43,27 @@ Field: type  seq_lo seq_hi len_lo len_hi crc32 (4 bytes)     data (N)
 |-------|------|-------------|
 | type | 1 | 0x01 |
 | seq | 2 | Per-file sequence number (uint16 LE, starts at 0) |
-| len | 2 | Data length, max 486 bytes (uint16 LE) |
-| crc32 | 4 | IEEE CRC32 of data field (uint32 LE) |
+| len | 2 | Data length, max 1024 bytes (uint16 LE) |
+| crc32 | 4 | IEEE CRC32 of data field only (uint32 LE) |
 | data | N | Raw file data |
 
-**Header size**: 9 bytes. **Max payload**: 486 bytes. **Max frame**: 495 bytes.
+**Header size**: 9 bytes. **Max payload**: 1024 bytes. **Max frame**: 1033 bytes.
 
-**CRC calculation**:
-```
-crc = crc32_ieee_update(0, data, len)   // Zephyr (handles ~crc internally)
-crc = binascii.crc32(data)                // Python
-```
-Both produce identical results. Zephyr's function applies `~crc` at start and end internally.
+### FILE_ACK (0x03) — Client→Server
 
-### ACK (0x02) — Client→Server
-
-Cumulative acknowledgment with selective bitmap and flow control window.
+Sent by client after verifying full-file CRC32 at FILE_END.
 
 ```
-Byte:  [0]   [1]  [2]  [3]    [4]
-Field: type  ack_seq (2)  window  bitmap
+Byte:  [0]   [1]
+Field: type  result
 ```
 
 | Field | Size | Description |
 |-------|------|-------------|
-| type | 1 | 0x02 |
-| ack_seq | 2 | Cumulative ACK: all frames with seq < ack_seq received (uint16 LE) |
-| window | 1 | Available receive buffer in frames (uint8, 0 = pause) |
-| bitmap | 1 | Selective ACK: bit i = 1 → frame (ack_seq + i) received |
+| type | 1 | 0x03 |
+| result | 1 | 0x00 = CRC OK, 0x01 = CRC mismatch (request retransmit) |
 
-**Frame size**: 5 bytes (fixed).
-
-**Example**: ack_seq=10, bitmap=0b00001010 means frames 0-9 confirmed,
-frame 12 and 14 also received (bitmap bits 2 and 4 set).
+**Frame size**: 2 bytes (fixed).
 
 ### FILE_START (0x10) — Server→Client
 
@@ -153,20 +144,16 @@ Client                              Server
   |<-- AT_RESP (JSON) ----------------|
   |                                   |
   |<-- FILE_START (fn, size) ---------|
-  |--- ACK(seq=0, win=32, 0x00) -----|
   |                                   |
   |<-- DATA(seq=0, crc, payload) -----|
-  |<-- DATA(seq=1, crc, payload) -----|   sliding window (up to 32)
+  |<-- DATA(seq=1, crc, payload) -----|   fire-and-forget (no per-frame ACK)
   |<-- DATA(seq=2, crc, payload) -----|
-  |--- ACK(seq=3, win=32, 0b111) ----|   cumulative + bitmap
   |                                   |
-  |<-- DATA(seq=3, ...) --------------|
-  |                                   |
-  |  ... (repeat until file done) ... |
+  |  ... (until file done) ...       |
   |                                   |
   |<-- FILE_END(crc32) ---------------|
-  |--- ACK(seq=N, win=32, 0x00) -----|
-  |                                   |
+  |--- FILE_ACK(OK/NACK) ------------|
+  |                                   |  (on NACK: retransmit entire file)
   |  ... (next file, if any) ...     |
   |                                   |
   |<-- TRANSFER_DONE(sid, count) -----|
@@ -175,34 +162,30 @@ Client                              Server
 
 ---
 
-## Sliding Window
+## Transfer Strategy
 
 ### Server Side
 
-- **send_base**: oldest unACKed sequence number
-- **next_seq**: next sequence number to assign
-- **Window size**: `min(next_seq - send_base, peer_window)`
-- Server **must not** exceed `peer_window` unACKed frames
+- **Fire-and-forget**: DATA frames are sent without waiting for per-frame ACK
+- **Per-frame CRC32**: Each DATA frame includes CRC of its payload for corruption detection
+- **Full-file CRC32**: Server accumulates CRC32 across all DATA frames for a file
+- **FILE_END + wait**: After sending all DATA, server sends FILE_END with accumulated CRC32 and waits for FILE_ACK
+- **File-level retransmit**: On NACK or timeout, server retransmits the entire file (up to 3 retries)
+- **No frame buffering**: Transient send errors are skipped; per-file CRC catches data loss
 
 ### Client Side
 
-- **expect_seq**: next expected in-order sequence number
-- Sends ACK immediately upon receiving each DATA frame
-- ACK contains cumulative ack_seq + 8-bit selective bitmap
+- **Discard corrupted frames**: Frames with per-frame CRC mismatch are silently dropped
+- **Accumulate data**: Valid DATA payloads are appended in order
+- **Full-file verification**: On FILE_END, client compares its accumulated CRC32 with server's CRC32
+- **FILE_ACK response**: 0x00 = CRC OK (file saved), 0x01 = NACK (file discarded, server retransmits)
 
 ### Retransmission
 
-- Server checks every 100ms for frames unACKed > 200ms
-- Retransmits from a buffer (no SD card re-read needed)
-- Max 5 retries per frame, then transfer is aborted
-- Lost frames are detected via cumulative ACK not advancing
-
-### Flow Control
-
-- Client advertises `window` in every ACK frame
-- Server pauses when window = 0
-- Default window: 32 frames
-- Window can be dynamically adjusted by client
+- Server retries FILE_END up to 3 times (2-second timeout each)
+- On NACK, server retransmits the entire file from FILE_START
+- Max 5 file-level retransmissions before abort (configurable: `UDP_MAX_RETRIES`)
+- No per-frame retransmission
 
 ---
 
@@ -215,7 +198,7 @@ IEEE Ethernet CRC32 (polynomial 0xEDB88320, reflected).
 ### Usage
 
 1. **Per-frame CRC**: Each DATA frame includes CRC of its payload. Client verifies
-   immediately and discards corrupted frames (no ACK sent → triggers retransmit).
+   immediately and discards corrupted frames.
 2. **Full-file CRC**: FILE_END includes CRC of complete file data. Client
    independently computes and compares for end-to-end verification.
 
@@ -234,13 +217,10 @@ Both server (Zephyr) and client (Python) must use the **same algorithm**:
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| Window size | 32 | Max unACKed frames in flight |
-| Retransmit check interval | 100 ms | How often server checks for lost frames |
-| Retransmit timeout | 200 ms | Time before a frame is considered lost |
-| Max retries | 5 | Per-frame retransmission limit |
-| Heartbeat interval | 5000 ms | Keepalive frequency |
-| Connection timeout | 30000 ms | No activity = disconnected |
-| Control ACK timeout | 2000 ms | Max wait for FILE_START/FILE_END ACK |
+| Heartbeat interval | 5000 ms | Keepalive frequency (`CONFIG_CLIP_UDP_HEARTBEAT_INTERVAL_MS`) |
+| Connection timeout | 30000 ms | No activity = disconnected (`CONFIG_CLIP_UDP_CONNECTION_TIMEOUT_MS`) |
+| FILE_ACK timeout | 2000 ms | Max wait for FILE_ACK after FILE_END |
+| FILE_END retries | 3 | Max FILE_END retransmissions before abort |
 
 ---
 
@@ -248,16 +228,8 @@ Both server (Zephyr) and client (Python) must use the **same algorithm**:
 
 | Scenario | Detection | Recovery |
 |----------|-----------|----------|
-| Corrupted DATA frame | Per-frame CRC mismatch | Client doesn't ACK → server retransmits |
-| Lost DATA frame | Cumulative ACK stops advancing | Server detects timeout → retransmits |
-| Lost ACK | Server retransmit timeout | Server resends the frame |
+| Corrupted DATA frame | Per-frame CRC mismatch | Client discards frame (no ACK needed) |
+| Lost DATA frame | Full-file CRC mismatch at FILE_END | Client sends NACK, server retransmits entire file |
+| Lost FILE_END | Client timeout waiting for FILE_END | Server retries FILE_END |
+| Lost FILE_ACK | Server timeout waiting for FILE_ACK | Server retries FILE_END |
 | Connection lost | Heartbeat timeout (30s) | Server resets transport state |
-
----
-
-## Revision History
-
-| Version | Date | Changes |
-|---------|------|---------|
-| 2.0 | 2026-03-27 | Complete redesign: sliding window, per-frame CRC, selective ACK |
-| 1.0 | 2026-03-27 | Initial protocol definition |

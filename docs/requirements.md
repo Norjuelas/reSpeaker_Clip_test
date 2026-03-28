@@ -1,10 +1,10 @@
-# reSpeaker Clip - Product Requirements Document
+# ReSpeaker Clip - Product Requirements Document
 
 ## 1. Product Overview
 
 ### 1.1 Product Vision
 
-reSpeaker Clip is a portable Bluetooth recording device that provides high-quality audio capture with seamless mobile app integration. The device enables users to record lectures, meetings, and personal notes with intelligent audio processing, convenient bookmarking, and wireless synchronization to a mobile application.
+ReSpeaker Clip is a portable Bluetooth recording device that provides high-quality audio capture with seamless mobile app integration. The device enables users to record lectures, meetings, and personal notes with intelligent audio processing, convenient bookmarking, and wireless synchronization via BLE or WiFi UDP.
 
 ### 1.2 Target Users
 
@@ -15,17 +15,18 @@ reSpeaker Clip is a portable Bluetooth recording device that provides high-quali
 
 ### 1.3 Use Case Scenarios
 
-1. **Lecture Recording**: Student records 2-hour lecture, adds bookmarks for important topics, syncs to phone for transcription
-2. **Meeting Capture**: Professional records team meeting, marks key decisions, transcribes via mobile app
-3. **Interview**: Journalist records interview, bookmarks significant quotes, transfers for editing
-4. **Voice Memo**: Quick capture of personal ideas with button press
+1. **Lecture Recording**: Student records a 2-hour lecture, adds bookmarks for important topics, syncs to phone for transcription
+2. **Meeting Capture**: Professional records a team meeting, marks key decisions, transfers via WiFi UDP for faster download
+3. **Interview**: Journalist records an interview, bookmarks significant quotes, transfers for editing
+4. **Voice Memo**: Quick capture of personal ideas with a single button press
+5. **WiFi Bulk Sync**: User connects to device WiFi AP, downloads all recordings at high speed via UDP
 
 ### 1.4 Product Positioning
 
 - Portable, clip-on form factor
 - High-quality audio processing (SpeexDSP + Opus encoding)
-- Mobile-first experience with BLE synchronization
-- Simple single-button operation
+- Dual transport: BLE for mobile app, WiFi UDP for high-speed local sync
+- Simple single-button operation with OLED display feedback
 - Long battery life (>8 hours recording)
 
 ## 2. User Stories
@@ -35,31 +36,39 @@ reSpeaker Clip is a portable Bluetooth recording device that provides high-quali
 - **US-001**: As a user, I want to start recording with a long button press so I can quickly capture audio
 - **US-002**: As a user, I want to stop recording with a long button press so I can end the session
 - **US-003**: As a user, I want to add bookmarks during recording with a short button press so I can mark important moments
-- **US-004**: As a user, I want to see the current recording state on the display so I know if I'm recording
-- **US-005**: As a user, I want to see recording time elapsed so I can track session duration
+- **US-004**: As a user, I want to see the current recording state on the OLED display so I know if I'm recording
+- **US-005**: As a user, I want to see recording time elapsed on the display so I can track session duration
+- **US-006**: As a user, I want to pause and resume recording so I can skip interruptions
 
-### 2.2 Mobile App Integration
+### 2.2 Mobile App Integration (BLE)
 
 - **US-010**: As a user, I want to connect my phone via Bluetooth so I can transfer recordings
 - **US-011**: As a user, I want to see all recording sessions in the app so I can browse them
 - **US-012**: As a user, I want to download specific recordings so I can access them on my phone
 - **US-013**: As a user, I want to see bookmarks in the app so I can jump to important moments
-- **US-014**: As a user, I want to see transfer progress so I know when it's complete
+- **US-014**: As a user, I want to pause/resume/cancel file transfers so I can manage bandwidth
 
 ### 2.3 Device Management
 
-- **US-020**: As a user, I want to see battery level on the device so I know when to charge
-- **US-021**: As a user, I want to see charging status so I know it's charging
-- **US-022**: As a user, I want to configure audio quality settings so I can balance quality and storage
+- **US-020**: As a user, I want to see battery level on the OLED display so I know when to charge
+- **US-021**: As a user, I want to see charging status on the display so I know it's charging
+- **US-022**: As a user, I want to configure recording mode (Normal/Enhanced) so I can balance quality and storage
 - **US-023**: As a user, I want to delete old recordings from the app so I can free up space
 - **US-024**: As a user, I want to reset the device to factory settings so I can clear all data
 
 ### 2.4 Data Synchronization
 
 - **US-030**: As a user, I want recordings to automatically organize into sessions so I can find them easily
-- **US-031**: As a user, I want the app to show which recordings have been transferred so I don't download twice
+- **US-031**: As a user, I want the app to show which files have been transferred so I don't download twice
 - **US-032**: As a user, I want to pause/resume file transfers so I can manage bandwidth
 - **US-033**: As a user, I want to see available storage so I know how much recording time remains
+
+### 2.5 WiFi UDP Transfer
+
+- **US-040**: As a user, I want to connect to the device's WiFi AP so I can transfer recordings at high speed
+- **US-041**: As a user, I want to download sessions via UDP so I can sync faster than BLE
+- **US-042**: As a user, I want to start/stop WiFi from the BLE app or AT commands so I can control when WiFi is active
+- **US-043**: As a user, I want to use an interactive UDP terminal for debugging so I can troubleshoot issues
 
 ## 3. Functional Requirements
 
@@ -67,271 +76,340 @@ reSpeaker Clip is a portable Bluetooth recording device that provides high-quali
 
 #### 3.1.1 PDM Microphone Capture
 
-**FR-1.1.1**: The system shall capture audio from PDM microphones at 16 kHz sample rate
+**FR-1.1.1**: The system shall capture audio from PDM microphones at 16 kHz sample rate, 16-bit depth
 
-**FR-1.1.2**: The system shall support mono recording from single microphone
+**FR-1.1.2**: The system shall support stereo recording from dual microphones (Normal mode)
 
-**FR-1.1.3**: The system shall support stereo recording from dual microphones
+**FR-1.1.3**: The system shall support merged mode: stereo capture downmixed to mono (Enhanced mode)
 
-**FR-1.1.4**: The system shall support merged mode (stereo capture downmixed to mono)
+**FR-1.1.4**: The PDM driver shall use double buffering (memory slab) to prevent audio overflow
 
-**FR-1.1.5**: The PDM driver shall use double buffering to prevent audio overflow
+**FR-1.1.5**: The system shall configure microphone gain at +20dB via nrfx_pdm_gain_set()
 
 #### 3.1.2 Audio Processing Pipeline
 
 **FR-1.2.1**: The system shall apply noise suppression using SpeexDSP (configurable 0-60 dB)
 
-**FR-1.2.2**: The system shall apply dereverberation using SpeexDSP (configurable levels and decay)
+**FR-1.2.2**: The system shall apply dereverberation using SpeexDSP (enable/disable, fixed level=40, decay=20)
 
-**FR-1.2.3**: The system shall apply automatic gain control (AGC) to normalize audio levels
+**FR-1.2.3**: **NOT SUPPORTED** -- Automatic Gain Control (AGC) is not available. The SpeexDSP library is built with FIXED_POINT, which does not support AGC. AGC is commented out in the preprocessor initialization.
 
-**FR-1.2.4**: The system shall provide normal/enhanced mode presets
+**FR-1.2.4**: The system shall provide two recording mode presets:
+- **Normal mode**: Stereo capture, no DSP processing, 16 kbps/channel
+- **Enhanced mode**: Mono (merged L+R), noise suppression + dereverb, 32 kbps
 
-**FR-1.2.5**: The system shall process audio in real-time with < 50ms latency
+**FR-1.2.5**: Audio processing shall be applied only in Enhanced (merge) mode; Normal (stereo) mode passes PCM data directly to the encoder
+
+**FR-1.2.6**: The system shall process audio in real-time with < 50ms latency
 
 #### 3.1.3 Opus Encoding
 
-**FR-1.3.1**: The system shall encode audio using Opus codec
+**FR-1.3.1**: The system shall encode audio using the Opus codec
 
-**FR-1.3.2**: The system shall support configurable bitrates:
-  - Mono: 12000, 16000, 24000, 32000 bps
-  - Stereo: 24000, 32000, 48000, 64000 bps
+**FR-1.3.2**: Bitrate is mode-specific, set at compile time via Kconfig (not user-configurable at runtime):
+- Normal mode: 16 kbps per channel (CONFIG_CLIP_NORMAL_BITRATE=16000), stereo = 32 kbps total
+- Enhanced mode: 32 kbps (CONFIG_CLIP_ENHANCED_BITRATE=32000), mono
 
-**FR-1.3.3**: The system shall support configurable encoding complexity (0-10)
+**FR-1.3.3**: Encoding complexity is mode-specific, set at compile time via Kconfig (not user-configurable at runtime):
+- Normal mode: complexity 0 (CONFIG_CLIP_NORMAL_COMPLEXITY=0)
+- Enhanced mode: complexity 1 (CONFIG_CLIP_ENHANCED_COMPLEXITY=1)
 
-**FR-1.3.4**: The system shall write Opus frames with 2-byte length prefix
+**FR-1.3.4**: The encoder shall use VBR enabled, unconstrained quality, voice-optimized signal, 16-bit LSB depth, DTX/FEC/packet loss compensation disabled
 
-**FR-1.3.5**: The system shall split recordings into time-based segments:
-  - Normal mode: 10 minutes per file
-  - Enhanced mode: 2 minutes per file
+**FR-1.3.5**: The system shall write Opus frames with 2-byte little-endian length prefix to storage files
+
+**FR-1.3.6**: The system shall split recordings into time-based segments with dynamic duration:
+- During active transfer (sync): CONFIG_CLIP_AUDIO_SEGMENT_DURATION_SYNC seconds (default: 60s)
+- When not transferring: CONFIG_CLIP_AUDIO_SEGMENT_DURATION_NO_SYNC seconds (default: 300s)
+
+**FR-1.3.7**: When transitioning from non-transferring to transferring, the system shall immediately slice the current file if it exceeds the sync segment duration
 
 #### 3.1.4 Recording Modes
 
-**FR-1.4.1**: The system shall support Normal mode (standard quality, longer files)
+**FR-1.4.1**: Normal mode: stereo recording, no DSP, 16 kbps/channel (32 kbps total)
 
-**FR-1.4.2**: The system shall support Enhanced mode (high quality, shorter files for easier transfer)
+**FR-1.4.2**: Enhanced mode: mono (merged L+R), SpeexDSP noise suppression + dereverb, 32 kbps
 
-**FR-1.4.3**: The system shall store mode configuration in NVS
+**FR-1.4.3**: Recording mode shall be stored in NVS and configurable via AT+MODE command
 
 ### 3.2 Storage Management
 
 #### 3.2.1 SD Card File System
 
-**FR-2.1.1**: The system shall use FAT32 file system on SD card
+**FR-2.1.1**: The system shall use FAT32 file system on SD card via SDHC-SPI
 
 **FR-2.1.2**: The system shall store recordings in `/SD:/REC/` directory
 
 **FR-2.1.3**: The system shall detect SD card insertion/removal
 
-**FR-2.1.4**: The system shall report SD card errors to user
+**FR-2.1.4**: The system shall report SD card errors to user via AT command responses
 
-**FR-2.1.5**: The system shall handle SD card write errors gracefully
+**FR-2.1.5**: The system shall handle SD card write errors gracefully (close file, continue recording without storage)
 
 #### 3.2.2 Session Organization
 
-**FR-2.2.1**: The system shall create session directories named `YYYYMMDDHHMMSS`
+**FR-2.2.1**: The system shall create session directories named `YYYYMMDDHHMMSS` (14 digits)
 
-**FR-2.2.2**: The system shall create `session.json` with session metadata
+**FR-2.2.2**: The system shall create `session.json` with session metadata (channels, sample_rate, mode, file_count, synced_files, duration_sec, total_bytes)
 
-**FR-2.2.3**: The system shall maintain `files.lst` with list of audio files
+**FR-2.2.3**: Audio files shall be named `{NNNN}.opus` (e.g., `0001.opus`, `0002.opus`)
 
-**FR-2.2.4**: The system shall create `marks.bin` for bookmark data
+**FR-2.2.4**: The system shall create `marks.bin` for bookmark data (magic "BMRK", 2-byte count, N * 4-byte offsets)
 
-**FR-2.2.5**: Session metadata shall include:
-  - Session ID (timestamp)
-  - Start time
-  - End time
-  - Duration
-  - Mode (normal/enhanced)
-  - Bitrate
-  - Number of files
-  - Total size
+**FR-2.2.5**: Session metadata shall include: session_id, channels, sample_rate, mode, file_count, synced_files, duration_sec, total_bytes
 
 #### 3.2.3 Bookmark System
 
 **FR-2.3.1**: The system shall add bookmarks on short button press during recording
 
-**FR-2.3.2**: The system shall store bookmarks with:
-  - Timestamp
-  - Offset (in recording time)
-  - File name
-  - File offset
-  - Optional note
+**FR-2.3.2**: Bookmarks store offset in seconds from session start (4-byte uint32)
 
-**FR-2.3.3**: The system shall store bookmarks in binary format (`marks.bin`)
+**FR-2.3.3**: Bookmarks are stored in binary format (`marks.bin`): magic "BMRK" + count + offset array
 
-**FR-2.3.4**: The system shall support AT+MARK command with optional note text
+**FR-2.3.4**: The system shall support AT+MARK command to add bookmark during recording
+
+**FR-2.3.5**: The system shall support AT+MARKS command with pagination to retrieve bookmarks
 
 #### 3.2.4 Auto-Purge Policies
 
-**FR-2.4.1**: The system shall support auto-delete policies:
-  - `off`: Manual delete only
-  - `0`: Delete immediately after transfer
-  - `1-30`: Delete N days after transfer
+**FR-2.4.1**: The system shall support auto-delete policies configurable via AT+AUTODEL:
+- `off` (-1): Manual delete only
+- `0`: Delete immediately after transfer
+- `1-30`: Delete N days after transfer
 
-**FR-2.4.2**: The system shall identify transferred sessions via `.transferred` marker file
+**FR-2.4.2**: The system shall identify fully synced sessions (synced_files == file_count) for cleanup
 
-**FR-2.4.3**: The system shall provide `AT+PURGEABLE` command to query deletable space
+**FR-2.4.3**: The system shall provide AT+PURGEABLE command to query deletable sessions and total bytes
 
-**FR-2.4.4**: The system shall provide `AT+PURGE` command to delete all transferred sessions
+**FR-2.4.4**: The system shall provide AT+PURGE command to delete all sessions
 
-### 3.3 BLE Communication
+**FR-2.4.5**: The system shall provide AT+DELETE=<session_id> command to delete a specific session
 
-#### 3.3.1 GATT Service Definition
+### 3.3 Transport Layer
 
-**FR-3.1.1**: The system shall implement BLE GATT service with UUID `6E400001-B5A3-F393-E0A9-E50E24DCCA9E`
+#### 3.3.1 Transport Abstraction
 
-**FR-3.1.2**: The system shall provide Command Receive characteristic (Write): `6E400002-B5A3-F393-E0A9-E50E24DCCA9E`
+**FR-3.1.1**: The system shall implement a transport abstraction layer supporting BLE and UDP transports
 
-**FR-3.1.3**: The system shall provide Response Send characteristic (Notify): `6E400003-B5A3-F393-E0A9-E50E24DCCA9E`
+**FR-3.1.2**: Transport priority: BLE > UDP for active transport selection
 
-**FR-3.1.4**: The system shall provide File Data characteristic (Notify): `6E400004-B5A3-F393-E0A9-E50E24DCCA9E`
+**FR-3.1.3**: The transport layer shall support send, send_file_data, send_file_start, send_file_end, send_transfer_done, is_connected operations
 
-**FR-3.1.5**: The system shall require LE Secure Connections pairing
+#### 3.3.2 BLE Communication
 
-**FR-3.1.6**: The system shall require encrypted connection
+**FR-3.2.1**: The system shall implement BLE GATT service with UUID `6E400001-B5A3-F393-E0A9-E50E24DCCA9E`
 
-#### 3.3.2 AT Command Protocol
+**FR-3.2.2**: The system shall provide Command Receive characteristic (Write): `6E400002-B5A3-F393-E0A9-E50E24DCCA9E`
 
-**FR-3.2.1**: The system shall support EXEC commands: `AT+XX`
+**FR-3.2.3**: The system shall provide Response Send characteristic (Notify): `6E400003-B5A3-F393-E0A9-E50E24DCCA9E`
 
-**FR-3.2.2**: The system shall support SET commands: `AT+XX=<value>`
+**FR-3.2.4**: The system shall provide File Data characteristic (Notify): `6E400004-B5A3-F393-E0A9-E50E24DCCA9E`
 
-**FR-3.2.3**: The system shall support GET commands: `AT+XX?`
+**FR-3.2.5**: The system shall require LE Secure Connections pairing
 
-**FR-3.2.4**: The system shall use JSON format for all responses
+**FR-3.2.6**: The system shall require encrypted connection
 
-**FR-3.2.5**: The system shall return success response: `{"ok": true, "data": {...}}`
+**FR-3.2.7**: The system shall support audio visualization data via BLE (7-byte packed energy level history, sent every ~200ms)
 
-**FR-3.2.6**: The system shall return error response: `{"ok": false, "error": "message"}`
+#### 3.3.3 WiFi UDP Communication
 
-#### 3.3.3 File Transfer Protocol
+**FR-3.3.1**: The system shall support WiFi AP mode via nRF7002 (SSID: `ClipAP_XXXX`, password: `12345678`)
 
-**FR-3.3.1**: The system shall support streaming file transfer via BLE notify
+**FR-3.3.2**: WiFi AP shall use static IP `192.168.4.1` with DHCP server
 
-**FR-3.3.2**: The system shall support configurable chunk size (100-4096 bytes, default 500)
+**FR-3.3.3**: UDP file transfer server shall listen on port 8089
 
-**FR-3.3.3**: The system shall send progress notifications every 10%
+**FR-3.3.4**: UDP protocol shall use binary frame format with sequence numbers, CRC32 verification, and heartbeat
 
-**FR-3.3.4**: The system shall support transfer pause/resume
+**FR-3.3.5**: Frame types: FILE_START (0x11), FILE_DATA (0x12), FILE_END (0x13), TRANSFER_DONE (0x14), ACK (0x80)
 
-**FR-3.3.5**: The system shall support transfer cancel
+**FR-3.3.6**: WiFi shall be started manually (not auto-start) to save power when not in use
 
-**FR-3.3.6**: The system shall allow non-blocking commands during transfer
+**FR-3.3.7**: WiFi driver shall use WiFi/BLE coexistence (MPSL_CX + NRF70_SR_COEX)
 
-**FR-3.3.7**: The system shall create `.transferred` marker on successful transfer
+#### 3.3.4 AT Command Protocol
 
-**FR-3.3.8**: The system shall handle connection dropout during transfer
+**FR-3.4.1**: The system shall support EXEC commands: `AT+XX`
 
-#### 3.3.4 Connection Management
+**FR-3.4.2**: The system shall support SET commands: `AT+XX=<value>`
 
-**FR-3.4.1**: The system shall auto-advertise when not connected
+**FR-3.4.3**: The system shall support GET commands: `AT+XX?`
 
-**FR-3.4.2**: The system shall support bonding/pairing with mobile app
+**FR-3.4.4**: The system shall use JSON format for all responses
 
-**FR-3.4.3**: The system shall store bond information in NVS
+**FR-3.4.5**: The system shall return success response: `{"ok": true, "data": {...}}`
 
-**FR-3.4.4**: The system shall allow AT+PAIR=reset to clear pairing
+**FR-3.4.6**: The system shall return error response: `{"ok": false, "error": "message"}`
 
-**FR-3.4.5**: The system shall reconnect automatically to bonded device
+**FR-3.4.7**: AT commands shall be accepted from both BLE and UDP transports
+
+#### 3.3.5 AT Command Reference
+
+| Command | Type | Description |
+|---------|------|-------------|
+| `AT+GSTAT` | EXEC | Get device status (state, recording, battery, mode, bitrate, free space) |
+| `AT+DEVICE` | QUERY/EXEC | Get device name |
+| `AT+VERSION` | EXEC | Get firmware version |
+| `AT+TIME` | SET/GET/EXEC | Set time (Unix timestamp) or get current time (ISO 8601) |
+| `AT+MODE` | SET/GET/EXEC | Set/get recording mode (normal/enhanced) |
+| `AT+NOISE` | SET/GET/EXEC | Set/get noise suppression level (0-60 dB) |
+| `AT+DEREVERB` | SET/GET/EXEC | Set/get dereverberation (on/off) |
+| `AT+AUTODEL` | SET/GET/EXEC | Set/get auto-delete policy (off/0-30 days) |
+| `AT+BRIGHTNESS` | SET/GET/EXEC | Set/get OLED brightness (0-255) |
+| `AT+POWEROFF` | EXEC | Shutdown device |
+| `AT+FACTORY` | SET/EXEC | Factory reset (requires "confirm" or "yes") |
+| `AT+PAIR` | SET/GET | Query pairing status or `AT+PAIR=reset` to clear bonds |
+| `AT+REBOOT` | EXEC | Reboot device |
+| `AT+START` | EXEC/SET | Start recording (optional mode parameter) |
+| `AT+STOP` | EXEC | Stop recording |
+| `AT+PAUSE` | EXEC | Pause recording |
+| `AT+RESUME` | EXEC | Resume recording |
+| `AT+MARK` | EXEC | Add bookmark at current position |
+| `AT+LIST` | SET/GET/EXEC | List sessions with pagination, or session details, or file list |
+| `AT+MARKS` | SET/GET/EXEC | List bookmarks with pagination |
+| `AT+DOWNLOAD` | SET/EXEC | Start file transfer (session or session:file) |
+| `AT+CANCEL` | EXEC | Cancel active transfer |
+| `AT+DELETE` | SET | Delete a specific session |
+| `AT+PURGE` | EXEC | Delete all sessions |
+| `AT+PURGEABLE` | EXEC | List fully synced sessions eligible for cleanup |
+| `AT+FORMAT` | EXEC | Format SD card (delete all data) |
+| `AT+WIFI` | SET/GET/EXEC | Start/stop WiFi AP, query status |
+
+#### 3.3.6 File Transfer Protocol
+
+**FR-3.6.1**: The system shall support streaming file transfer via BLE notify or UDP
+
+**FR-3.6.2**: Transfer chunk size is a compile-time constant: CONFIG_CLIP_TRANSFER_CHUNK_SIZE=4096 bytes
+
+**FR-3.6.3**: The system shall support transfer cancel via AT+CANCEL
+
+**FR-3.6.4**: The system shall allow non-blocking commands during transfer
+
+**FR-3.6.5**: The system shall update synced_files count in session.json on successful file transfer
+
+**FR-3.6.6**: The system shall support continuous transfer mode: when recording while transferring, newly completed files are automatically queued
+
+**FR-3.6.7**: The transfer subsystem shall coordinate with storage to wait for files to finish writing before transfer
+
+#### 3.3.7 Connection Management
+
+**FR-3.7.1**: The system shall auto-advertise when not connected
+
+**FR-3.7.2**: The system shall support bonding/pairing with mobile app (max 1 bonded device)
+
+**FR-3.7.3**: The system shall store bond information in NVS
+
+**FR-3.7.4**: The system shall allow AT+PAIR=reset to clear pairing (clears bonds and reboots)
+
+**FR-3.7.5**: The system shall reconnect automatically to bonded device
 
 ### 3.4 User Interface
 
 #### 3.4.1 Button Input
 
-**FR-4.1.1**: The system shall detect long press (> 1 second) on user button
+**FR-4.1.1**: The system shall detect long press (> 1 second) on user button (GPIO1.15)
 
 **FR-4.1.2**: The system shall detect short press on user button
 
 **FR-4.1.3**: Long press shall toggle recording state:
-  - IDLE → RECORDING (start new session)
-  - RECORDING → IDLE (stop recording)
+- IDLE -> RECORDING (start new session)
+- RECORDING -> IDLE (stop recording)
 
 **FR-4.1.4**: Short press during recording shall add bookmark
 
 **FR-4.1.5**: Button input shall work even when BLE is connected
 
-**FR-4.1.6**: Double-click functionality shall be disabled
-
-**FR-4.1.7**: The system shall provide haptic feedback on button events
+**FR-4.1.6**: The system shall use a custom GPIO button driver (CONFIG_INPUT_CLIP) with dedicated thread
 
 #### 3.4.2 OLED Display
 
-**FR-4.2.1**: The system shall display current device state (IDLE/RECORDING/TRANSMITTING/PAUSED/ERROR)
+**FR-4.2.1**: The system shall drive a CH1115 OLED display (88x48 pixels, I2C interface)
 
-**FR-4.2.2**: The system shall display recording time in HH:MM:SS format during recording
+**FR-4.2.2**: Display shall use an event-driven UI state machine with dedicated UI thread
 
-**FR-4.2.3**: The system shall display battery level as percentage
+**FR-4.2.3**: UI states: OFF, PAIRING_GUIDE, STATUS_BAR, REC_WAVE, REC_DOT, MARKING, PAUSED, POWER_OFF, USB_CONNECTED, OTA
 
-**FR-4.2.4**: The system shall display charging status indicator
+**FR-4.2.4**: Display shall show recording state with wave/dot animation during recording
 
-**FR-4.2.5**: The system shall display current mode (Normal/Enhanced)
+**FR-4.2.5**: Display shall show recording time during recording
 
-**FR-4.2.6**: The system shall display bitrate and channel configuration
+**FR-4.2.6**: Display shall show battery level and charging indicator
 
-**FR-4.2.7**: Display shall update on state changes
+**FR-4.2.7**: Display shall show pairing guide when not bonded
 
-**FR-4.2.8**: Display shall update recording time every second
+**FR-4.2.8**: Display shall show status bar with battery, connection, and mode info
 
-**FR-4.2.9**: Display shall update battery level when changed > 5%
+**FR-4.2.9**: Display shall show bookmark animation on AT+MARK
 
-**FR-4.2.10**: **Initial Implementation**: Display via UART serial logging
+**FR-4.2.10**: Display brightness shall be configurable via AT+BRIGHTNESS (0-255, stored in NVS)
 
-**FR-4.2.11**: **Future Implementation**: Actual CH1115 OLED driver (88x48 pixels, I2C)
+**FR-4.2.11**: Display shall update every 50ms for animation (DISPLAY_ANIMATION_PERIOD)
 
 #### 3.4.3 Haptic Feedback
 
-**FR-4.3.1**: The system shall provide haptic feedback on recording start
+**FR-4.3.1**: The system shall provide haptic feedback on recording start (HAPTIC_SHORT: 100ms)
 
-**FR-4.3.2**: The system shall provide haptic feedback on recording stop
+**FR-4.3.2**: The system shall provide haptic feedback on recording stop (HAPTIC_SHORT: 100ms)
 
-**FR-4.3.3**: The system shall provide haptic feedback on bookmark addition
+**FR-4.3.3**: The system shall provide haptic feedback on bookmark addition (via display event)
 
-**FR-4.3.4**: The system shall provide different patterns for different events
+**FR-4.3.4**: The system shall provide haptic feedback on power off (HAPTIC_DOUBLE: 100-100-100ms)
 
-**FR-4.3.5**: **Initial Implementation**: Haptic feedback via LOG_INF() logging (e.g., "[HAPTIC] Pulse: 100 ms")
-
-**FR-4.3.6**: **Future Implementation**: Actual haptic motor control via PMIC GPIO2
+**FR-4.3.5**: Haptic motor control is via PMIC GPIO1 -> BUCK1 (MOTOR_3V3), enabled by CONFIG_CLIP_HAPTIC_MOTOR_ENABLED (default: disabled)
 
 ### 3.5 Power Management
 
 #### 3.5.1 Battery Monitoring
 
-**FR-5.1.1**: The system shall monitor battery voltage via PMIC
+**FR-5.1.1**: The system shall monitor battery via NPM1300 PMIC fuel gauge
 
 **FR-5.1.2**: The system shall calculate battery percentage
 
 **FR-5.1.3**: The system shall report battery level in AT+GSTAT response
 
-**FR-5.1.4**: The system shall prevent new recording when battery < 10%
+**FR-5.1.4**: The system shall display battery level on OLED
 
 #### 3.5.2 Charging Status
 
-**FR-5.2.1**: The system shall detect charging state via PMIC
+**FR-5.2.1**: The system shall detect charging state via NPM1300 PMIC
 
 **FR-5.2.2**: The system shall report charging status in AT+GSTAT response
 
-**FR-5.2.3**: The system shall display charging indicator
+**FR-5.2.3**: The system shall display charging indicator on OLED
 
-#### 3.5.3 Low Power States
+#### 3.5.3 CPU Frequency Scaling
 
-**FR-5.3.1**: The system shall enter low power mode when idle
+**FR-5.3.1**: The system shall boost CPU to 128MHz during recording (nrfx_clock_divider_set HFCLK_DIV_1)
 
-**FR-5.3.2**: The system shall wake from low power on button press
+**FR-5.3.2**: The system shall drop CPU to 64MHz when idle (nrfx_clock_divider_set HFCLK_DIV_2)
 
-**FR-5.3.3**: The system shall wake from low power on BLE connection
+**FR-5.3.3**: CPU boost shall be reference-counted to support concurrent audio and transfer operations
 
 #### 3.5.4 PMIC Control
 
-**FR-5.4.1**: The system shall control microphone power via GPIO
+**FR-5.4.1**: The system shall control microphone power via GPIO (gpio1.14, mic_vdd)
 
-**FR-5.4.2**: The system shall control OLED power via GPIO
+**FR-5.4.2**: The system shall control OLED power via GPIO (gpio1.8, oled_vdd)
 
-**FR-5.4.3**: The system shall control WiFi RF switch via GPIO
+**FR-5.4.3**: The system shall control WiFi RF switch via GPIO (gpio0.29, rfsw_vdd)
 
-**FR-5.4.4**: The system shall communicate with NPM1300 PMIC via I2C
+**FR-5.4.4**: The system shall communicate with NPM1300 PMIC via I2C (address 0x6b)
 
-### 3.6 Mobile App Requirements
+**FR-5.4.5**: The system shall support ship mode power-off via regulator_parent_ship_mode()
+
+### 3.6 Configuration & Settings
+
+**FR-7.1**: The system shall store configuration in Zephyr settings subsystem (backed by LittleFS on external flash)
+
+**FR-7.2**: The system shall provide AT commands for all configuration options (see AT Command Reference)
+
+**FR-7.3**: The system shall support factory reset via AT+FACTORY=confirm (clears config, formats SD card, clears BLE bonds, reboots)
+
+**FR-7.4**: Configuration shall persist across reboots
+
+**FR-7.5**: The system shall store Unix timestamp in settings for time persistence across reboots
+
+### 3.7 Mobile App Requirements
 
 **FR-6.1**: The mobile app shall discover and connect to device via BLE
 
@@ -339,73 +417,94 @@ reSpeaker Clip is a portable Bluetooth recording device that provides high-quali
 
 **FR-6.3**: The mobile app shall receive and parse JSON responses
 
-**FR-6.4**: The mobile app shall stream file data from device
+**FR-6.4**: The mobile app shall stream file data from device (BLE or UDP)
 
-**FR-6.5**: The mobile app shall display recording sessions
+**FR-6.5**: The mobile app shall display recording sessions with pagination
 
-**FR-6.6**: The mobile app shall display session bookmarks
+**FR-6.6**: The mobile app shall display session bookmarks with pagination
 
-**FR-6.7**: The mobile app shall show transfer progress
+**FR-6.7**: The mobile app shall start/stop WiFi AP for high-speed transfer
 
-**FR-6.8**: The mobile app shall support audio playback of downloaded files
+## 4. State Machine
 
-### 3.7 Configuration & Settings
+### 4.1 Device States
 
-**FR-7.1**: The system shall store configuration in NVS
+| State | Description |
+|-------|-------------|
+| UNINITIALIZED | Boot, not yet ready |
+| IDLE | Ready, not recording, not transferring |
+| RECORDING | Active audio recording |
+| TRANSMITTING | File transfer in progress |
+| WIFI_SYNC | WiFi AP active, UDP transfer mode |
+| PAUSED | Recording paused |
+| ERROR | Error state |
 
-**FR-7.2**: The system shall provide AT commands for all configuration options
+### 4.2 State Transition Table
 
-**FR-7.3**: The system shall support factory reset via AT+FACTORY
+```
+                  START    STOP     PAUSE    RESUME   MARK     WIFI_ON  WIFI_OFF  POFF_S  POFF_E  STATUS  USB     OTA_S   OTA_D
+UNINITIALIZED       -        -        -        -        -        -        -        -       -       -       -       -       -
+IDLE             RECORDING   -        -        -        -     WIFI_SYNC    -      same    same    same    same    same    same
+RECORDING           -      IDLE    PAUSED      -      same      -        -      same    same      -      same    same    same
+TRANSMITTING        -        -        -        -        -        -        -      same    same      -      same    same    same
+WIFI_SYNC           -        -        -        -        -        -      IDLE    same    same    same    same    same    same
+PAUSED              -      IDLE      -    RECORDING  same      -        -      same    same      -      same    same    same
+ERROR           RECORDING   -        -        -        -        -        -      same    same    same    same    same    same
+```
 
-**FR-7.4**: Configuration shall persist across reboots
+### 4.3 State Constraints
 
-## 4. Non-Functional Requirements
+**SC-1**: No recording during WiFi: RECORDING state blocks WIFI_ON event (TRANS_INVALID)
 
-### 4.1 Performance Requirements
+**SC-2**: No WiFi during recording: WIFI_SYNC state blocks START event (TRANS_INVALID)
+
+**SC-3**: Pause/resume only during recording
+
+**SC-4**: Transfer can occur independently of recording (RECORDING and TRANSMITTING are orthogonal)
+
+## 5. Non-Functional Requirements
+
+### 5.1 Performance Requirements
 
 **NFR-1.1**: Audio latency from microphone to encoded data shall be < 50ms
 
 **NFR-1.2**: File transfer speed over BLE shall be > 20 KB/s
 
-**NFR-1.3**: Battery life shall be > 8 hours continuous recording
+**NFR-1.3**: File transfer speed over WiFi UDP shall be significantly faster than BLE
 
-**NFR-1.4**: Battery life shall be > 4 hours continuous file transfer
+**NFR-1.4**: Battery life shall be > 8 hours continuous recording
 
-**NFR-1.5**: Boot time to ready state shall be < 3 seconds
+**NFR-1.5**: Button response time shall be < 100ms
 
-**NFR-1.6**: Button response time shall be < 100ms
+**NFR-1.6**: Display update time shall be < 50ms (50ms animation period)
 
-**NFR-1.7**: Display update time shall be < 50ms
+**NFR-1.7**: AT command response time shall be < 200ms (excluding file transfer)
 
-**NFR-1.8**: AT command response time shall be < 200ms (excluding file transfer)
+### 5.2 Reliability Requirements
 
-### 4.2 Reliability Requirements
+**NFR-2.1**: The system shall handle SD card removal without data corruption
 
-**NFR-2.1**: Mean Time Between Failures (MTBF) shall be > 1000 hours
+**NFR-2.2**: The system shall handle BLE disconnect during transfer without data loss (transfer can resume)
 
-**NFR-2.2**: The system shall handle SD card removal without data corruption
+**NFR-2.3**: The system shall recover from audio buffer overflow (DMIC timeout recovery with retrigger)
 
-**NFR-2.3**: The system shall handle BLE disconnect during transfer without data loss
+**NFR-2.4**: The system shall maintain data integrity on unexpected power loss
 
-**NFR-2.4**: The system shall recover from audio buffer overflow
+**NFR-2.5**: The system shall handle concurrent button and BLE/UDP commands
 
-**NFR-2.5**: The system shall maintain data integrity on unexpected power loss
-
-**NFR-2.6**: The system shall handle concurrent button and BLE commands
-
-### 4.3 Security Requirements
+### 5.3 Security Requirements
 
 **NFR-3.1**: BLE connection shall require LE Secure Connections pairing
 
 **NFR-3.2**: All BLE communication shall be encrypted
 
-**NFR-3.3**: The system shall support only one bonded device at a time
+**NFR-3.3**: The system shall support only one bonded device at a time (CONFIG_BT_MAX_PAIRED=1)
 
 **NFR-3.4**: The system shall allow unpairing via AT+PAIR=reset
 
-**NFR-3.5**: Factory reset shall clear all sensitive data
+**NFR-3.5**: Factory reset shall clear all sensitive data (config, SD card, BLE bonds)
 
-### 4.4 Compatibility Requirements
+### 5.4 Compatibility Requirements
 
 **NFR-4.1**: The system shall be compatible with BLE 5.0+ central devices
 
@@ -413,27 +512,25 @@ reSpeaker Clip is a portable Bluetooth recording device that provides high-quali
 
 **NFR-4.3**: The system shall support Android BLE GATT API
 
-**NFR-4.4**: The system shall support SDHC cards up to 32GB
+**NFR-4.4**: The system shall support SDHC cards
 
-**NFR-4.5**: The mobile app shall support iOS 14+
+**NFR-4.5**: WiFi AP shall use 5GHz channel 36 (US regulatory domain)
 
-**NFR-4.6**: The mobile app shall support Android 10+
+### 5.5 Maintainability Requirements
 
-### 4.5 Maintainability Requirements
+**NFR-5.1**: The system shall support firmware updates via BLE (MCUmgr SMP OTA DFU, dual-image)
 
-**NFR-5.1**: The system shall support firmware updates via BLE (future)
-
-**NFR-5.2**: The system shall log errors for debugging
+**NFR-5.2**: The system shall log errors for debugging (configurable log level via Kconfig)
 
 **NFR-5.3**: The system shall provide version information via AT+VERSION
 
 **NFR-5.4**: The system shall provide diagnostic information via AT+GSTAT
 
-## 5. Hardware Requirements & Constraints
+## 6. Hardware Requirements & Constraints
 
-### 5.1 nRF5340 Specifications
+### 6.1 nRF5340 Specifications
 
-**HC-1.1**: Application Core: ARM Cortex-M33 @ 128MHz
+**HC-1.1**: Application Core: ARM Cortex-M33 @ 128MHz (boost) / 64MHz (idle)
 
 **HC-1.2**: Network Core: ARM Cortex-M33 @ 64MHz
 
@@ -441,57 +538,51 @@ reSpeaker Clip is a portable Bluetooth recording device that provides high-quali
 
 **HC-1.4**: Total Flash: 1MB (split between cores)
 
-### 5.2 Memory Constraints
+### 6.2 Memory Constraints
 
-**HC-2.1**: Total SRAM: 512KB, with 64KB allocated to BLE core, **448KB available** for application
+**HC-2.1**: Secure Flash: 256KB for application image
 
 **HC-2.2**: Non-secure Flash: 192KB available
 
-**HC-2.3**: External SPI Flash: 64MB total, ~15MB user accessible
+**HC-2.3**: External SPI Flash: 64MB total (PY25Q64H), ~6.8MB LittleFS for settings
 
-**HC-2.4**: Memory allocation budget:
-  - BLE stack: 64KB (dedicated)
-  - Audio buffer: ~64KB
-  - Opus encoder state: ~20KB
-  - SpeexDSP state: ~10KB
-  - SD card buffer: 8KB
-  - Protocol buffer: 8KB
-  - Thread stacks: ~64KB
-  - Heap: 64KB
-  - Reserved: ~150KB
-  - **Total**: ~448KB
+**HC-2.4**: Heap: 128KB (CONFIG_HEAP_MEM_POOL_SIZE=131072)
 
-### 5.3 Power Constraints
+### 6.3 Power Constraints
 
 **HC-3.1**: Battery: 3.7V 500mAh LiPo
 
 **HC-3.2**: PMIC: NPM1300 with multiple regulators
 
-**HC-3.3**: Charging: USB-C 5V @ 500mA
+**HC-3.3**: Charging: USB-C
 
 **HC-3.4**: Power consumption targets:
-  - Recording: < 80mA
-  - Idle: < 10mA
-  - Transfer: < 40mA
-  - Sleep: < 1mA
+- Recording: < 80mA
+- Idle: < 10mA
+- Transfer: < 40mA
+- Sleep: < 1mA
 
-### 5.4 Peripheral Utilization
+### 6.4 Peripheral Utilization
 
-**HC-4.1**: PDM microphone interface (I2S compatible)
+**HC-4.1**: PDM0: Microphone array interface (alias: dmic0)
 
-**HC-4.2**: SD card via SDHC-SPI
+**HC-4.2**: SPI4: SD card via SDHC-SPI (CS: gpio0.9)
 
 **HC-4.3**: BLE via nRF5340 radio
 
-**HC-4.4**: User button on GPIO1.15
+**HC-4.4**: QSPI: nRF7002 WiFi module
 
-**HC-4.5**: I2C for PMIC (NPM1300) and OLED (CH1115)
+**HC-4.5**: GPIO1.15: User button (with custom input driver)
 
-**HC-4.6**: External SPI flash (PY25Q64H)
+**HC-4.6**: I2C1: NPM1300 PMIC (address 0x6b) -- power, battery, 5 GPIOs
 
-## 6. Data Requirements
+**HC-4.7**: I2C2: CH1115 OLED display (address 0x3c, 88x48, reset: gpio1.9)
 
-### 6.1 Audio Data Format
+**HC-4.8**: SPI3: External SPI flash PY25Q64H (CS: gpio0.20, 64MB)
+
+## 7. Data Requirements
+
+### 7.1 Audio Data Format
 
 **DR-1.1**: Audio codec: Opus (Ogg Encoded Format)
 
@@ -499,231 +590,132 @@ reSpeaker Clip is a portable Bluetooth recording device that provides high-quali
 
 **DR-1.3**: Bit depth: 16-bit
 
-**DR-1.4**: Frame format: [2-byte length][Opus frame data]
+**DR-1.4**: Frame format: [2-byte little-endian length][Opus frame data]
 
 **DR-1.5**: Frame size: 20ms (320 samples @ 16kHz)
 
-### 6.2 File Naming Convention
+**DR-1.6**: Max packet size: 4000 bytes
 
-**DR-2.1**: Session directory: `YYYYMMDDHHMMSS` (e.g., `20240203100000`)
+### 7.2 File Naming Convention
 
-**DR-2.2**: Audio files: `{NNN}.opus` (e.g., `001.opus`, `002.opus`)
+**DR-2.1**: Session directory: `YYYYMMDDHHMMSS` (14 digits, e.g., `20260328100500`)
+
+**DR-2.2**: Audio files: `{NNNN}.opus` (e.g., `0001.opus`, `0002.opus`)
 
 **DR-2.3**: Session metadata: `session.json`
 
-**DR-2.4**: File list: `files.lst`
+**DR-2.4**: Bookmark data: `marks.bin`
 
-**DR-2.5**: Bookmark data: `marks.bin`
-
-**DR-2.6**: Transfer marker: `.transferred`
-
-### 6.3 Session Metadata (session.json)
+### 7.3 Session Metadata (session.json)
 
 ```json
 {
-  "session_id": "20240203100000",
-  "start_time": "2024-02-03T10:00:00Z",
-  "end_time": "2024-02-03T10:10:00Z",
-  "duration": 600,
+  "channels": 2,
+  "sample_rate": 16000,
   "mode": "normal",
-  "bitrate": 48000,
-  "channels": "stereo",
-  "file_count": 1,
-  "total_size": 3600000,
-  "mark_count": 3
+  "file_count": 5,
+  "synced_files": 0,
+  "duration_sec": 600,
+  "total_bytes": 3600000
 }
 ```
 
-### 6.4 Bookmark Format (marks.bin)
+### 7.4 Bookmark Format (marks.bin)
 
 Binary format (little-endian):
 ```
-[Header: 4 bytes magic "MRK1"]
-[Count: 4 bytes uint32]
-[Entry 1]
-  [Timestamp: 8 bytes uint64]
-  [Offset: 4 bytes uint32 - seconds from start]
-  [File index: 2 bytes uint16]
-  [File offset: 4 bytes uint32]
-  [Note length: 2 bytes uint16]
-  [Note: N bytes UTF-8 string]
-[Entry 2]
+[Header: 4 bytes magic "BMRK"]
+[Count: 2 bytes uint16]
+[Entry 1: 4 bytes uint32 - offset in seconds from session start]
+[Entry 2: 4 bytes uint32]
 ...
 ```
 
-### 6.5 Configuration Storage (NVS)
+### 7.5 Configuration Storage (Settings/NVS)
 
-**DR-5.1**: All configuration stored in Zephyr NVS
+**DR-5.1**: All configuration stored in Zephyr settings subsystem (backed by LittleFS on external SPI flash)
 
-**DR-5.2**: Keys:
-  - `bitrate`: uint16 (default: 24000)
-  - `complexity`: uint8 (default: 5)
-  - `mode`: string "normal" | "enhanced" (default: "normal")
-  - `noise`: uint8 (default: 0)
-  - `dereverb`: string "on,level,decay" | "off"
-  - `agc`: string "on,target,gain" | "off"
-  - `chunksize`: uint16 (default: 500)
-  - `autodel`: string "off" | "0" | "1-30" (default: "off")
+**DR-5.2**: Settings file path: `/lfs/settings/run`
 
-## 7. User Interface Requirements
+**DR-5.3**: NVS keys (5 total):
 
-### 7.1 Button Interaction Design
+| Key | Settings Path | Type | Default | Description |
+|-----|--------------|------|---------|-------------|
+| mode | config/mode | uint8 | 0 (Normal) | Recording mode |
+| noise_suppress | config/noise_suppress | uint8 | 15 | Noise suppression level (dB) |
+| auto_delete_days | config/auto_delete_days | int8 | -1 (off) | Auto-delete policy |
+| dereverb_enabled | config/dereverb_enabled | bool | false | Dereverberation enabled |
+| oled_brightness | config/oled_brightness | uint8 | 128 | OLED brightness (0-255) |
 
-**UI-1.1**: Long press (> 1s): Toggle recording state
+**DR-5.4**: Time persistence: `time/unix_timestamp` (int64, saved/restored on boot)
+
+### 7.6 UDP Protocol
+
+**DR-6.1**: Binary frame protocol with sequence numbers and CRC32 verification
+
+**DR-6.2**: Frame types: FILE_START (0x11), FILE_DATA (0x12), FILE_END (0x13), TRANSFER_DONE (0x14), ACK (0x80)
+
+**DR-6.3**: Max UDP data per frame: 1024 bytes (CONFIG_CLIP_UDP_MAX_DATA_SIZE)
+
+**DR-6.4**: Heartbeat interval: 5000ms (CONFIG_CLIP_UDP_HEARTBEAT_INTERVAL_MS)
+
+**DR-6.5**: Connection timeout: 30000ms (CONFIG_CLIP_UDP_CONNECTION_TIMEOUT_MS)
+
+## 8. Storage Capacity Planning
+
+### 8.1 Bitrate and Storage
+
+| Mode | Channels | Bitrate (total) | Storage per Hour | Notes |
+|------|----------|-----------------|-------------------|-------|
+| Normal | Stereo | 32 kbps (16k x 2) | ~14.4 MB/hour | No DSP processing |
+| Enhanced | Mono | 32 kbps | ~14.4 MB/hour | SpeexDSP noise suppress + dereverb |
+
+Both modes produce approximately the same storage consumption (~14.4 MB/hour).
+
+### 8.2 Capacity Examples
+
+| SD Card Size | Recording Hours (approx) |
+|-------------|------------------------|
+| 1 GB | ~69 hours |
+| 4 GB | ~278 hours |
+| 8 GB | ~556 hours |
+| 32 GB | ~2222 hours |
+
+## 9. User Interface Requirements
+
+### 9.1 Button Interaction Design
+
+**UI-1.1**: Long press (> 1s): Toggle recording state (IDLE <-> RECORDING)
 
 **UI-1.2**: Short press (< 1s): Add bookmark (during recording)
 
-**UI-1.3**: Button debounce: 50ms
+**UI-1.3**: Button debounce: handled by custom GPIO input driver
 
-**UI-1.4**: Haptic feedback on press confirmation
+**UI-1.4**: Haptic feedback on press confirmation (when haptic motor enabled)
 
-### 7.2 LED Status Patterns
+### 9.2 OLED Screen Layout (88x48 pixels)
 
-**Note**: This device uses OLED display instead of LEDs
+**UI-3.1**: Pairing guide screen: shown when BLE not bonded
 
-### 7.3 OLED Screen Layout
+**UI-3.2**: Recording screen: wave/dot animation with real-time audio energy visualization
 
-```
-┌──────────────────────┐
-│  reSpeaker Clip      │  Header (top row)
-│                      │
-│  State: RECORDING    │  Current state
-│  [REC] 01:23:45      │  Icon + Time
-│                      │
-│  Batt: 85% ⚡        │  Battery + charging
-│  Mode: Enhanced      │  Settings
-│  48kHz Stereo        │  Bitrate/channels
-└──────────────────────┘
-```
+**UI-3.3**: Paused screen: static paused indicator
 
-**UI-3.1**: State display: IDLE, RECORDING, TRANSMITTING, PAUSED, ERROR
+**UI-3.4**: Status bar: battery level, connection status, mode
 
-**UI-3.2**: Recording time: HH:MM:SS format
+**UI-3.5**: Power-off confirmation screen
 
-**UI-3.3**: Battery: 0-100% with ⚡ when charging
+**UI-3.6**: USB connected screen
 
-**UI-3.4**: Mode: Normal or Enhanced
+**UI-3.7**: OTA update progress screen
 
-**UI-3.5**: Bitrate: numeric value in bps
+### 9.3 Audio Visualization
 
-**UI-3.6**: Channels: Mono or Stereo
+**UI-4.1**: Recording display shows real-time audio energy level (0-10 scale)
 
-### 7.4 Haptic Feedback Patterns
+**UI-4.2**: Energy history (13 samples) is packed into 7 bytes and sent via BLE every ~200ms
 
-**UI-4.1**: Recording start: 100ms pulse
-
-**UI-4.2**: Recording stop: 50ms double pulse
-
-**UI-4.3**: Bookmark added: 30ms triple pulse
-
-**UI-4.4**: Error: 200ms long pulse
-
-## 8. Quality Attributes
-
-### 8.1 Audio Quality Metrics
-
-**QA-1.1**: SNR (Signal-to-Noise Ratio): > 60dB with noise suppression
-
-**QA-1.2**: THD (Total Harmonic Distortion): < 1%
-
-**QA-1.3**: Frequency response: 100Hz - 8kHz ± 3dB
-
-**QA-1.4**: Opus encoding quality: Complexity 5 (balanced)
-
-### 8.2 Battery Life Expectations
-
-**QA-2.1**: Recording time: > 8 hours @ 500mAh
-
-**QA-2.2**: Transfer time: > 4 hours continuous BLE transfer
-
-**QA-2.3**: Idle time: > 72 hours
-
-**QA-2.4**: Charging time: < 2 hours (0-100%)
-
-### 8.3 Transfer Speed Targets
-
-**QA-3.1**: BLE throughput: > 20 KB/s average
-
-**QA-3.2**: 1MB file transfer: < 1 minute
-
-**QA-3.3**: 10MB session transfer: < 10 minutes
-
-### 8.4 Storage Capacity Planning
-
-**QA-4.1**: Bitrate 24kbps mono: ~3MB/hour (~260 hours on 8GB card)
-
-**QA-4.2**: Bitrate 48kbps stereo: ~6MB/hour (~130 hours on 8GB card)
-
-**QA-4.3**: Bitrate 64kbps stereo: ~8MB/hour (~100 hours on 8GB card)
-
-## 9. Acceptance Criteria
-
-### 9.1 Functional Acceptance Tests
-
-**AC-1**: Recording Control
-- [ ] Long press starts recording in IDLE state
-- [ ] Long press stops recording in RECORDING state
-- [ ] Short press adds bookmark during recording
-- [ ] State changes displayed on screen
-- [ ] Recording time updates every second
-
-**AC-2**: File Transfer
-- [ ] App can list all sessions
-- [ ] App can list files in session
-- [ ] App can download single file
-- [ ] App can pause/resume transfer
-- [ ] App can cancel transfer
-- [ ] Progress updates every 10%
-- [ ] Transfer creates .transferred marker
-
-**AC-3**: Bookmark System
-- [ ] AT+MARK adds bookmark during recording
-- [ ] AT+MARKS returns bookmark list
-- [ ] Bookmarks sync to mobile app
-- [ ] Bookmark offset is accurate
-
-**AC-4**: Configuration
-- [ ] All config AT commands work
-- [ ] Config persists across reboots
-- [ ] AT+FACTORY resets all settings
-
-### 9.2 Performance Benchmarks
-
-**AC-5**: Audio Performance
-- [ ] Audio latency < 50ms (measured)
-- [ ] No buffer underruns in 1-hour recording
-- [ ] No buffer overflows in 1-hour recording
-
-**AC-6**: Transfer Performance
-- [ ] Transfer speed > 20 KB/s (measured)
-- [ ] 1MB file transfers in < 60s
-- [ ] Non-blocking commands respond < 200ms during transfer
-
-**AC-7**: Battery Life
-- [ ] 8 hours continuous recording (measured)
-- [ ] 4 hours continuous transfer (measured)
-
-**AC-8**: Boot Time
-- [ ] Device ready in < 3s from power-on
-
-### 9.3 User Experience Validation
-
-**AC-9**: Button Interaction
-- [ ] Button response feels immediate (< 100ms)
-- [ ] Haptic feedback provides clear confirmation
-- [ ] No false triggers from debounce
-
-**AC-10**: Display Clarity
-- [ ] State is clearly visible
-- [ ] Recording time is readable
-- [ ] Battery status is clear
-- [ ] Charging indicator is obvious
-
-**AC-11**: Error Handling
-- [ ] SD card removal shows error
-- [ ] Low battery prevents recording
-- [ ] BLE disconnect pauses transfer
-- [ ] All errors have clear messages
+**UI-4.3**: Display animation uses fast bars (Enhanced mode) or slow dot (Normal mode)
 
 ## 10. Glossary
 
@@ -733,13 +725,15 @@ Binary format (little-endian):
 | GATT | Generic Attribute Profile (BLE protocol) |
 | PDM | Pulse Density Modulation (microphone interface) |
 | Opus | Open-source audio codec |
-| SpeexDSP | Audio processing library (noise suppression, AGC) |
-| NVS | Non-Volatile Storage (Zephyr KV store) |
-| PMIC | Power Management IC |
+| SpeexDSP | Audio processing library (noise suppression, dereverb) |
+| NVS | Non-Volatile Storage (Zephyr settings/KV store) |
+| PMIC | Power Management IC (NPM1300) |
 | AT Command | Hayes-style command protocol |
 | Session | A complete recording event with metadata |
 | Bookmark | User-marked timestamp within a recording |
-| Chunk | Data block size for BLE transfer |
+| Chunk | Segment file (time-based split of a recording) |
+| Transport | Abstraction layer for BLE and UDP communication |
+| UDP | User Datagram Protocol (WiFi file transfer) |
 
 ## 11. References
 

@@ -1,998 +1,178 @@
-## Remaining Features (As of 2025-02-26)
-
-### Implemented ✅
-
-| Feature | Status | Notes |
-|---------|--------|-------|
-| PDM Microphone Capture | ✅ | 16kHz, stereo/mono |
-| Opus Encoding | ✅ | Configurable bitrate/complexity |
-| SpeexDSP Processing | ✅ | Noise suppression, dereverb |
-| Audio Modes | ✅ | Normal (stereo), Enhanced (mono+DSP) |
-| SD Card Storage | ✅ | FAT32, session directories |
-| Session Metadata | ✅ | session.json, files.lst |
-| Bookmark System | ✅ | marks.bin |
-| BLE GATT Service | ✅ | Command, Response, File Data |
-| AT Command Protocol | ✅ | Full implementation |
-| File Transfer | ✅ | Pause/resume/cancel |
-| Simultaneous Rec+Transfer | ✅ | Record and transfer at same time |
-| NVS Configuration | ✅ | All 9 settings persist |
-| Battery Monitoring | ✅ | Via NPM1300 PMIC |
-| Button Handler | ✅ | Long press record, short press bookmark |
-| Time Sync | ✅ | AT+SETTIME |
-| Auto-Delete Config | ✅ | AT+AUTODEL |
-
-### Not Yet Implemented ❌
-
-| Feature | Priority | Requirements Ref | Notes |
-|---------|----------|------------------|-------|
-| **OLED Display** | Medium | FR-4.2.x | CH1115 I2C driver needed |
-| **Haptic Feedback** | Medium | FR-4.3.x | PMIC GPIO2 control needed |
-| **AGC Implementation** | Low | FR-1.2.3 | Config exists, SpeexDSP AGC? |
-| **Low Power Mode** | Medium | FR-5.3.x | Sleep when idle |
-| **BLE Security** | High | FR-3.1.5, FR-3.1.6 | LE Secure Connections |
-| **Bonding/Pairing** | Medium | FR-3.4.x | AT+PAIR=reset |
-| **Auto-Purge Execution** | Medium | FR-2.4.x | Background cleanup task |
-| **Firmware Update (DFU)** | Low | NFR-5.1 | Future feature |
-
-### Acceptance Criteria Status
-
-From requirements.md Section 9:
-
-**AC-1: Recording Control**
-- ✅ Long press starts recording
-- ✅ Long press stops recording
-- ✅ Short press adds bookmark
-- ❓ State changes displayed on screen (OLED not implemented)
-- ❓ Recording time updates (OLED not implemented)
-
-**AC-2: File Transfer**
-- ✅ List all sessions
-- ✅ List files in session
-- ✅ Download single file
-- ✅ Pause/resume transfer
-- ✅ Cancel transfer
-- ✅ Progress updates
-- ✅ Transfer marker
-
-**AC-3: Bookmark System**
-- ✅ AT+MARK adds bookmark
-- ✅ Bookmarks stored in marks.bin
-- ❓ AT+MARKS returns list (need to verify)
-- ✅ Bookmark offset accurate
-
-**AC-4: Configuration**
-- ✅ All config AT commands work
-- ✅ Config persists across reboots
-- ✅ AT+FACTORY resets settings
-
-### Recommended Next Steps
-
-1. **OLED Display** - Implement CH1115 driver for visual feedback
-2. **Haptic Feedback** - Control vibration motor via PMIC GPIO2
-3. **BLE Security** - Enable LE Secure Connections for secure pairing
-4. **Auto-Purge** - Implement background task to delete old transferred sessions
-
----
-
-## 2025-03-23 - Clip2 Audio Recording Optimization
-
-### Completed Tasks
-
-#### 1. Audio Recording Optimization (audio.c)
-- ✅ On-demand encoder/DSP initialization
-  - Encoder and DSP now initialized when recording starts, not during audio_init
-  - Parameter change detection avoids unnecessary reinitialization
-  - Encoder/DSP kept initialized between recordings for efficiency
-- ✅ Microphone power control
-  - Power on with 10ms stabilization delay when recording starts
-  - Power off when recording stops to save battery
-- ✅ Removed VBR settings that were causing slow encoding (21ms → ~12ms)
-- ✅ Increased audio thread stack to 32KB and priority to 0
-
-#### 2. AT Command Fixes (at_commands.c, at_server.c)
-- ✅ Fixed MODE command JSON format (missing closing brace `}`)
-- ✅ Fixed create_json_response buffer check (`<` → `<=`)
-- ✅ Updated BITRATE/COMPLEXITY commands to use audio_set_* functions
-- ✅ Updated START command mode name (mono → merge)
-
-#### 3. Thread Stack Fixes (Kconfig)
-- ✅ Increased AT server thread stack from 2KB to 4KB
-  - Fixed hang when calling settings_save_one()
-  - Root cause: stack overflow during LittleFS/Flash operations
-
-#### 4. Performance Improvements
-- ✅ Set HFCLK divider to 1 for maximum CPU frequency (128MHz)
-- ✅ Reduced default Opus complexity from 5 to 1 for faster encoding
-
----
-
-## 2025-02-26 - Mode Mapping Fix and DSP Restriction
-
-### Completed Tasks
-
-#### 1. Mode Mapping Fix (audio.c)
-- ✅ Fixed mode mapping bug:
-  - `MODE_NORMAL` → `AUDIO_MODE_STEREO` (stereo, no DSP)
-  - `MODE_ENHANCED` → `AUDIO_MODE_MERGE` (mono with DSP)
-- ✅ Previous implementation had mapping inverted
-
-#### 2. DSP Restriction for Stereo Mode (audio.c)
-- ✅ DSP only enabled in enhanced (mono) mode
-- ✅ `noise_suppress` config can be set regardless of mode
-- ✅ During recording:
-  - Normal (stereo) mode: DSP never enabled
-  - Enhanced (mono) mode: DSP enabled if `noise_suppress > 0`
-- ✅ When mode changes during recording, DSP is properly enabled/disabled
-
-#### 3. Bitrate Scaling (audio.c)
-- ✅ Mono bitrate = configured value
-- ✅ Stereo bitrate = configured value × 2
-
-### Mode Behavior
-
-| Mode | Audio Mode | DSP | Bitrate |
-|------|------------|-----|---------|
-| Normal | Stereo | Disabled | config × 2 |
-| Enhanced | Mono (merged) | Enabled (if configured) | config |
-
-### Code Changes
-
-```c
-// audio_init() - mode mapping
-current_mode = (g_config.mode == MODE_NORMAL) ? AUDIO_MODE_STEREO : AUDIO_MODE_MERGE;
-
-// audio_init() - DSP only in enhanced mode
-if (g_config.noise_suppress > 0 && current_mode == AUDIO_MODE_MERGE) {
-    speex_enabled = true;
-    // ...
-}
-
-// audio_start_recording() - handle mode changes
-if (mode == AUDIO_MODE_STEREO) {
-    // Disable DSP in stereo mode
-    if (speex_enabled) {
-        cleanup_speex_preprocessor();
-        speex_enabled = false;
-    }
-} else {
-    // Re-enable DSP in enhanced mode if configured
-    if (g_config.noise_suppress > 0 && !speex_enabled) {
-        // ...
-    }
-}
-```
-
-### Known Issue
-
-**File Open Error (-2) during transfer**
-- Error: `<err> fs: file open error (-2)` appears periodically during recording+transfer
-- Cause: Zephyr FAT filesystem internal operation
-- Impact: None - files are written successfully
-- Status: Non-critical, can be ignored
-
----
-
-## 2025-02-25 - Simultaneous Recording and BLE Transfer
-
-### Completed Tasks
-
-#### 1. Transfer Module Enhancements (transfer.c/h)
-- ✅ Added `transfer_resume_from()` - Resume transfer from specific file
-  - Format: `AT+DOWNLOAD=session:start_file` (e.g., `AT+DOWNLOAD=20250225_143000:015.opus`)
-  - Direct numeric index based file selection for faster resume
-- ✅ Simultaneous recording and transfer - Records and transfers at same time
-  - Transfer starts immediately when recording begins
-  - New files are automatically queued for transfer
-  - Thread-safe file operations (CONFIG_FS_FATFS_REENTRANT)
-- ✅ Connection event handling - Proper cleanup on BLE disconnect
-  - Calls `transfer_cancel()` on disconnect
-  - Client can resume with `AT+DOWNLOAD=session:start_file`
-- ✅ Retry logic with reduced log verbosity
-  - Reduced `LOG_INF` to `LOG_DBG` for retry messages
-  - Cleaner console output during transfer
-
-#### 2. BLE Service Enhancements (ble_svc.c/h)
-- ✅ Disconnect callback cleanup
-  ```c
-  static void disconnected(struct bt_conn *conn, uint8_t reason)
-  {
-      if (current_conn == conn) {
-          // Cancel any ongoing transfer
-          if (transfer_is_active() || transfer_is_paused()) {
-              transfer_cancel();
-          }
-          // Restart advertising
-          k_work_submit(&adv_work);
-      }
-  }
-  ```
-- ✅ `ble_svc_send_file_complete()` with retry logic
-  - Retries up to 5 times with 50ms delay on BLE errors
-  - Handles error -12 (ENOMEM) and other temporary failures
-
-#### 3. AT Command Updates (at_cmd.c)
-- ✅ Extended `AT+DOWNLOAD` command syntax
-  - `AT+DOWNLOAD=session` - Download all files from session
-  - `AT+DOWNLOAD=session/filename` - Download single file
-  - `AT+DOWNLOAD=session:start_file` - Resume from specific file
-
-#### 4. Python Sync Tool (tests/sync.py)
-- ✅ Standalone sync tool for easy file synchronization
-  ```bash
-  python sync.py [--device MAC] [--session SESSION_ID]
-  ```
-- ✅ Features:
-  - Automatic device scanning and connection
-  - Session listing and status query
-  - Resume support - skips already downloaded files
-  - Progress bars with tqdm (file-level and overall)
-  - Auto-detection of recording state
-  - File merging - combines all segments into single `.opus` file
-- ✅ Usage modes:
-  - **Continuous mode** (default for active recordings) - Keeps waiting for new files
-  - **One-shot mode** (`--oneshot`) - Exits when no new files for 10 seconds
-  - **Status query** (`--status`) - Shows device state and exits
-- ✅ Smart resume logic:
-  - Compares local files with device session
-  - Only transfers missing or newer files
-  - Skips existing files with matching size
-
-#### 5. Test Scripts Renamed
-- ✅ `test_01_basic.py` → `test_01_basic_at_commands.py`
-- ✅ `test_02_config.py` → `test_02_config_nvs.py`
-- ✅ `test_03_recording.py` → `test_03_recording_and_transfer.py`
-
-### New AT Commands
-
-#### AT+DOWNLOAD (Extended)
-```
-AT+DOWNLOAD=session_id
-AT+DOWNLOAD=session_id:filename
-AT+DOWNLOAD=session_id:start_file
-
-# Examples:
-AT+DOWNLOAD=20250225_143000              # All files from session
-AT+DOWNLOAD=20250225_143000:015.opus      # Single file
-AT+DOWNLOAD=20250225_143000:020.opus      # Resume from 020.opus
-```
-
-### Sync Tool Usage
-
-```bash
-# Sync latest session (auto-detects recording state)
-python sync.py
-
-# Sync specific session
-python sync.py --session 20250225_143000
-
-# Show device status only
-python sync.py --status
-
-# Use specific device
-python sync.py --device AA:BB:CC:DD:EE:FF
-
-# One-shot mode (exit when no new files)
-python sync.py --oneshot --session 20250225_143000
-```
-
-### Transfer Flow
-
-#### Recording + Transfer (Simultaneous)
-```
-1. User presses button → Recording starts
-2. Device creates session directory (e.g., /SD:/REC/20250225_143000/)
-3. Transfer starts automatically
-4. As each file completes (60 seconds):
-   - File closed on SD card
-   - Transfer picks up new file
-   - Client receives file_ready event
-   - Data transfer begins
-5. On BLE disconnect:
-   - Transfer is cancelled
-   - Device continues recording
-6. On reconnect:
-   - Client sends AT+DOWNLOAD=session:last_file
-   - Transfer resumes from next file
-```
-
-#### Sync Tool Flow
-```
-1. Connect to device
-2. Query device state (AT+GSTAT)
-3. List sessions (AT+LIST)
-4. Compare local files with device session
-5. Calculate resume point (first missing file)
-6. Start transfer from resume point
-7. For each file:
-   - Receive file_ready event
-   - Receive file data via BLE notifications
-   - Receive file_complete event
-   - Save to disk (skip if exists with same size)
-8. Merge all files into single .opus file
-9. Display completion summary
-```
-
-### Known Issues & Solutions
-
-#### Issue: File Complete Event Loss
-**Problem**: `file_complete` notification fails with error -12 when BLE stack is busy
-
-**Solution**: Added retry logic with delay
-```c
-// ble_svc.c - ble_svc_send_file_complete()
-do {
-    err = ble_svc_send_response(buffer);
-    if (err == 0) break;
-    if (err == -ENOMEM || err == -EAGAIN || err == -EBUSY || err == -12) {
-        k_sleep(K_MSEC(50));
-        continue;
-    }
-} while (retry_count < max_retries);
-```
-
-#### Issue: Data Arrives Before file_ready Event
-**Problem**: File data notifications arrive before `file_ready` event is processed
-
-**Solution**: Client-side early buffer
-```python
-# sync.py
-if self.downloading_file:
-    if self._last_filename:
-        self.current_file_data.extend(data)
-    else:
-        self._early_data_buffer.extend(data)  # Buffer until file_ready
-
-# When file_ready arrives:
-if len(self._early_data_buffer) > 0:
-    self.current_file_data.extend(self._early_data_buffer)
-    self._early_data_buffer.clear()
-```
-
-#### Issue: Resume Parameter Not Working
-**Problem**: Device was using string comparison to find start file in unsorted list
-
-**Solution**: Direct numeric index
-```c
-// transfer.c - transfer_resume_from()
-int start_num = atoi(start_file);  // "023.opus" → 23
-current_transfer.file_index = start_num - 1;  // 0-based index
-```
-
-### Performance
-
-#### Transfer Speed
-- **MTU**: 247 bytes (after negotiation)
-- **Effective throughput**: ~150-200 KB/s
-- **File size**: ~45-50 KB per 60-second segment
-- **Transfer time per file**: ~0.25 seconds
-- **Total sync time**: ~5-6 seconds for 22 files
-
-#### Memory Usage
-- **Current**: 319 KB FLASH / 242 KB RAM (31.15% / 52.72%)
-- **Transfer thread stack**: 8 KB
-- **AT command processor stack**: 8 KB
-- **Audio buffer**: 32 KB
-
-### Testing
-
-#### Test Scripts
-```bash
-# 1. Basic AT commands test
-python test_01_basic_at_commands.py
-
-# 2. NVS config test
-python test_02_config_nvs.py
-
-# 3. Recording and transfer test (with disconnect/reconnect)
-python test_03_recording_and_transfer.py
-
-# 4. Sync tool test
-python sync.py --status
-python sync.py --session <SESSION_ID>
-```
-
-#### Sync Tool Test Cases
-1. **Sync completed session** - Should skip all existing files
-2. **Sync active recording** - Should continuously wait for new files
-3. **Resume after disconnect** - Should skip already transferred files
-4. **Empty session** - Should handle gracefully with appropriate message
-
-### File Operations
-
-#### Session Structure
-```
-/SD:/REC/YYYYMMDDHHMMSS/    <- Session directory (with time sync)
-├── session.json             <- Session metadata
-├── files.lst                <- File list with sizes
-├── marks.bin                <- Bookmark data
-├── 001.opus                 <- Audio segments (60 sec each)
-├── 002.opus
-└── ...
-```
-
-#### Merged Output
-```
-downloads/
-├── YYYYMMDDHHMMSS/          <- Individual segments
-│   ├── 001.opus
-│   ├── 002.opus
-│   └── ...
-└── YYYYMMDDHHMMSS.opus      <- Merged complete recording
-```
-
----
-
-## 2025-02-24 - Fix Recording File Storage Structure
-
-### Completed Tasks
-
-#### 1. Storage Module Updates (storage.c/h)
-- ✅ Added `storage_create_session()` - Creates `/SD:/REC/<session_id>/` directory
-- ✅ Modified `storage_create_file()` - New signature: `(file, session_id, file_index)`
-  - File path: `/SD:/REC/<session_id>/NNN.opus`
-- ✅ Added `storage_close_session()` - Creates `session.json` and `files.lst`
-- ✅ Updated `storage_list_sessions()` - Scans `/SD:/REC/` directory
-- ✅ Updated all session-related functions with new path structure
-
-#### 2. Audio Module Updates (audio.c)
-- ✅ Modified session ID generation:
-  - With BLE time sync: `YYYYMMDDHHMMSS` (14 digits)
-  - Fallback: `REC_XXXXXX` (incrementing counter)
-- ✅ Added `session_counter` for fallback IDs
-- ✅ Calls `storage_create_session()` on recording start
-- ✅ Calls `storage_close_session()` on recording stop
-- ✅ Updated segmentation logic with new file naming
-
-#### 3. Bookmarks Module Updates (bookmarks.c)
-- ✅ Updated bookmark storage path to `/SD:/REC/<session_id>/marks.bin`
-
-#### 4. AT Command Updates (at_cmd.c)
-- ✅ Added `AT+SETTIME` command - Sets synchronized time from phone
-  - Format: `AT+SETTIME=2025-02-24T14:30:00Z`
-  - Stores time in `g_synced_time` global variable
-
-#### 5. Transfer Module Updates (transfer.c)
-- ✅ Updated file path to `/SD:/REC/<session_id>/<filename>`
-
-#### 6. Global Variables (main.c, clip.h)
-- ✅ Added `struct synced_time` definition
-- ✅ Added `g_synced_time` global variable
-
-### New File Structure
-
-```
-/SD:/REC/YYYYMMDDHHMMSS/    <- Session directory
-├── session.json            <- Session metadata
-├── files.lst               <- File list with sizes
-├── marks.bin               <- Bookmark data
-├── 001.opus                <- Audio segments
-├── 002.opus
-└── ...
-```
-
-### Fallback Behavior
-
-When BLE time not synchronized:
-- Session ID: `REC_XXXXXX` (incrementing counter)
-- Same directory structure applies
-
-### Problem Analysis (Original)
-
-**Previous Implementation:**
-```
-/SD:/
-├── rec_00000009_normal.opus  <- Directly in root directory
-├── rec_00000000_segment.opus
-└── ...
-```
-
-**Issues Fixed:**
-1. ✅ Files now stored in session directories
-2. ✅ File naming: `NNN.opus` (001.opus, 002.opus, etc.)
-3. ✅ Session ID format: `YYYYMMDDHHMMSS` (14 digits)
-4. ✅ Added session metadata files
-5. ✅ Bookmark storage in session directory
-
-### Testing Required
-
-1. Start recording -> Check `/SD:/REC/YYYYMMDDHHMMSS/` directory created
-2. Recording exceeds 60 seconds -> Check `002.opus` created
-3. Stop recording -> Check `session.json` and `files.lst` created
-4. Add bookmark -> Check `marks.bin` created
-5. AT+LIST -> Check correct session list returned
-
-### Build Status
-
-- Memory: 308 KB FLASH / 224 KB RAM
-- Build: ✅ Successful
-
----
-
-## 2025-02-20 - Phase 2: Audio Recording Implementation
-
-### Completed Tasks
-
-#### 1. Audio Module (Phase 2)
-- ✅ Created `audio.h` and `audio.c` - Complete audio subsystem
-- ✅ PDM microphone driver integration (DMIC API)
-- ✅ Opus encoding (16kHz, mono/stereo, configurable bitrate)
-- ✅ SpeexDSP preprocessing (noise suppression, dereverb)
-- ✅ Audio modes: mono (L channel only), merge (L+R mixed), stereo
-- ✅ Dedicated audio recording thread (8KB stack)
-- ✅ Audio statistics tracking (frames, bytes, encode time)
-- ✅ Microphone power control
-- ✅ Hardware gain control (+20dB)
-
-#### 2. Audio Configuration
-Added to `prj.conf`:
-```conf
-CONFIG_AUDIO=y
-CONFIG_AUDIO_DMIC=y
-CONFIG_OPUS_CODEC=y
-CONFIG_SPEEXDSP=y
-```
-
-#### 3. Integration with AT Commands
-- ✅ `AT+START` command now starts audio recording
-  - Parses mode parameter (normal/enhanced)
-  - Maps to audio mode (merge/stereo)
-  - Transitions state machine to RECORDING
-- ✅ `AT+STOP` command stops audio recording
-  - Retrieves audio statistics
-  - Returns recording summary with frame count and byte size
-- ✅ State machine synchronizes with audio subsystem
-
-#### 4. Architecture Enhancements
-**Audio Module Structure**:
-- `audio_recording_thread()` - Background thread for continuous recording
-- `audio_init()` - Initialize DMIC, Opus, SpeexDSP
-- `audio_start_recording()` - Start DMIC and encode frames
-- `audio_stop_recording()` - Stop DMIC and cleanup
-- Audio statistics tracking
-- Runtime bitrate/complexity/noise suppression control
-
-**Audio Pipeline**:
-```
-PDM Microphone → DMIC Driver → Process PCM (mode)
-→ SpeexDSP (optional) → Opus Encode → [BLE/SD Storage]
-```
-
-### Build Configuration Updates
-
-**Memory Usage**:
-- Before: 133 KB FLASH / 81 KB RAM
-- After: 269 KB FLASH / 110 KB RAM
-- Increase: +136 KB FLASH (Opus + SpeexDSP), +29 KB RAM
-
-**Stack Sizes**:
-- Main thread: 16KB
-- Audio recording thread: 8KB
-- BLE RX thread: 2KB
-
-### Testing Status
-
-**Completed**:
-- ✅ Compiles successfully with all audio features
-- ✅ Memory usage within limits (269KB / 1MB = 27%)
-- ✅ Audio thread configured and started
-
-**Not Yet Tested**:
-- ⏳ Audio recording on actual hardware
-- ⏳ BLE audio streaming
-- ⏳ SD card storage
-- ⏳ Button control
-- ⏳ Display integration
-
-### Known Issues
-
-1. **SD Card Storage** - Not yet implemented
-   - File I/O functions need to be added
-   - Filename generation based on timestamp
-   - Storage space monitoring
-
-2. **BLE Audio Streaming** - Not yet implemented
-   - Opus packet transmission via BLE File Data characteristic
-   - MTU-aware packetization
-   - Flow control to prevent packet loss
-
-3. **Display UI** - Not yet implemented
-   - Recording indicator
-   - Time/frames display
-   - Battery status
-
-4. **Button Control** - Not yet implemented
-   - Custom input driver integration (CONFIG_INPUT_CLIP)
-   - Multi-press support (short/long/double-click)
-
-### Next Steps
-
-#### Phase 3: Storage & UI (Next Priority)
-1. Implement SD card file I/O
-   - Create file management module
-   - Buffering strategy for efficient writes
-   - Error handling for SD card removal
-2. Integrate button input driver
-3. Add display driver (CH1115 OLED)
-4. Implement BLE audio streaming
-
-### Technical Details
-
-**Audio Configuration**:
-- Sample rate: 16 kHz
-- Sample depth: 16-bit
-- Channels: 2 (stereo capture from PDM)
-- Frame size: 20ms (320 samples per channel)
-- Block size: 1280 bytes (stereo, 16-bit, 20ms)
-- Opus frame: 320 samples
-- Bitrate: 24 kbps (mono), 48 kbps (stereo)
-
-**Audio Modes**:
-- `AUDIO_MODE_MONO`: Left channel only
-- `AUDIO_MODE_MERGE`: Mix L+R to mono (default for normal mode)
-- `AUDIO_MODE_STEREO`: Full stereo (enhanced mode)
-
-**Encoding Performance** (from samples/opus_encode reference):
-- Opus encode time: <5ms per frame (20ms audio)
-- DSP processing time: <2ms per frame
-- Total overhead: <35% CPU time
-
----
-
-## 2025-02-20 - Phase 3: SD Card Storage Implementation
-
-### Completed Tasks
-
-#### 1. Storage Module
-- ✅ Created `storage.h` and `storage.c` - Complete SD card management
-- ✅ FAT filesystem integration (FatFS + ELM)
-- ✅ SD card initialization and mounting
-- ✅ File operations: create, write, close, delete, list
-- ✅ 4KB write buffer for efficient SD card writes
-- ✅ Storage statistics tracking (files, bytes, free space)
-- ✅ SD card formatting support
-
-#### 2. Audio-to-Storage Integration
-- ✅ Auto-create file on recording start
-- ✅ Filename format: `rec_<session_id>_<mode>.opus`
-- ✅ Write each Opus frame to SD card with length header
-- ✅ Close file on recording stop
-- ✅ Error handling - continue recording if SD fails
-
-#### 3. Binary File Format
-- Frame format: `[2-byte little-endian length][Opus data]`
-- Easy to parse with Python script
-- Compatible with samples/opus_encode format
-
-#### 4. Configuration
-Added to `prj.conf`:
-```conf
-CONFIG_DISK_ACCESS=y
-CONFIG_DISK_DRIVER_SDMMC=y
-CONFIG_FILE_SYSTEM=y
-CONFIG_FAT_FILESYSTEM_ELM=y
-CONFIG_FS_FATFS_LFN=y
-CONFIG_FS_FATFS_MKFS=y
-CONFIG_FILE_SYSTEM_MKFS=y
-```
-
-### Build Configuration Updates
-
-**Memory Usage**:
-- Before: 269 KB FLASH / 110 KB RAM
-- After: 292 KB FLASH / 117 KB RAM
-- Increase: +23 KB FLASH (filesystem), +7 KB RAM (FS buffers)
-
-**Total Progress**:
-- FLASH: 292 KB / 1 MB (29%)
-- RAM: 117 KB / 448 KB (26%)
-
-### Technical Details
-
-**Write Buffer Strategy**:
-- 4KB buffer accumulates multiple frames
-- Flush when buffer full or file close
-- Reduces SD card write operations by ~10x
-- Minimizes write wear and power consumption
-
-**Frame Storage Format**:
-```
-[0x00][0x3E] - Length = 62 bytes
-[Opus packet data... 62 bytes]
-[0x00][0x45] - Length = 69 bytes
-[Opus packet data... 69 bytes]
-...
-```
-
-**File Management**:
-- Auto-generate filename from uptime + mode
-- Track total files and bytes across sessions
-- Free space monitoring via FatFS
-- Support long filenames (up to 64 chars)
-
-### Testing Status
-
-**Completed**:
-- ✅ Compiles successfully with SD card support
-- ✅ Memory usage within limits (292KB / 1MB = 29%)
-- ✅ File system integration complete
-
-**Not Yet Tested**:
-- ⏳ SD card mounting on actual hardware
-- ⏳ File write/read operations
-- ⏳ Recording to SD card
-- ⏳ SD card removal handling
-
-### Known Issues
-
-1. **BLE Audio Streaming** - Not yet implemented
-   - Need to implement Opus packet transmission via BLE
-   - File data characteristic ready but not used
-   - MTU-aware packetization needed
-
-2. **Display UI** - Not yet implemented
-   - Recording indicator
-   - Time/frames display
-   - Battery status
-   - Error messages
-
-3. **Button Control** - Not yet implemented
-   - Custom input driver (CONFIG_INPUT_CLIP)
-   - Multi-press support
-   - Integration with state machine
-
-4. **Storage Commands** - Need AT commands for:
-   - `AT+FILES` - List files on SD card
-   - `AT+DELETE <filename>` - Delete file
-   - `AT+FORMAT` - Format SD card
-
-### Next Steps
-
-#### Phase 4: Final Features (Remaining)
-1. **BLE Audio Streaming** (High Priority)
-   - Transmit Opus frames via File Data characteristic
-   - Implement flow control
-   - Track packet statistics
-
-2. **Button Control**
-   - Integrate INPUT_CLIP driver
-   - Map short/long/double-press to actions
-   - Sync with state machine
-
-3. **Display Integration**
-   - CH1115 OLED driver
-   - Recording status display
-   - Error message display
-
-4. **Additional AT Commands**
-   - File management commands
-   - Storage statistics query
-   - Audio mode query
-
----
-
-## 2025-02-20 - Phase 2: Audio Recording Implementation (Continued)
-
-### Completed Tasks (Phase 1)
-- ✅ Created `docs/requirements.md` - Product Requirements Document
-- ✅ Created `docs/protocol.md` - BLE AT Protocol Specification
-- ✅ Created `docs/architecture.md` - System Architecture Design
-- ✅ Created `tests/ble_test.py` - Python BLE test script
-
-#### 2. Application Structure
-Created `applications/clip` with modular architecture:
-```
-applications/clip/
-├── CMakeLists.txt
-├── prj.conf
-├── include/
-│   ├── clip.h              # Main data structures
-│   ├── ble_svc.h           # BLE service interface
-│   ├── at_cmd.h            # AT command parser
-│   ├── state_machine.h     # State machine
-│   ├── config.h            # Configuration management
-│   └── json_helper.h       # JSON response builder
-└── src/
-    ├── main.c              # Application entry point
-    ├── ble_svc.c           # BLE GATT service
-    ├── at_cmd.c            # AT command implementation
-    ├── state_machine.c     # State transitions
-    ├── config.c            # NVS-based config storage
-    └── json_helper.c       # JSON utilities
-```
-
-#### 3. BLE Communication Implementation
-- ✅ Custom GATT service (UUID: 6E400001-B5A3-F393-E0A9-E50E24DCCA9E)
-  - Command Receive characteristic (Write)
-  - Response Send characteristic (Notify)
-  - File Data characteristic (Notify)
-- ✅ MTU exchange for better throughput
-- ✅ Auto-reconnect advertising
-
-#### 4. AT Command Parser
-Implemented commands:
-- ✅ `GSTAT` - Get device status
-- ✅ `VERSION` - Get firmware version
-- ✅ `TIME` - Get/set RTC time
-- ✅ `BITRATE` - Configure Opus bitrate (SET/GET)
-- ✅ `COMPLEXITY` - Configure Opus complexity (SET/GET)
-- ✅ `MODE` - Set recording mode (normal/enhanced)
-- ✅ `START` - Start recording (EXEC/SET)
-- ✅ `STOP` - Stop recording
-- ✅ `MARK` - Add bookmark
-
-Syntax support:
-- `AT+CMD?` - GET query
-- `AT+CMD=value` - SET command
-- `AT+CMD` - EXECUTE command
-
-#### 5. State Machine
-States:
-- `UNINITIALIZED` → `IDLE` → `RECORDING` → `IDLE`
-- `IDLE` → `TRANSMITTING` → `IDLE`
-- `RECORDING` → `PAUSED` → `RECORDING`
-- Any state → `ERROR`
-
-Features:
-- State transition validation
-- Callback system for state changes
-- Thread-safe operations
-
-#### 6. Configuration Management (NVS)
-- ✅ Settings subsystem integration
-- ✅ External SPI flash storage (ext-nvs partition, 64KB)
-- ✅ Persistent configuration:
-  - Bitrate (default: 24000)
-  - Complexity (default: 5)
-  - Mode (default: normal)
-  - Noise suppression
-  - Chunk size
-- ✅ Factory reset support
-- ✅ Auto-save on configuration change
-
-#### 7. Memory Management
-- ✅ All allocations use Zephyr kernel APIs (`k_malloc`, `k_free`, `k_strdup`)
-- ✅ Heap size: 32KB (CONFIG_HEAP_MEM_POOL_SIZE=32768)
-- ✅ Stack size: 16KB (CONFIG_MAIN_STACK_SIZE=16384)
-
-### Build Configuration
-
-**Kconfig Options** (prj.conf):
-```conf
-# Bluetooth
-CONFIG_BT=y
-CONFIG_BT_PERIPHERAL=y
-CONFIG_BT_DEVICE_NAME="reSpeaker Clip"
-CONFIG_BT_MAX_CONN=1
-CONFIG_BT_GATT_CLIENT=y
-CONFIG_BT_BUF_ACL_RX_SIZE=502
-CONFIG_BT_BUF_ACL_TX_SIZE=502
-CONFIG_BT_L2CAP_TX_MTU=247
-CONFIG_BT_RX_STACK_SIZE=2048
-
-# Storage
-CONFIG_FLASH=y
-CONFIG_FLASH_MAP=y
-CONFIG_SETTINGS=y
-CONFIG_SETTINGS_NVS=y
-CONFIG_NVS=y
-
-# Memory
-CONFIG_HEAP_MEM_POOL_SIZE=32768
-CONFIG_MAIN_STACK_SIZE=16384
-
-# Hardware
-CONFIG_GPIO=y
-CONFIG_I2C=y
-CONFIG_LOG=y
-```
-
-### Build Status
-
-✅ **Successfully Compiles**
-- Firmware size: 133 KB FLASH / 81 KB RAM
-- Memory usage: 13.17% FLASH / 18.11% RAM
-- Build command:
-  ```bash
-  ncs-env && export ZEPHYR_EXTRA_MODULES=$(pwd)
-  west build --build-dir build-clip --board clip/nrf5340/cpuapp applications/clip
-  ```
-
-### Known Issues & Limitations
-
-1. **Audio Recording** - Not yet implemented
-   - PDM microphone driver integration needed
-   - Opus encoding integration needed
-   - SpeexDSP processing integration needed
-
-2. **Storage** - Not yet implemented
-   - SD card filesystem integration needed
-   - File management needed
-
-3. **User Interface** - Not yet implemented
-   - Button handler (INPUT_CLIP driver) needed
-   - Display driver integration needed
-   - Haptic feedback needed (log-based initially)
-
-4. **WiFi** - Not implemented
-   - nRF7002 driver integration needed (future)
-
-### Fixed Issues
-
-1. **Enum naming conflict** - Renamed `device_state` → `clip_state` to avoid Zephyr conflicts
-2. **UUID macro format** - Fixed BT_UUID_128_ENCODE parameter count (16 → 5 params)
-3. **Multiple definition** - Removed duplicate global variable definitions in at_cmd.c
-4. **Memory allocation** - Replaced `strdup`/`free` with `k_malloc`/`k_free`
-5. **Settings API** - Corrected include path to `<zephyr/settings/settings.h>`
-6. **BLE MTU exchange** - Added `CONFIG_BT_GATT_CLIENT=y` to enable API
-
-### Next Steps
-
-#### Phase 2: Audio Recording (High Priority)
-1. Integrate PDM microphone driver
-2. Implement Opus encoding
-3. Add SpeexDSP noise suppression
-4. Implement audio buffer management
-
-#### Phase 3: Storage
-1. SD card filesystem integration
-2. File naming and management
-3. Storage space monitoring
-
-#### Phase 4: User Interface
-1. Button handler with multi-press support
-2. OLED display driver (CH1115)
-3. Haptic feedback (log-based initially)
-
-#### Phase 5: Testing
-1. Flash firmware to device
-2. Test BLE connection with Python script
-3. Test AT commands
-4. Test state transitions
-5. Test configuration persistence
-
-### Testing Tools
-
-- **Python BLE Test Script**: `tests/ble_test.py`
-  - Requires: `pip install -r tests/requirements.txt`
-  - Usage: `python tests/ble_test.py`
-  - Features: Automated tests + interactive mode
-
-### Reference Implementations
-
-- `samples/opus_encode` - Audio recording reference
-- `tests/clip` - Multi-image test suite
-- Custom drivers: `drivers/input/` - Button driver
-
-### Git Repository
-
-**Branch**: `clip`
-**Main Branch**: `main`
-
-### Configuration Notes
-
-**Memory Layout**:
-- Total SRAM: 512KB
-- BLE Core: 64KB
-- Application: 448KB
-- Current usage: 81KB (18%)
-
-**External Flash** (PY25Q64H, 64MB):
-- ext-nvs: 64KB (NVS storage)
-- ext-storage: 15MB (user data)
-
-### Development Workflow
-
-```bash
-# 1. Set environment
-ncs-env
+# reSpeaker Clip - Development Log
+
+## Current State (2026-03-28)
+
+### Implemented Features
+
+| Feature | Notes |
+|---------|-------|
+| PDM Microphone Capture | 16kHz, stereo/mono/merge modes |
+| Opus Encoding | Mode-specific bitrate/complexity via Kconfig |
+| SpeexDSP Processing | Noise suppression, dereverberation (no AGC - FIXED_POINT limitation) |
+| Audio Modes | Normal (stereo, 16kbps/ch, complexity 0), Enhanced (mono, 32kbps, complexity 1) |
+| SD Card Storage | FAT32, session directories under /REC/ |
+| Session Metadata | session.json, files.lst, marks.bin |
+| Bookmark System | Binary marks.bin with notes |
+| BLE GATT Service | Command, Response, File Data characteristics |
+| AT Command Protocol | 26 commands |
+| File Transfer (BLE) | Pause/resume/cancel, session-level resume |
+| File Transfer (UDP) | Fire-and-forget with per-file CRC32, file-level retransmit |
+| Transport Abstraction | BLE + UDP backends via transport.h |
+| WiFi AP Mode | SSID: ClipAP_XXXX, Password: 12345678, IP: 192.168.4.1, Port: 8089 |
+| NVS Configuration | 5 settings persist: mode, noise, autodel, dereverb, brightness |
+| Battery Monitoring | NPM1300 PMIC via I2C |
+| Button Handler | Custom input driver: long-press record, short-press bookmark, single-click status |
+| OLED Display | CH1115 driver (88x48, I2C), status bar, recording time, battery, mode |
+| Haptic Motor | PMIC GPIO2 control (optional, Kconfig) |
+| CPU Boost | 128MHz/64MHz reference-counted system |
+| Event System | k_msgq + k_sem driven main loop |
+| Factory Reset | Config reset + SD card format + reboot |
+| Power Off | PMIC ship mode via AT+POWEROFF |
+| Time Sync | Unix timestamp via AT+TIME, persisted to NVS |
+
+### AT Commands (26)
+
+| Command | Type | Purpose |
+|---------|------|---------|
+| AT+GSTAT | EXEC | Get device status |
+| AT+DEVICE | EXEC/GET | Device name |
+| AT+VERSION | EXEC | Version info |
+| AT+TIME | GET/SET | System time (Unix timestamp) |
+| AT+START | EXEC/SET | Start recording |
+| AT+STOP | EXEC | Stop recording |
+| AT+MARK | EXEC/SET | Add bookmark |
+| AT+PAUSE | EXEC | Pause recording |
+| AT+RESUME | EXEC | Resume recording |
+| AT+CANCEL | EXEC | Cancel transfer |
+| AT+LIST | GET/SET | List sessions/files |
+| AT+DELETE | SET | Delete session |
+| AT+MARKS | GET/SET | Get bookmarks |
+| AT+DOWNLOAD | SET | Download file/session |
+| AT+PURGEABLE | EXEC | Query cleanable sessions |
+| AT+PURGE | EXEC | Delete transferred sessions |
+| AT+AUTODEL | GET/SET | Auto-delete policy |
+| AT+FORMAT | EXEC | Format SD card |
+| AT+POWEROFF | EXEC | Power off (ship mode) |
+| AT+WIFI | EXEC/GET/SET | WiFi AP control |
+| AT+MODE | GET/SET | Recording mode |
+| AT+NOISE | GET/SET | Noise suppression |
+| AT+DEREVERB | GET/SET | Dereverberation |
+| AT+BRIGHTNESS | GET/SET | OLED brightness |
+| AT+PAIR | GET/SET | BLE pairing |
+| AT+FACTORY | SET | Factory reset |
+| AT+REBOOT | EXEC | Reboot |
+
+### Thread Architecture
+
+| Thread | Priority | Stack | Purpose |
+|--------|----------|-------|---------|
+| Main | 0 | Default | Event loop, status updates |
+| Audio | 0 | 32768 | PDM capture, DSP, Opus encode |
+| Transfer | 5 | 16384 | File transfer over BLE/UDP |
+| UDP Server | 5 | 4096 | WiFi UDP packet handling |
+| AT Server | 7 | 4096 | AT command parsing and dispatch |
+
+### Memory Usage
+
+- FLASH: ~320 KB
+- RAM: ~242 KB
+
+### Recording Modes
+
+| Mode | Audio | Bitrate | Complexity | DSP | Segment Duration |
+|------|-------|---------|------------|-----|-----------------|
+| Normal | Stereo (L+R) | 16kbps/ch (32kbps total) | 0 | Disabled | 60s (sync) / 300s (no sync) |
+| Enhanced | Mono (L+R merged) | 32kbps | 1 | Enabled | 60s (sync) / 300s (no sync) |
+
+### Build & Flash
+
+```sh
+# Environment
+source ~/ncs/v3.2.1/zephyr/zephyr-env.sh
 export ZEPHYR_EXTRA_MODULES=$(pwd)
 
-# 2. Build
+# Build
 west build --build-dir build-clip --board clip/nrf5340/cpuapp applications/clip
 
-# 3. Flash
+# Flash and reset
 west flash --build-dir build-clip && nrfutil device reset
 
-# 4. View serial output
+# Serial output
 minicom -D /dev/ttyACM0 -b 115200
 ```
+
+### Not Yet Implemented
+
+| Feature | Priority | Notes |
+|---------|----------|-------|
+| Low Power Mode | Medium | Sleep when idle |
+| Auto-Purge Execution | Medium | Background task to delete old transferred sessions |
+| Firmware Update (DFU) | Low | BLE OTA |
+
+---
+
+## Change History
+
+### 2026-03-28 - Documentation and Code Cleanup
+
+- Removed AT+BITRATE, AT+COMPLEXITY, AT+AGC, AT+CHUNKSIZE, AT+PROGRESS commands
+- Bitrate and complexity are now mode-specific via Kconfig (not runtime configurable)
+- AGC removed entirely (SpeexDSP FIXED_POINT build limitation)
+- Transfer chunk size is compile-time only (CONFIG_CLIP_TRANSFER_CHUNK_SIZE)
+- Unified all config defaults to Kconfig (removed hardcoded macros from config.h)
+- Added DSP timing to encode log (avg/min/max for both Opus and DSP)
+- Updated all documentation to match current codebase
+
+### 2026-03-27 - WiFi/BLE Coexistence and Transport Refactoring
+
+- Added WiFi/BLE coexistence configuration (nrf_wifi_coex_config_pta/non_pta)
+- Added WiFi/BLE coex hardware reset on WiFi stop
+- Fixed compiler warnings: net_if_ipv4_addr_add return type, deprecated net_if_ipv4_set_netmask
+- Refactored transport layer: transport.h abstraction with BLE + UDP backends
+- Rewrote UDP protocol: fire-and-forget with per-file CRC32 (replaced sliding window)
+- Fixed button status bar in WIFI_SYNC state
+- Added CPU boost system (128MHz/64MHz reference-counted)
+- Event-driven main loop (k_msgq + k_sem)
+
+### 2026-03-23 - Audio Recording Optimization
+
+- On-demand encoder/DSP initialization
+- Microphone power control (on/off with stabilization delay)
+- Removed VBR settings (21ms → ~12ms encode time)
+- Increased audio thread stack to 32KB and priority to 0
+- Fixed AT command JSON format and buffer check
+- Increased AT server thread stack from 2KB to 4KB (stack overflow fix)
+- Set HFCLK divider to 1 for maximum CPU frequency (128MHz)
+
+### 2026-02-26 - Mode Mapping Fix and DSP Restriction
+
+- Fixed mode mapping: Normal=stereo (no DSP), Enhanced=mono (with DSP)
+- DSP only enabled in enhanced mode
+- Bitrate scaling: mono=1x, stereo=2x
+
+### 2026-02-25 - Simultaneous Recording and BLE Transfer
+
+- Added transfer_resume_from() for file-level resume
+- Simultaneous recording and BLE transfer
+- Disconnect callback cleanup
+- Extended AT+DOWNLOAD with session/start_file syntax
+- Python sync tool with auto-detection and resume support
+
+### 2026-02-24 - Session Storage Structure
+
+- Session directories: /SD:/REC/YYYYMMDDHHMMSS/
+- session.json, files.lst, marks.bin per session
+- AT+TIME command for time synchronization
+- Fallback session IDs when time not synced
+
+### 2026-02-20 - Initial Implementation
+
+- BLE GATT service with 3 characteristics
+- AT command parser (EXEC/SET/GET)
+- State machine (IDLE/RECORDING/TRANSMITTING/PAUSED/ERROR)
+- NVS configuration storage
+- Opus encoding integration
+- SpeexDSP noise suppression and dereverberation
+- SD card FAT32 storage
+- Audio recording thread
+- Custom button input driver

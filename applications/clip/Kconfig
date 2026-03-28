@@ -37,7 +37,7 @@ config CLIP_ENHANCED_BITRATE
 config CLIP_ENHANCED_COMPLEXITY
 	int "Enhanced mode Opus complexity (0-10)"
 	range 0 10
-	default 2
+	default 1
 
 config CLIP_DEFAULT_NOISE
 	int "Default noise suppression level (dB)"
