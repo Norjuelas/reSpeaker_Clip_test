@@ -17,10 +17,6 @@
 #define CONFIG_KEY_DEREVERB      0x09
 #define CONFIG_KEY_BRIGHTNESS    0x0A
 
-/* Default values */
-#define CONFIG_DEFAULT_MODE          0  /* MODE_NORMAL */
-#define CONFIG_DEFAULT_AUTODEL       -1
-#define CONFIG_DEFAULT_DEREVERB      false
 
 /**
  * @brief Initialize configuration system

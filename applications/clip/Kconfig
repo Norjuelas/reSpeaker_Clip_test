@@ -43,6 +43,14 @@ config CLIP_DEFAULT_NOISE
 	int "Default noise suppression level (dB)"
 	default 15
 
+config CLIP_DEFAULT_DEREVERB
+	bool "Default dereverberation enabled"
+	default n
+
+config CLIP_DEFAULT_AUTODEL
+	int "Default auto-delete days (-1 for off)"
+	default -1
+
 config CLIP_DEFAULT_BRIGHTNESS
 	int "Default OLED brightness (0-255)"
 	default 128

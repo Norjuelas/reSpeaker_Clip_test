@@ -145,8 +145,8 @@ static void config_set_defaults(struct clip_context *ctx)
 {
     ctx->config.mode = MODE_NORMAL;
     ctx->config.noise_suppress = CONFIG_CLIP_DEFAULT_NOISE;
-    ctx->config.auto_delete_days = -1;
-    ctx->config.dereverb_enabled = false;
+    ctx->config.auto_delete_days = CONFIG_CLIP_DEFAULT_AUTODEL;
+    ctx->config.dereverb_enabled = IS_ENABLED(CONFIG_CLIP_DEFAULT_DEREVERB);
     ctx->config.oled_brightness = CONFIG_CLIP_DEFAULT_BRIGHTNESS;
 }
 
