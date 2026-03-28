@@ -32,7 +32,7 @@ config CLIP_NORMAL_COMPLEXITY
 
 config CLIP_ENHANCED_BITRATE
 	int "Enhanced mode Opus bitrate (bps)"
-	default 32000
+	default 24000
 
 config CLIP_ENHANCED_COMPLEXITY
 	int "Enhanced mode Opus complexity (0-10)"
@@ -45,7 +45,7 @@ config CLIP_DEFAULT_NOISE
 
 config CLIP_DEFAULT_DEREVERB
 	bool "Default dereverberation enabled"
-	default n
+	default y
 
 config CLIP_DEFAULT_AUTODEL
 	int "Default auto-delete days (-1 for off)"
