@@ -66,15 +66,9 @@
 	status = "disabled";
 };
 
-/* Disable I2C2 and related devices (OLED display) */
-&i2c2 {
-	status = "disabled";
-};
-
-/* Disable OLED device explicitly */
-&ch1115 {
-	status = "disabled";
-};
+/* Keep I2C2 and CH1115 enabled for OLED display in MCUboot */
+/* &i2c2 must stay enabled */
+/* &ch1115 must stay enabled */
 
 /* Keep SPI3 enabled - external flash for DFU */
 /* &spi3 must stay enabled */
@@ -102,7 +96,7 @@
 };
 
 &oled_reg {
-	status = "disabled";
+	status = "okay";
 };
 
 &rfsw_reg {
