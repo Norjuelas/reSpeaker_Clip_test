@@ -65,6 +65,11 @@ static uint8_t svc_uuid_bytes[16];
 /* Work queue for advertising restart */
 static struct k_work adv_work;
 
+/* Advertising parameters (100-150ms interval) */
+static const struct bt_le_adv_param adv_param =
+    BT_LE_ADV_PARAM_INIT(BT_LE_ADV_OPT_CONN, BT_GAP_ADV_FAST_INT_MIN_2,
+                         BT_GAP_ADV_FAST_INT_MAX_2, NULL);
+
 /* Work for security timeout */
 static struct k_work_delayable security_timeout_work;
 
@@ -269,7 +274,7 @@ static void adv_work_handler(struct k_work *work)
 {
     int err;
 
-    err = bt_le_adv_start(BT_LE_ADV_CONN_FAST_1, ad, ARRAY_SIZE(ad),
+    err = bt_le_adv_start(&adv_param, ad, ARRAY_SIZE(ad),
                           sd, ARRAY_SIZE(sd));
     if (err && err != -EALREADY) {
         LOG_ERR("Advertising restart failed: %d", err);
@@ -560,7 +565,7 @@ int ble_init(void)
     }
 
     /* Start advertising */
-    err = bt_le_adv_start(BT_LE_ADV_CONN_FAST_1, ad, ARRAY_SIZE(ad),
+    err = bt_le_adv_start(&adv_param, ad, ARRAY_SIZE(ad),
                           sd, ARRAY_SIZE(sd));
     if (err) {
         if (err != -EALREADY) {
