@@ -8,6 +8,7 @@ The patches are against **NCS v3.2.1** (`~/ncs/v3.2.1/bootloader/mcuboot`).
 ```sh
 cd ~/ncs/v3.2.1/bootloader/mcuboot
 git apply /path/to/ReSpeaker_Clip/patches/mcuboot/0001-require-vbus-for-gpio-serial-recovery.patch
+git apply /path/to/ReSpeaker_Clip/patches/mcuboot/0002-add-oled-display-support.patch
 ```
 
 To verify a patch is already applied:
@@ -67,3 +68,31 @@ This register is readable without initializing the USB stack — it reflects har
 
 - NCS v3.2.1, MCUboot commit `3cdbf4df`
 - Board: `clip/nrf5340/cpuapp` (Seeed ReSpeaker Clip)
+
+---
+
+## 0002-add-oled-display-support.patch
+
+**Files**: `boot/zephyr/CMakeLists.txt`, `boot/zephyr/Kconfig`, `boot/zephyr/main.c`, `boot/zephyr/io_display.c` (new)
+
+### Summary
+
+Adds OLED display support to MCUboot for showing status messages on the CH1115 display during boot, DFU recovery, and error conditions.
+
+### What it adds
+
+- **`io_display.c`**: Self-contained display helper using Zephyr Display API. Includes a 6x12 pixel font (95 printable ASCII chars) and renders two-line centered text.
+- **`CONFIG_MCUBOOT_DISPLAY`**: New Kconfig option (selects I2C, depends on GPIO)
+- **Status messages** in `main.c`:
+
+| Condition | Display |
+|-----------|---------|
+| Serial recovery (button+USB or boot mode) | "Recovery Mode" |
+| OTA image swap (`boot_go()`) | "Updating ..." |
+| No bootable image | "Error No Image" |
+| Before jumping to app (`do_boot()`) | Display off |
+
+### Requirements
+
+- `CONFIG_DISPLAY=y`, `CONFIG_I2C=y`, `CONFIG_REGULATOR=y` in MCUboot config
+- I2C2, CH1115, and `oled_reg` must be enabled in MCUboot device tree overlay
