@@ -308,15 +308,16 @@ int wifi_on(void)
 	/* Configure static IP from Kconfig macros */
 	{
 		struct in_addr addr, netmask, gw;
+		struct net_if_addr *ifaddr;
 		net_addr_pton(AF_INET, CONFIG_NET_CONFIG_MY_IPV4_ADDR, &addr);
 		net_addr_pton(AF_INET, CONFIG_NET_CONFIG_MY_IPV4_NETMASK, &netmask);
 		net_addr_pton(AF_INET, CONFIG_NET_CONFIG_MY_IPV4_GW, &gw);
-		ret = net_if_ipv4_addr_add(iface, &addr, NET_ADDR_MANUAL, 0);
-		if (ret && ret != -EALREADY)
+		ifaddr = net_if_ipv4_addr_add(iface, &addr, NET_ADDR_MANUAL, 0);
+		if (!ifaddr && !net_if_ipv4_addr_lookup(&addr, &iface))
 		{
-			LOG_WRN("Failed to set IP address: %d", ret);
+			LOG_WRN("Failed to set IP address");
 		}
-		net_if_ipv4_set_netmask(iface, &netmask);
+		net_if_ipv4_set_netmask_by_addr(iface, &addr, &netmask);
 		net_if_ipv4_set_gw(iface, &gw);
 	}
 

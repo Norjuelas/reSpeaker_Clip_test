@@ -5,6 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commit Rules
 
 - Do not add `Co-Authored-By` lines to commit messages.
+- Code must compile with zero warnings. Fix all compiler warnings before committing.
 
 ## Project Overview
 
