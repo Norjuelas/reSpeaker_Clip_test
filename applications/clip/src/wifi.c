@@ -178,10 +178,6 @@ int wifi_init(void)
 
 	LOG_INF("WiFi module initialized");
 
-	
-#ifdef CONFIG_NRF70_SR_COEX
-	wifi_coex_configure();
-#endif
 
 	return 0;
 }
@@ -304,6 +300,21 @@ int wifi_on(void)
 	if (ret)
 	{
 		return ret;
+	}
+
+	/* Configure static IP address on the interface */
+	{
+		struct in_addr addr, netmask, gw;
+		net_addr_pton(AF_INET, WIFI_AP_IP_ADDR, &addr);
+		net_addr_pton(AF_INET, "255.255.255.0", &netmask);
+		net_addr_pton(AF_INET, WIFI_AP_IP_ADDR, &gw);
+		ret = net_if_ipv4_addr_add(iface, &addr, NET_ADDR_MANUAL, 0);
+		if (ret && ret != -EALREADY)
+		{
+			LOG_WRN("Failed to set IP address: %d", ret);
+		}
+		net_if_ipv4_set_netmask(iface, &netmask);
+		net_if_ipv4_set_gw(iface, &gw);
 	}
 
 	/* Start DHCP server */
