@@ -378,59 +378,6 @@ int audio_add_bookmark(void)
     return storage_add_bookmark(current_session_id, recording_sec);
 }
 
-int audio_set_bitrate(uint32_t bitrate)
-{
-    struct clip_context *c = clip_get_context();
-
-    /* Validate bitrate */
-    if (bitrate < 6000 || bitrate > 64000) {
-        return -EINVAL;
-    }
-
-    c->config.bitrate = bitrate;
-
-    /* Save to persistent storage */
-    config_set_bitrate(bitrate);
-
-    /* Invalidate encoder params cache - will reinit on next recording start */
-    encoder_params.initialized = false;
-
-    LOG_DBG("Bitrate: %u bps (will take effect on next recording)", bitrate);
-    return 0;
-}
-
-uint32_t audio_get_bitrate(void)
-{
-    struct clip_context *c = clip_get_context();
-    return c->config.bitrate;
-}
-
-int audio_set_complexity(uint8_t complexity)
-{
-    struct clip_context *c = clip_get_context();
-
-    if (complexity > 10) {
-        return -EINVAL;
-    }
-
-    c->config.complexity = complexity;
-
-    /* Save to persistent storage */
-    config_set_complexity(complexity);
-
-    /* Invalidate encoder params cache - will reinit on next recording start */
-    encoder_params.initialized = false;
-
-    LOG_DBG("Complexity: %u (will take effect on next recording)", complexity);
-    return 0;
-}
-
-uint8_t audio_get_complexity(void)
-{
-    struct clip_context *c = clip_get_context();
-    return c->config.complexity;
-}
-
 int audio_get_stats(struct audio_stats *stats_out)
 {
     if (!stats_out) {

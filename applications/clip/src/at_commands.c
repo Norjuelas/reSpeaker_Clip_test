@@ -286,82 +286,6 @@ static int cmd_time_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
     }
 }
 
-/* BITRATE Command Handler - Get/Set Opus bitrate */
-static int cmd_bitrate_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
-{
-    struct clip_context *c = clip_get_context();
-
-    if (ctx->type == AT_CMD_TYPE_SET) {
-        /* Set bitrate: AT+BITRATE=<bps> */
-        if (!ctx->args || strlen(ctx->args) == 0) {
-            return create_json_response(false, "Missing bitrate value", NULL, response, len);
-        }
-
-        int bitrate;
-        if (extract_int(ctx->args, &bitrate) != 0) {
-            return create_json_response(false, "Invalid bitrate", NULL, response, len);
-        }
-
-        /* Validate bitrate range */
-        if (bitrate < 6000 || bitrate > 64000) {
-            return create_json_response(false, "Bitrate must be 6000-64000", NULL, response, len);
-        }
-
-        /* Update audio encoder and save config */
-        int err = audio_set_bitrate(bitrate);
-        if (err) {
-            return create_json_response(false, "Failed to set bitrate", NULL, response, len);
-        }
-
-        char data[32];
-        snprintf(data, sizeof(data), "{\"bitrate\":%u}", bitrate);
-        return create_json_response(true, NULL, data, response, len);
-    } else {
-        /* Get bitrate: AT+BITRATE? */
-        char data[32];
-        snprintf(data, sizeof(data), "{\"bitrate\":%u}", c->config.bitrate);
-        return create_json_response(true, NULL, data, response, len);
-    }
-}
-
-/* COMPLEXITY Command Handler - Get/Set Opus complexity */
-static int cmd_complexity_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
-{
-    struct clip_context *c = clip_get_context();
-
-    if (ctx->type == AT_CMD_TYPE_SET) {
-        /* Set complexity: AT+COMPLEXITY=<0-10> */
-        if (!ctx->args || strlen(ctx->args) == 0) {
-            return create_json_response(false, "Missing complexity value", NULL, response, len);
-        }
-
-        int complexity;
-        if (extract_int(ctx->args, &complexity) != 0) {
-            return create_json_response(false, "Invalid complexity", NULL, response, len);
-        }
-
-        /* Validate complexity range */
-        if (complexity < 0 || complexity > 10) {
-            return create_json_response(false, "Complexity must be 0-10", NULL, response, len);
-        }
-
-        /* Update audio encoder and save config */
-        int err = audio_set_complexity(complexity);
-        if (err) {
-            return create_json_response(false, "Failed to set complexity", NULL, response, len);
-        }
-
-        char data[32];
-        snprintf(data, sizeof(data), "{\"complexity\":%u}", complexity);
-        return create_json_response(true, NULL, data, response, len);
-    } else {
-        /* Get complexity: AT+COMPLEXITY? */
-        char data[32];
-        snprintf(data, sizeof(data), "{\"complexity\":%u}", audio_get_complexity());
-        return create_json_response(true, NULL, data, response, len);
-    }
-}
-
 /* MODE Command Handler - Get/Set recording mode */
 static int cmd_mode_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
 {
@@ -438,67 +362,6 @@ static int cmd_noise_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
         /* Get noise: AT+NOISE? */
         char data[32];
         snprintf(data, sizeof(data), "{\"noise\":%u}", c->config.noise_suppress);
-        return create_json_response(true, NULL, data, response, len);
-    }
-}
-
-/* AGC Command Handler - Get/Set AGC */
-static int cmd_agc_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
-{
-    struct clip_context *c = clip_get_context();
-
-    if (ctx->type == AT_CMD_TYPE_SET) {
-        /* Set AGC: AT+AGC=<target_level> or AT+AGC=on/off */
-        if (!ctx->args || strlen(ctx->args) == 0) {
-            return create_json_response(false, "Missing AGC value", NULL, response, len);
-        }
-
-        /* Check for on/off */
-        char agc_str[32];
-        strncpy(agc_str, ctx->args, sizeof(agc_str) - 1);
-        agc_str[sizeof(agc_str) - 1] = '\0';
-        for (char *p = agc_str; *p; p++) {
-            if (*p >= 'A' && *p <= 'Z') {
-                *p = *p - 'A' + 'a';
-            }
-        }
-
-        if (strcmp(agc_str, "on") == 0 || strcmp(agc_str, "1") == 0) {
-            c->config.agc_enabled = true;
-            config_set_agc_enabled(true);
-            return create_json_response(true, NULL, "{\"agc\":\"on\"}", response, len);
-        } else if (strcmp(agc_str, "off") == 0 || strcmp(agc_str, "0") == 0) {
-            c->config.agc_enabled = false;
-            config_set_agc_enabled(false);
-            return create_json_response(true, NULL, "{\"agc\":\"off\"}", response, len);
-        } else {
-            /* Try as integer target level */
-            int target;
-            if (extract_int(ctx->args, &target) != 0) {
-                return create_json_response(false, "Invalid AGC value (use on/off/0/1 or target level)", NULL, response, len);
-            }
-
-            if (target < 0 || target > 32000) {
-                return create_json_response(false, "AGC target must be 0-32000", NULL, response, len);
-            }
-
-            c->config.agc_target = target;
-            c->config.agc_enabled = true;
-            config_set_agc_target(target);
-            config_set_agc_enabled(true);
-
-            char data[64];
-            snprintf(data, sizeof(data), "{\"agc\":\"on\",\"target\":%u}", target);
-            return create_json_response(true, NULL, data, response, len);
-        }
-    } else {
-        /* Get AGC: AT+AGC? */
-        char data[64];
-        if (c->config.agc_enabled) {
-            snprintf(data, sizeof(data), "{\"agc\":\"on\",\"target\":%u}", c->config.agc_target);
-        } else {
-            snprintf(data, sizeof(data), "{\"agc\":\"off\"}");
-        }
         return create_json_response(true, NULL, data, response, len);
     }
 }
@@ -1513,38 +1376,6 @@ static int cmd_download_handler(struct at_cmd_ctx *ctx, char *response, size_t l
     return create_json_response(true, NULL, data, response, len);
 }
 
-/* PROGRESS Command Handler - Query transfer progress */
-static int cmd_progress_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
-{
-    /*
-     * AT+PROGRESS - Get transfer progress
-     *
-     * Response: {"ok":true,"data":{"state":"...","file":"...","index":X,"total":Y,"percent":Z}}
-     */
-
-    if (!transfer_is_active()) {
-        return create_json_response(false, "No active transfer", NULL, response, len);
-    }
-
-    struct transfer_info info;
-    transfer_get_progress(&info);
-
-    const char *state_str = "idle";
-    switch (info.state) {
-    case TRANSFER_STATE_IDLE: state_str = "idle"; break;
-    case TRANSFER_STATE_TRANSMITTING: state_str = "transmitting"; break;
-    case TRANSFER_STATE_PAUSED: state_str = "paused"; break;
-    case TRANSFER_STATE_COMPLETED: state_str = "completed"; break;
-    case TRANSFER_STATE_ERROR: state_str = "error"; break;
-    }
-
-    char data[256];
-    snprintf(data, sizeof(data),
-             "{\"state\":\"%s\",\"file\":\"%s\",\"index\":%u,\"total\":%u,\"percent\":%u}",
-             state_str, info.current_file, info.file_index, info.total_files, info.progress_percent);
-
-    return create_json_response(true, NULL, data, response, len);
-}
 
 /* CANCEL Command Handler - Cancel transfer */
 static int cmd_cancel_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
@@ -1766,24 +1597,6 @@ int at_commands_register(void)
     err = at_server_register_cmd(&time_cmd);
     if (err) return err;
 
-    /* BITRATE - Get/Set Opus bitrate */
-    static const struct at_command bitrate_cmd = {
-        .name = "BITRATE",
-        .flags = AT_CMD_SET | AT_CMD_QUERY | AT_CMD_EXEC,
-        .handler = cmd_bitrate_handler,
-    };
-    err = at_server_register_cmd(&bitrate_cmd);
-    if (err) return err;
-
-    /* COMPLEXITY - Get/Set Opus complexity */
-    static const struct at_command complexity_cmd = {
-        .name = "COMPLEXITY",
-        .flags = AT_CMD_SET | AT_CMD_QUERY | AT_CMD_EXEC,
-        .handler = cmd_complexity_handler,
-    };
-    err = at_server_register_cmd(&complexity_cmd);
-    if (err) return err;
-
     /* MODE - Get/Set recording mode */
     static const struct at_command mode_cmd = {
         .name = "MODE",
@@ -1800,15 +1613,6 @@ int at_commands_register(void)
         .handler = cmd_noise_handler,
     };
     err = at_server_register_cmd(&noise_cmd);
-    if (err) return err;
-
-    /* AGC - Get/Set AGC */
-    static const struct at_command agc_cmd = {
-        .name = "AGC",
-        .flags = AT_CMD_SET | AT_CMD_QUERY | AT_CMD_EXEC,
-        .handler = cmd_agc_handler,
-    };
-    err = at_server_register_cmd(&agc_cmd);
     if (err) return err;
 
     /* DEREVERB - Get/Set dereverberation */

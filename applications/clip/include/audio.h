@@ -118,36 +118,6 @@ bool audio_is_paused(void);
 bool audio_is_recording(void);
 
 /**
- * @brief Set Opus bitrate
- *
- * @param bitrate Bitrate in bps
- * @return 0 on success, negative error code on failure
- */
-int audio_set_bitrate(uint32_t bitrate);
-
-/**
- * @brief Get current bitrate
- *
- * @return Current bitrate in bps
- */
-uint32_t audio_get_bitrate(void);
-
-/**
- * @brief Set Opus complexity (0-10)
- *
- * @param complexity Complexity value
- * @return 0 on success, negative error code on failure
- */
-int audio_set_complexity(uint8_t complexity);
-
-/**
- * @brief Get current complexity
- *
- * @return Current complexity value
- */
-uint8_t audio_get_complexity(void);
-
-/**
  * @brief Get audio statistics
  *
  * @param stats Output statistics structure
