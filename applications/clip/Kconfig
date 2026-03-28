@@ -21,30 +21,27 @@ source "subsys/logging/Kconfig.template.log_config"
 # Configuration Defaults
 # =============================================================================
 
-config CLIP_DEFAULT_BITRATE
-	int "Default Opus bitrate (bps)"
-	default 24000
+config CLIP_NORMAL_BITRATE
+	int "Normal mode Opus bitrate (bps)"
+	default 16000
 
-config CLIP_DEFAULT_COMPLEXITY
-	int "Default Opus complexity (0-10)"
+config CLIP_NORMAL_COMPLEXITY
+	int "Normal mode Opus complexity (0-10)"
 	range 0 10
 	default 0
+
+config CLIP_ENHANCED_BITRATE
+	int "Enhanced mode Opus bitrate (bps)"
+	default 32000
+
+config CLIP_ENHANCED_COMPLEXITY
+	int "Enhanced mode Opus complexity (0-10)"
+	range 0 10
+	default 2
 
 config CLIP_DEFAULT_NOISE
 	int "Default noise suppression level (dB)"
 	default 15
-
-config CLIP_DEFAULT_CHUNK_SIZE
-	int "Default transfer chunk size (bytes)"
-	default 4096
-
-config CLIP_DEFAULT_AGC_ENABLED
-	bool "Default AGC enabled"
-	default y
-
-config CLIP_DEFAULT_AGC_TARGET
-	int "Default AGC target level"
-	default 8000
 
 config CLIP_DEFAULT_CONTRAST
 	int "Default OLED contrast (0-255)"

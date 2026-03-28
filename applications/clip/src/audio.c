@@ -128,8 +128,6 @@ static bool speex_enabled = false;
 /* Cached SpeexDSP parameters for reinit detection */
 static struct {
     uint8_t noise_suppress;
-    bool agc_enabled;
-    uint16_t agc_target;
     bool dereverb_enabled;
     bool initialized;
 } dsp_params = {0};
@@ -509,7 +507,7 @@ static int audio_start_recording_internal(enum audio_mode mode)
 
     /* Calculate actual bitrate for logging */
     uint32_t actual_bitrate = (current_mode == AUDIO_MODE_STEREO) ?
-        c->config.bitrate * 2 : c->config.bitrate;
+        CONFIG_CLIP_NORMAL_BITRATE * 2 : CONFIG_CLIP_ENHANCED_BITRATE;
     LOG_INF("Recording started: %s mode, %u kbps, session=%s",
         (current_mode == AUDIO_MODE_STEREO) ? "stereo" : "mono",
         actual_bitrate/1000, current_session_id);
@@ -849,14 +847,11 @@ create_new_segment:
 /* Internal functions */
 static bool encoder_params_changed(void)
 {
-    struct clip_context *c = clip_get_context();
-
-    /* Calculate current parameters */
+    /* Calculate current parameters based on mode */
     uint32_t actual_bitrate = (current_mode == AUDIO_MODE_STEREO) ?
-        c->config.bitrate * 2 : c->config.bitrate;
-
-    /* Effective complexity based on channel count */
-    uint8_t effective_complexity = (opus_channels == 2) ? 0 : 1;
+        CONFIG_CLIP_NORMAL_BITRATE * 2 : CONFIG_CLIP_ENHANCED_BITRATE;
+    uint8_t effective_complexity = (current_mode == AUDIO_MODE_STEREO) ?
+        CONFIG_CLIP_NORMAL_COMPLEXITY : CONFIG_CLIP_ENHANCED_COMPLEXITY;
 
     /* Check if parameters changed */
     if (!encoder_params.initialized) {
@@ -877,9 +872,11 @@ static int init_opus_encoder(void)
     int err;
     struct clip_context *c = clip_get_context();
 
-    /* Calculate current parameters */
+    /* Calculate current parameters based on mode */
     uint32_t actual_bitrate = (current_mode == AUDIO_MODE_STEREO) ?
-        c->config.bitrate * 2 : c->config.bitrate;
+        CONFIG_CLIP_NORMAL_BITRATE * 2 : CONFIG_CLIP_ENHANCED_BITRATE;
+    uint8_t effective_complexity = (current_mode == AUDIO_MODE_STEREO) ?
+        CONFIG_CLIP_NORMAL_COMPLEXITY : CONFIG_CLIP_ENHANCED_COMPLEXITY;
 
     /* Check if reinitialization is needed */
     if (opus_encoder && !encoder_params_changed()) {
@@ -907,13 +904,7 @@ static int init_opus_encoder(void)
     opus_encoder_ctl(opus_encoder, OPUS_SET_VBR(1));
     opus_encoder_ctl(opus_encoder, OPUS_SET_VBR_CONSTRAINT(0));
 
-    /* Set complexity based on channel count for optimal performance:
-     * - Stereo (2 channels): complexity=0 (faster encoding, ~8-10ms)
-     * - Mono (1 channel): complexity=1 (slightly better quality, ~10-12ms)
-     * This ensures encode time stays well below the 20ms frame time,
-     * even when BLE communication causes some interference.
-     */
-    uint8_t effective_complexity = (opus_channels == 2) ? 0 : 1;
+    /* Set complexity from Kconfig (mode-specific) */
     err = opus_encoder_ctl(opus_encoder, OPUS_SET_COMPLEXITY(effective_complexity));
     if (err != OPUS_OK) {
         LOG_ERR("Failed to set complexity: %d", err);
@@ -962,8 +953,6 @@ static bool dsp_params_changed(void)
     }
 
     if (dsp_params.noise_suppress != c->config.noise_suppress ||
-        dsp_params.agc_enabled != c->config.agc_enabled ||
-        dsp_params.agc_target != c->config.agc_target ||
         dsp_params.dereverb_enabled != c->config.dereverb_enabled) {
         return true;
     }
@@ -1009,24 +998,15 @@ static int init_speex_preprocessor(void)
     int dereverb_decay = 20;
     speex_preprocess_ctl(speex_pp, SPEEX_PREPROCESS_SET_DEREVERB_DECAY, &dereverb_decay);
 
-    /* Enable AGC from config */
-    if (c->config.agc_enabled) {
-        int agc = 1;
-        speex_preprocess_ctl(speex_pp, SPEEX_PREPROCESS_SET_AGC, &agc);
-        /* AGC target level */
-        int agc_level = c->config.agc_target > 0 ? c->config.agc_target : 30;
-        speex_preprocess_ctl(speex_pp, SPEEX_PREPROCESS_SET_AGC_TARGET, &agc_level);
-    }
+    /* AGC disabled */
 
     /* Update cached parameters */
     dsp_params.noise_suppress = c->config.noise_suppress;
-    dsp_params.agc_enabled = c->config.agc_enabled;
-    dsp_params.agc_target = c->config.agc_target;
     dsp_params.dereverb_enabled = c->config.dereverb_enabled;
     dsp_params.initialized = true;
 
-    LOG_INF("SpeexDSP ready: noise=%d dB, agc=%d, dereverb=%d",
-            c->config.noise_suppress, c->config.agc_enabled,
+    LOG_INF("SpeexDSP ready: noise=%d dB, dereverb=%d",
+            c->config.noise_suppress,
             c->config.dereverb_enabled);
 
     return 0;

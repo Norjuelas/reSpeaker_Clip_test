@@ -58,16 +58,11 @@ typedef void (*event_handler_t)(int event, void *data);
 struct clip_context {
     /* Configuration */
     struct clip_config {
-        uint16_t bitrate;           /* Opus bitrate in bps */
-        uint8_t complexity;         /* Opus complexity (0-10) */
         uint8_t mode;               /* Recording mode (normal/enhanced) */
         uint8_t noise_suppress;     /* Noise suppression level (dB) */
-        uint16_t chunk_size;        /* Transfer chunk size */
         int8_t auto_delete_days;    /* Auto-delete policy: -1=off, 0-30=days */
-        uint16_t agc_target;        /* AGC target level */
-        bool agc_enabled;           /* AGC enabled */
         bool dereverb_enabled;      /* Dereverberation enabled */
-        uint8_t oled_brightness;      /* OLED contrast/brightness (0-255) */
+        uint8_t oled_brightness;    /* OLED brightness (0-255) */
     } config;
 
     /* Status */

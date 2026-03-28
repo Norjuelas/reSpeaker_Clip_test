@@ -142,7 +142,7 @@ static int cmd_gstat_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
                      c->status.battery_percent,
                      c->status.battery_charging ? "true" : "false",
                      mode_str,
-                     c->config.bitrate,
+                     (c->config.mode == MODE_NORMAL) ? CONFIG_CLIP_NORMAL_BITRATE : CONFIG_CLIP_ENHANCED_BITRATE,
                      free_space,
                      device_name ? device_name : "Unknown");
 
@@ -497,41 +497,6 @@ static int cmd_brightness_handler(struct at_cmd_ctx *ctx, char *response, size_t
         /* Get brightness: AT+BRIGHTNESS? */
         char data[32];
         snprintf(data, sizeof(data), "{\"brightness\":%u}", c->config.oled_brightness);
-        return create_json_response(true, NULL, data, response, len);
-    }
-}
-
-/* CHUNKSIZE Command Handler - Get/Set transfer chunk size */
-static int cmd_chunksize_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
-{
-    struct clip_context *c = clip_get_context();
-
-    if (ctx->type == AT_CMD_TYPE_SET) {
-        /* Set chunk size: AT+CHUNKSIZE=<bytes> */
-        if (!ctx->args || strlen(ctx->args) == 0) {
-            return create_json_response(false, "Missing chunk size value", NULL, response, len);
-        }
-
-        int chunk_size;
-        if (extract_int(ctx->args, &chunk_size) != 0) {
-            return create_json_response(false, "Invalid chunk size", NULL, response, len);
-        }
-
-        /* Validate chunk size range */
-        if (chunk_size < 100 || chunk_size > 4096) {
-            return create_json_response(false, "Chunk size must be 100-4096", NULL, response, len);
-        }
-
-        c->config.chunk_size = chunk_size;
-        config_set_chunk_size(chunk_size);
-
-        char data[32];
-        snprintf(data, sizeof(data), "{\"chunksize\":%u}", chunk_size);
-        return create_json_response(true, NULL, data, response, len);
-    } else {
-        /* Get chunk size: AT+CHUNKSIZE? */
-        char data[32];
-        snprintf(data, sizeof(data), "{\"chunksize\":%u}", c->config.chunk_size);
         return create_json_response(true, NULL, data, response, len);
     }
 }
@@ -1640,15 +1605,6 @@ int at_commands_register(void)
         .handler = cmd_brightness_handler,
     };
     err = at_server_register_cmd(&brightness_cmd);
-    if (err) return err;
-
-    /* CHUNKSIZE - Get/Set transfer chunk size */
-    static const struct at_command chunksize_cmd = {
-        .name = "CHUNKSIZE",
-        .flags = AT_CMD_SET | AT_CMD_QUERY | AT_CMD_EXEC,
-        .handler = cmd_chunksize_handler,
-    };
-    err = at_server_register_cmd(&chunksize_cmd);
     if (err) return err;
 
     /* POWEROFF - Shutdown the device */

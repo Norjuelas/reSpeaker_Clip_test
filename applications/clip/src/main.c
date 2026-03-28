@@ -267,8 +267,9 @@ int clip_init(void)
     clip_event_get_state();  /* Already set by clip_event_init */
 
     LOG_INF("Clip initialized successfully");
-    LOG_INF("Device ready, config: bitrate=%u, complexity=%u",
-           g_ctx.config.bitrate, g_ctx.config.complexity);
+    LOG_INF("Device ready, mode: normal=%u/%u enhanced=%u/%u",
+           CONFIG_CLIP_NORMAL_BITRATE, CONFIG_CLIP_NORMAL_COMPLEXITY,
+           CONFIG_CLIP_ENHANCED_BITRATE, CONFIG_CLIP_ENHANCED_COMPLEXITY);
 
     return 0;
 }

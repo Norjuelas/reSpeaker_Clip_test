@@ -11,28 +11,18 @@
 #include <stddef.h>
 
 /* Configuration keys */
-#define CONFIG_KEY_BITRATE       0x01
-#define CONFIG_KEY_COMPLEXITY    0x02
 #define CONFIG_KEY_MODE          0x03
 #define CONFIG_KEY_NOISE         0x04
-#define CONFIG_KEY_CHUNK_SIZE    0x05
 #define CONFIG_KEY_AUTODEL       0x06
-#define CONFIG_KEY_AGC_ENABLE    0x07
-#define CONFIG_KEY_AGC_TARGET    0x08
 #define CONFIG_KEY_DEREVERB      0x09
-#define CONFIG_KEY_BRIGHTNESS      0x0A
+#define CONFIG_KEY_BRIGHTNESS    0x0A
 
 /* Default values */
-#define CONFIG_DEFAULT_BITRATE       24000
-#define CONFIG_DEFAULT_COMPLEXITY    5
 #define CONFIG_DEFAULT_MODE          0  /* MODE_NORMAL */
 #define CONFIG_DEFAULT_NOISE         15
-#define CONFIG_DEFAULT_CHUNK_SIZE    4096
 #define CONFIG_DEFAULT_AUTODEL       -1
-#define CONFIG_DEFAULT_AGC_TARGET    8000
-#define CONFIG_DEFAULT_AGC_ENABLED   true
 #define CONFIG_DEFAULT_DEREVERB      false
-#define CONFIG_DEFAULT_BRIGHTNESS      128
+#define CONFIG_DEFAULT_BRIGHTNESS    128
 
 /**
  * @brief Initialize configuration system
@@ -113,22 +103,6 @@ int config_set_time_ymd(uint16_t year, uint8_t month, uint8_t day,
                         uint8_t hour, uint8_t min, uint8_t sec);
 
 /**
- * @brief Set Opus bitrate
- *
- * @param bitrate Bitrate in bps
- * @return 0 on success, negative error code on failure
- */
-int config_set_bitrate(uint16_t bitrate);
-
-/**
- * @brief Set Opus complexity
- *
- * @param complexity Complexity (0-10)
- * @return 0 on success, negative error code on failure
- */
-int config_set_complexity(uint8_t complexity);
-
-/**
  * @brief Set recording mode
  *
  * @param mode Recording mode
@@ -145,36 +119,12 @@ int config_set_mode(enum recording_mode mode);
 int config_set_noise_suppress(uint8_t noise);
 
 /**
- * @brief Set chunk size
- *
- * @param chunk_size Chunk size in bytes
- * @return 0 on success, negative error code on failure
- */
-int config_set_chunk_size(uint16_t chunk_size);
-
-/**
  * @brief Set auto-delete days
  *
  * @param days Days (0-30) or -1 for off
  * @return 0 on success, negative error code on failure
  */
 int config_set_auto_delete_days(int8_t days);
-
-/**
- * @brief Set AGC enabled
- *
- * @param enabled true to enable, false to disable
- * @return 0 on success, negative error code on failure
- */
-int config_set_agc_enabled(bool enabled);
-
-/**
- * @brief Set AGC target level
- *
- * @param target Target level
- * @return 0 on success, negative error code on failure
- */
-int config_set_agc_target(uint16_t target);
 
 /**
  * @brief Set dereverb enabled
