@@ -18,7 +18,6 @@ LOG_MODULE_REGISTER(ch1115, LOG_LEVEL_ERR);
 
 struct ch1115_data {
     enum display_pixel_format pf;
-    uint8_t *clear_buf;
 	bool suspended;
 };
 
@@ -72,6 +71,7 @@ struct ch1115_config {
     uint8_t prechargep;
     uint8_t segment_remap;
     uint8_t com_invdir;
+    uint8_t *clear_buf;
 };
 
 static inline int ch1115_write_cmds(const struct device *dev, const uint8_t *cmds, size_t len)
@@ -253,12 +253,8 @@ static int ch1115_clear(const struct device *dev)
         .pitch = config->width,
     };
 
-    if (data->clear_buf == NULL) {
-        return -ENOMEM;
-    }
-
-    memset(data->clear_buf, 0x00, desc.buf_size);
-    return ch1115_write(dev, 0, 0, &desc, data->clear_buf);
+    memset(config->clear_buf, 0x00, desc.buf_size);
+    return ch1115_write(dev, 0, 0, &desc, config->clear_buf);
 }
 
 static int ch1115_init(const struct device *dev)
@@ -337,42 +333,25 @@ static int ch1115_init(const struct device *dev)
     }
 
     /*
-     * Allocate clear buffer for application use.
-     * Size based on logical resolution (88x48 = 528 bytes).
-     */
-    data->clear_buf = k_malloc(config->width * config->height / 8U);
-    if (data->clear_buf == NULL) {
-        return -ENOMEM;
-    }
-
-    /*
      * Clear ALL activated COM lines to prevent random RAM display on startup.
      *
      * Hardware context:
-     * - multiplex_ratio=63 activates all 64 COM lines (COM0-COM63)
-     * - OLED panel has only 48 physical rows
+     * - multiplex_ratio activates all (ratio+1) COM lines
+     * - OLED panel may have fewer physical rows than activated COM lines
      * - Unclear rows show random RAM content (garbage)
-     *
-     * Solution: Clear all 64 rows at init, then use 48 rows for display.
      */
-    const int total_com_lines = config->multiplex_ratio + 1;  /* 64 rows */
-    const size_t full_clear_size = config->width * total_com_lines / 8U;
-    uint8_t *full_clear_buf = k_malloc(full_clear_size);
+    {
+        const int total_com_lines = config->multiplex_ratio + 1;
+        const size_t full_clear_size = config->width * total_com_lines / 8U;
 
-    if (full_clear_buf) {
-        /* Clear and write all 64 rows */
-        memset(full_clear_buf, 0x00, full_clear_size);
+        memset(config->clear_buf, 0x00, full_clear_size);
         struct display_buffer_descriptor full_desc = {
             .buf_size = full_clear_size,
             .width = config->width,
             .height = total_com_lines,
             .pitch = config->width,
         };
-        ch1115_write(dev, 0, 0, &full_desc, full_clear_buf);
-        k_free(full_clear_buf);
-    } else {
-        /* Fallback: clear at least the logical height */
-        ch1115_clear(dev);
+        ch1115_write(dev, 0, 0, &full_desc, config->clear_buf);
     }
 
     return 0;
@@ -422,7 +401,11 @@ static const struct display_driver_api ch1115_driver_api = {
     .set_brightness = ch1115_set_contrast,
 };
 
+#define CH1115_CLEAR_BUF_SIZE(inst) \
+	(DT_INST_PROP(inst, width) * (DT_INST_PROP_OR(inst, multiplex_ratio, 47) + 1) / 8)
+
 #define CH1115_DEVICE(inst)                                                                      \
+    static uint8_t ch1115_clear_buf_##inst[CH1115_CLEAR_BUF_SIZE(inst)];                        \
     static struct ch1115_data ch1115_data_##inst;                                              \
     static const struct ch1115_config ch1115_config_##inst = {                                 \
         .i2c = I2C_DT_SPEC_INST_GET(inst),                                                    \
@@ -436,6 +419,7 @@ static const struct display_driver_api ch1115_driver_api = {
         .prechargep = DT_INST_PROP_OR(inst, prechargep, 0x22),                               \
         .segment_remap = DT_INST_PROP_OR(inst, segment_remap, 0),                            \
         .com_invdir = DT_INST_PROP_OR(inst, com_invdir, 0),                                  \
+        .clear_buf = ch1115_clear_buf_##inst,                                                 \
     };                                                                                         \
 	PM_DEVICE_DT_INST_DEFINE(inst, ch1115_pm_action);                                          \
     DEVICE_DT_INST_DEFINE(inst, ch1115_init, PM_DEVICE_DT_INST_GET(inst),                    \
