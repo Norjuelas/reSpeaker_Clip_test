@@ -36,6 +36,7 @@ enum ui_state {
 	UI_STATE_POWER_OFF,            /**< Power-off confirmation */
 	UI_STATE_USB_CONNECTED,        /**< USB plugged in */
 	UI_STATE_OTA,                  /**< OTA update in progress */
+	UI_STATE_OTA_PROGRESS,         /**< OTA with progress bar */
 };
 
 /* =============================================================================
@@ -53,6 +54,7 @@ enum ui_event {
 	UI_EVENT_MARK,                 /**< Bookmark added */
 	UI_EVENT_STATUS_SHOW,          /**< Show status bar */
 	UI_EVENT_BONDED,               /**< BLE bonded */
+	UI_EVENT_PAIRING_SHOW,        /**< Show pairing guide */
 	UI_EVENT_POWER_OFF_SHOW,       /**< Show power-off screen */
 	UI_EVENT_USB_CONNECTED,        /**< USB cable plugged in */
 	UI_EVENT_OTA_START,            /**< OTA update started */
@@ -117,6 +119,12 @@ int display_set_recording(bool recording, bool enhanced_mode);
  * @return 0 on success, negative errno on failure
  */
 int display_turn_off(void);
+
+/**
+ * @brief Set OTA upload progress
+ * @param percent Progress percentage (0-100)
+ */
+void display_set_ota_progress(uint8_t percent);
 
 /**
  * @brief Set display brightness

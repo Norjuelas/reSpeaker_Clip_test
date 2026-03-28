@@ -35,7 +35,7 @@ static void button_event_callback(const struct device *dev, enum button_action a
         if (state == CLIP_STATE_RECORDING || state == CLIP_STATE_PAUSED) {
             clip_post_event(CLIP_EVENT_MARK);
         } else if (state == CLIP_STATE_IDLE || state == CLIP_STATE_ERROR
-                   || state == CLIP_STATE_WIFI_SYNC) {
+                   || state == CLIP_STATE_WIFI_SYNC || state == CLIP_STATE_OTA) {
             clip_post_event(CLIP_EVENT_STATUS_SHOW);
         }
         break;

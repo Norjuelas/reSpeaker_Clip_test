@@ -18,6 +18,7 @@
 #include "transport.h"
 #include "transport_ble.h"
 #include "transfer.h"
+#include "display.h"
 
 LOG_MODULE_REGISTER(ble, CONFIG_CLIP_LOG_LEVEL);
 
@@ -448,6 +449,7 @@ static void pairing_complete(struct bt_conn *conn, bool bonded)
         } else {
             LOG_INF("Bonding keys saved");
         }
+        display_post_event(UI_EVENT_BONDED);
     }
 }
 
@@ -551,6 +553,11 @@ int ble_init(void)
 
     /* Load BT settings (bond keys) */
     settings_load_subtree("bt");
+
+    /* If not bonded, switch display to pairing guide */
+    if (!ble_is_bonded()) {
+        display_post_event(UI_EVENT_PAIRING_SHOW);
+    }
 
     /* Start advertising */
     err = bt_le_adv_start(BT_LE_ADV_CONN_FAST_1, ad, ARRAY_SIZE(ad),

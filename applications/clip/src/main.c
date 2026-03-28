@@ -55,6 +55,8 @@ const char *clip_state_to_string(enum clip_state state)
         return "PAUSED";
     case CLIP_STATE_ERROR:
         return "ERROR";
+    case CLIP_STATE_OTA:
+        return "OTA";
     default:
         return "UNKNOWN";
     }
@@ -145,7 +147,14 @@ int clip_init(void)
         /* Continue anyway - config is optional */
     }
 
-    /* Initialize BLE first (bt_enable must complete before other threads start) */
+    /* Initialize display early (before slow BLE init) to light up screen */
+    err = display_init();
+    if (err) {
+        LOG_WRN("Display init failed: %d", err);
+        /* Continue anyway - display is optional */
+    }
+
+    /* Initialize BLE (bt_enable is slow, display is already showing) */
     err = ble_init();
     if (err) {
         LOG_ERR("BLE init failed: %d", err);
@@ -247,13 +256,6 @@ int clip_init(void)
     if (err) {
         LOG_WRN("Button init failed: %d", err);
         /* Continue anyway - button is optional */
-    }
-
-    /* Initialize display (needs BLE for device name) */
-    err = display_init();
-    if (err) {
-        LOG_WRN("Display init failed: %d", err);
-        /* Continue anyway - display is optional */
     }
 
     /* Initialize event dispatcher (depends on audio, haptic, display, wifi) */

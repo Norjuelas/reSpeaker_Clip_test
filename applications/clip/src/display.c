@@ -134,6 +134,10 @@ static bool g_dot_animation_played = false;
 static int64_t g_rec_wave_start_ms = 0;
 static int64_t g_status_bar_start_ms = 0;
 
+/* OTA progress (0-100) */
+static uint8_t g_ota_percent = 0;
+static bool g_ota_active = false;
+
 /* =============================================================================
  * Forward Declarations
  * ============================================================================= */
@@ -983,6 +987,11 @@ static void handle_event(enum ui_event event)
 		}
 		break;
 
+	case UI_EVENT_PAIRING_SHOW:
+		k_work_cancel_delayable(&display_timeout_work);
+		set_ui_state(UI_STATE_PAIRING_GUIDE);
+		break;
+
 	case UI_EVENT_POWER_OFF_SHOW:
 		set_ui_state(UI_STATE_POWER_OFF);
 		break;
@@ -993,10 +1002,13 @@ static void handle_event(enum ui_event event)
 		break;
 
 	case UI_EVENT_OTA_START:
-		set_ui_state(UI_STATE_OTA);
+		g_ota_active = true;
+		g_ota_percent = 0;
+		set_ui_state(UI_STATE_OTA_PROGRESS);
 		break;
 
 	case UI_EVENT_OTA_DONE:
+		g_ota_active = false;
 		set_ui_state(UI_STATE_STATUS_BAR);
 		k_work_schedule(&display_timeout_work, K_MSEC(DISPLAY_STATUS_TIMEOUT_MS));
 		break;
@@ -1004,7 +1016,9 @@ static void handle_event(enum ui_event event)
 	case UI_EVENT_TIMEOUT:
 		if (g_ui_state == UI_STATE_STATUS_BAR ||
 		    g_ui_state == UI_STATE_USB_CONNECTED) {
-			if (ble_is_bonded()) {
+			if (g_ota_active) {
+				set_ui_state(UI_STATE_OTA_PROGRESS);
+			} else if (ble_is_bonded()) {
 				set_ui_state(UI_STATE_OFF);
 			} else {
 				set_ui_state(UI_STATE_PAIRING_GUIDE);
@@ -1130,6 +1144,48 @@ static void render_current_state(void)
 		break;
 	}
 
+	case UI_STATE_OTA_PROGRESS:
+	{
+		clear_screen(display_buffer);
+
+		/* "OTA" label centered */
+		int label_y = 6;
+		draw_string_6x12(display_buffer, "OTA", 30, label_y);
+
+		/* Progress bar */
+		int bar_x = 10;
+		int bar_y = 26;
+		int bar_w = OLED_WIDTH - 20;
+		int bar_h = 8;
+
+		/* Outline */
+		for (int x = bar_x; x < bar_x + bar_w; x++) {
+			set_pixel_direct(display_buffer, x, bar_y);
+			set_pixel_direct(display_buffer, x, bar_y + bar_h);
+		}
+		for (int y = bar_y; y <= bar_y + bar_h; y++) {
+			set_pixel_direct(display_buffer, bar_x, y);
+			set_pixel_direct(display_buffer, bar_x + bar_w - 1, y);
+		}
+
+		/* Fill */
+		int fill_w = ((int)g_ota_percent * (bar_w - 2)) / 100;
+		for (int x = bar_x + 1; x < bar_x + 1 + fill_w && x < bar_x + bar_w - 1; x++) {
+			for (int y = bar_y + 1; y < bar_y + bar_h; y++) {
+				set_pixel_direct(display_buffer, x, y);
+			}
+		}
+
+		/* Percentage text below bar */
+		char pct_str[8];
+		snprintk(pct_str, sizeof(pct_str), "%u%%", g_ota_percent);
+		int pct_x = (OLED_WIDTH - (int)strlen(pct_str) * 7 + 1) / 2;
+		draw_string_6x12(display_buffer, pct_str, pct_x, 38);
+
+		flush_display();
+		break;
+	}
+
 	default:
 		break;
 	}
@@ -1210,24 +1266,15 @@ int display_init(void)
 	k_work_init_delayable(&display_anim_work, display_anim_work_handler);
 	k_work_init_delayable(&display_timeout_work, display_timeout_work_handler);
 
-	/* Initial state:
-	 *   bonded     -> show status bar 3s then OFF
-	 *   not bonded -> show pairing guide immediately
+	/* Initial state: show status bar as default.
+	 * BLE init will correct to pairing guide if not bonded.
 	 */
-	if (ble_is_bonded()) {
-		set_ui_state(UI_STATE_STATUS_BAR);
-		g_status_bar_start_ms = k_uptime_get();
-		render_status_bar(display_buffer);
-		flush_display();
-		/* Schedule 3-second timeout to turn off display */
-		k_work_schedule(&display_timeout_work, K_MSEC(DISPLAY_STATUS_TIMEOUT_MS));
-		LOG_INF("Initial state: STATUS_BAR (bonded)");
-	} else {
-		set_ui_state(UI_STATE_PAIRING_GUIDE);
-		render_pairing_guide(display_buffer);
-		flush_display();
-		LOG_INF("Initial state: PAIRING_GUIDE");
-	}
+	set_ui_state(UI_STATE_STATUS_BAR);
+	g_status_bar_start_ms = k_uptime_get();
+	render_status_bar(display_buffer);
+	flush_display();
+	k_work_schedule(&display_timeout_work, K_MSEC(DISPLAY_STATUS_TIMEOUT_MS));
+	LOG_INF("Initial state: STATUS_BAR");
 
 	return 0;
 }
@@ -1286,4 +1333,19 @@ int clip_display_set_brightness(uint8_t brightness)
 		return -ENODEV;
 	}
 	return display_set_brightness(display_dev, brightness);
+}
+
+void display_set_ota_progress(uint8_t percent)
+{
+	if (percent > 100) {
+		percent = 100;
+	}
+
+	if (percent != g_ota_percent) {
+		g_ota_percent = percent;
+		/* Re-render if currently showing OTA progress */
+		if (g_ui_state == UI_STATE_OTA_PROGRESS) {
+			render_current_state();
+		}
+	}
 }

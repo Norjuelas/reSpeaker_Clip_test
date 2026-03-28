@@ -34,6 +34,7 @@ enum clip_state {
     CLIP_STATE_WIFI_SYNC,
     CLIP_STATE_PAUSED,
     CLIP_STATE_ERROR,
+    CLIP_STATE_OTA,
 };
 
 /**

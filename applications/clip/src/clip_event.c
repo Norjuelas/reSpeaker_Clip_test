@@ -16,6 +16,7 @@
 #include <zephyr/logging/log.h>
 #include <zephyr/drivers/regulator.h>
 #include <zephyr/mgmt/mcumgr/mgmt/callbacks.h>
+#include <zephyr/mgmt/mcumgr/grp/img_mgmt/img_mgmt.h>
 #include <nrfx_clock.h>
 #include "clip_event.h"
 #include "clip.h"
@@ -38,7 +39,7 @@ LOG_MODULE_REGISTER(clip_event, CONFIG_CLIP_LOG_LEVEL);
  *
  *                  START  STOP   PAUSE  RESUME MARK   WIFI_ON WIFI_OFF POFF_S POFF_E STATUS USB   OTA_S OTA_D
  */
-static const uint8_t transition_table[CLIP_STATE_ERROR + 1][CLIP_EVENT_COUNT] = {
+static const uint8_t transition_table[CLIP_STATE_OTA + 1][CLIP_EVENT_COUNT] = {
     /* UNINITIALIZED */ { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,    0,    0,    0 },
     /* IDLE          */ { CLIP_STATE_RECORDING, 0, 0, 0, 0,
                          CLIP_STATE_WIFI_SYNC, 0,
@@ -58,6 +59,9 @@ static const uint8_t transition_table[CLIP_STATE_ERROR + 1][CLIP_EVENT_COUNT] = 
     /* ERROR         */ { CLIP_STATE_IDLE, 0, 0, 0, 0, 0, 0,
                          TRANS_SAME, TRANS_SAME, TRANS_SAME,
                          TRANS_SAME, TRANS_SAME, TRANS_SAME },
+    /* OTA           */ { 0, 0, 0, 0, 0, 0, 0,
+                         TRANS_SAME, TRANS_SAME, TRANS_SAME,
+                         0, TRANS_SAME, CLIP_STATE_IDLE },
 };
 
 /* ========================================================================== */
@@ -100,7 +104,7 @@ static enum clip_event_result execute_transition(enum clip_event event,
 /* Init                                                                        */
 /* ========================================================================== */
 
-/* MCUmgr DFU callback — notifies display on OTA start/pending */
+/* MCUmgr DFU callback — notifies display on OTA start/progress/pending */
 static enum mgmt_cb_return mcumgr_dfu_cb(uint32_t event, enum mgmt_cb_return prev_status,
                                           int32_t *rc, uint16_t *group, bool *abort_more,
                                           void *data, size_t data_size)
@@ -108,8 +112,16 @@ static enum mgmt_cb_return mcumgr_dfu_cb(uint32_t event, enum mgmt_cb_return pre
     if (event == MGMT_EVT_OP_IMG_MGMT_DFU_STARTED) {
         LOG_INF("MCUmgr: DFU upload started");
         clip_post_event(CLIP_EVENT_OTA_START);
+    } else if (event == MGMT_EVT_OP_IMG_MGMT_DFU_CHUNK) {
+        /* Update OTA progress on the display */
+        if (g_img_mgmt_state.size > 0) {
+            uint8_t pct = (uint8_t)(g_img_mgmt_state.off * 100 /
+                                    g_img_mgmt_state.size);
+            display_set_ota_progress(pct);
+        }
     } else if (event == MGMT_EVT_OP_IMG_MGMT_DFU_PENDING) {
         LOG_INF("MCUmgr: DFU upload complete, pending reboot");
+        display_set_ota_progress(100);
     }
 
     return MGMT_CB_OK;
@@ -117,7 +129,8 @@ static enum mgmt_cb_return mcumgr_dfu_cb(uint32_t event, enum mgmt_cb_return pre
 
 static struct mgmt_callback mcumgr_dfu_cb_handler = {
     .callback = mcumgr_dfu_cb,
-    .event_id = MGMT_EVT_OP_IMG_MGMT_DFU_STARTED | MGMT_EVT_OP_IMG_MGMT_DFU_PENDING,
+    .event_id = MGMT_EVT_OP_IMG_MGMT_DFU_STARTED | MGMT_EVT_OP_IMG_MGMT_DFU_CHUNK |
+                MGMT_EVT_OP_IMG_MGMT_DFU_PENDING,
 };
 
 int clip_event_init(void)
