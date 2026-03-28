@@ -34,7 +34,7 @@ index a99e0df2..610504c2 100644
  
  config BOOT_INTR_VEC_RELOC
 diff --git a/boot/zephyr/main.c b/boot/zephyr/main.c
-index 9aaaadd7..8d507da7 100644
+index 9aaaadd7..20bda9c2 100644
 --- a/boot/zephyr/main.c
 +++ b/boot/zephyr/main.c
 @@ -40,6 +40,12 @@
@@ -73,17 +73,7 @@ index 9aaaadd7..8d507da7 100644
      os_heap_init();
  
      ZEPHYR_BOOT_LOG_START();
-@@ -820,6 +835,9 @@ int main(void)
- 
-     BOOT_HOOK_GO_CALL_FIH(boot_go_hook, FIH_BOOT_HOOK_REGULAR, fih_rc, &rsp);
-     if (FIH_EQ(fih_rc, FIH_BOOT_HOOK_REGULAR)) {
-+#ifdef CONFIG_MCUBOOT_DISPLAY
-+        io_display_show("Updating", "...");
-+#endif
-         FIH_CALL(boot_go, fih_rc, &rsp);
-     }
-     BOOT_LOG_DBG("Left boot_go with success == %d", FIH_EQ(fih_rc, FIH_SUCCESS) ? 1 : 0);
-@@ -856,6 +874,10 @@ int main(void)
+@@ -856,6 +871,10 @@ int main(void)
  
          mcuboot_status_change(MCUBOOT_STATUS_NO_BOOTABLE_IMAGE_FOUND);
  
@@ -94,7 +84,7 @@ index 9aaaadd7..8d507da7 100644
  #ifdef CONFIG_BOOT_SERIAL_NO_APPLICATION
          /* No bootable image and configuration set to remain in serial
           * recovery mode
-@@ -943,6 +965,10 @@ int main(void)
+@@ -943,6 +962,10 @@ int main(void)
  
      ZEPHYR_BOOT_LOG_STOP();
  
@@ -108,10 +98,10 @@ index 9aaaadd7..8d507da7 100644
 
 diff --git a/boot/zephyr/io_display.c b/boot/zephyr/io_display.c
 new file mode 100644
-index 0000000..ed8633623ff011c0dd943abf4530fe914d23d1f7
+index 0000000..1a74ab0d91c413582257fba56f4457e637c00988
 --- /dev/null
 +++ b/boot/zephyr/io_display.c
-@@ -0,0 +1,274 @@
+@@ -0,0 +1,287 @@
 +/*
 + * OLED display helpers for MCUboot status messages.
 + * Uses Zephyr Display API to render text on CH1115 OLED.
@@ -127,6 +117,9 @@ index 0000000..ed8633623ff011c0dd943abf4530fe914d23d1f7
 +#include <zephyr/devicetree.h>
 +#include <string.h>
 +#include "bootutil/bootutil_log.h"
++#ifdef CONFIG_MCUBOOT_DISPLAY
++#include "bootutil/mcuboot_status.h"
++#endif
 +
 +BOOT_LOG_MODULE_DECLARE(mcuboot);
 +
@@ -386,3 +379,13 @@ index 0000000..ed8633623ff011c0dd943abf4530fe914d23d1f7
 +
 +	display_initialized = false;
 +}
++
++/* MCUboot status change hook — show "Updating" only when swap is needed */
++#ifdef CONFIG_MCUBOOT_DISPLAY
++__weak void mcuboot_status_change(mcuboot_status_type_t status)
++{
++	if (status == MCUBOOT_STATUS_UPGRADING) {
++		io_display_show("Updating", "...");
++	}
++}
++#endif
