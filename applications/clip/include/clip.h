@@ -99,6 +99,9 @@ struct clip_context {
  */
 struct clip_context *clip_get_context(void);
 
+void clip_cpu_boost_acquire(void);
+void clip_cpu_boost_release(void);
+
 /**
  * @brief Initialize clip application
  *

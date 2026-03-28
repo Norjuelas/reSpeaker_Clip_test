@@ -117,6 +117,7 @@ int transfer_start(const char *session_id, const char *filename, struct transpor
     current_transport = tp;
     LOG_INF("Transfer using transport type %d", tp->type);
 
+    clip_cpu_boost_acquire();
     /* Check if transfer is already active */
     if (transfer_is_active() && transfer_file_open) {
         LOG_WRN("Transfer already active");
@@ -1014,6 +1015,8 @@ static void send_transfer_complete_once(const char *session_id, int file_count)
 
 static void transfer_cleanup(void)
 {
+    clip_cpu_boost_release();
+
     if (transfer_file_open) {
         fs_close(&transfer_file);
         transfer_file_open = false;

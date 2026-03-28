@@ -15,6 +15,7 @@
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/drivers/regulator.h>
+#include <nrfx_clock.h>
 #include "clip_event.h"
 #include "clip.h"
 #include "audio.h"
@@ -84,6 +85,7 @@ struct k_sem event_notify_sem;
 /* ========================================================================== */
 
 static atomic_t g_state;
+static atomic_t g_boost_refcnt;
 
 /* ========================================================================== */
 /* Forward Declarations                                                         */
@@ -104,6 +106,32 @@ int clip_event_init(void)
 
     LOG_INF("Event dispatcher initialized");
     return 0;
+}
+
+/* ========================================================================== */
+/* CPU Boost (reference counted)                                                */
+/* ========================================================================== */
+
+void clip_cpu_boost_acquire(void)
+{
+    int ref = atomic_inc(&g_boost_refcnt);
+    if (ref == 0) {
+#ifdef CLOCK_FEATURE_HFCLK_DIVIDE_PRESENT
+        nrfx_clock_divider_set(NRF_CLOCK_DOMAIN_HFCLK, NRF_CLOCK_HFCLK_DIV_1);
+        LOG_INF("CPU boost ON (128MHz)");
+#endif
+    }
+}
+
+void clip_cpu_boost_release(void)
+{
+    int ref = atomic_dec(&g_boost_refcnt);
+    if (ref == 1) {
+#ifdef CLOCK_FEATURE_HFCLK_DIVIDE_PRESENT
+        nrfx_clock_divider_set(NRF_CLOCK_DOMAIN_HFCLK, NRF_CLOCK_HFCLK_DIV_2);
+        LOG_INF("CPU boost OFF (64MHz)");
+#endif
+    }
 }
 
 enum clip_state clip_event_get_state(void)

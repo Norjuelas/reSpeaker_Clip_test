@@ -235,6 +235,9 @@ int audio_start_recording(enum audio_mode mode)
     uint8_t month, day, hour, min, sec;
     int ret;
 
+    LOG_INF("Recording starting, boosting CPU");
+    clip_cpu_boost_acquire();
+
     /* Lock to protect session_id and state variables */
     k_mutex_lock(&audio_state_mutex, K_FOREVER);
 
@@ -607,6 +610,9 @@ static int audio_stop_recording_internal(void)
 
     /* Power off microphone to save power */
     mic_power_off();
+
+    LOG_INF("Recording stopped, releasing CPU boost");
+    clip_cpu_boost_release();
 
     /* Note: Keep encoder and DSP initialized for next recording
      * They will be reinitialized only if parameters change */
