@@ -8,6 +8,7 @@
 #include <zephyr/logging/log.h>
 #include <zephyr/sys/reboot.h>
 #include <zephyr/drivers/regulator.h>
+#include <zephyr/retention/bootmode.h>
 #include <time.h>
 #include <string.h>
 #include <stdio.h>
@@ -562,6 +563,23 @@ static int cmd_reboot_handler(struct at_cmd_ctx *ctx, char *response, size_t len
 {
     /* Send success response first */
     int ret = create_json_response(true, NULL, "{\"reboot\":\"restarting\"}", response, len);
+
+    /* Schedule reboot after response is sent */
+    schedule_reboot(500, false);
+
+    return ret;
+}
+
+/* DFU Command Handler - Reboot into MCUboot recovery mode */
+static int cmd_dfu_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
+{
+    /* Set boot mode to bootloader before rebooting */
+    int ret = bootmode_set(BOOT_MODE_TYPE_BOOTLOADER);
+    if (ret != 0) {
+        return create_json_response(false, "Failed to set boot mode", NULL, response, len);
+    }
+
+    ret = create_json_response(true, NULL, "{\"dfu\":\"rebooting\"}", response, len);
 
     /* Schedule reboot after response is sent */
     schedule_reboot(500, false);
@@ -1641,6 +1659,15 @@ int at_commands_register(void)
         .handler = cmd_reboot_handler,
     };
     err = at_server_register_cmd(&reboot_cmd);
+    if (err) return err;
+
+    /* DFU - Reboot into MCUboot recovery mode */
+    static const struct at_command dfu_cmd = {
+        .name = "DFU",
+        .flags = AT_CMD_EXEC,
+        .handler = cmd_dfu_handler,
+    };
+    err = at_server_register_cmd(&dfu_cmd);
     if (err) return err;
 
     /* START - Start recording */
