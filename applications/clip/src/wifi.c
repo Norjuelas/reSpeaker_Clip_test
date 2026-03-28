@@ -323,6 +323,11 @@ int wifi_on(void)
 	/* Start DHCP server */
 	wifi_start_dhcp_server(iface);
 
+#ifdef CONFIG_NRF70_SR_COEX
+	/* Configure WiFi/BLE coexistence after DHCP is ready */
+	wifi_coex_configure();
+#endif
+
 	/* Start UDP server */
 	ret = wifi_udp_start();
 	if (ret)
@@ -357,6 +362,11 @@ int wifi_off(void)
 	net_mgmt(NET_REQUEST_WIFI_AP_DISABLE, iface, NULL, 0);
 	ap_running = false;
 	sta_connected = false;
+
+#ifdef CONFIG_NRF70_SR_COEX
+	/* Reset coexistence hardware */
+	nrf_wifi_coex_hw_reset();
+#endif
 
 	/* Power down interface to save power (required when CONFIG_NRF_WIFI_IF_AUTO_START=n) */
 	if (net_if_is_admin_up(iface))
