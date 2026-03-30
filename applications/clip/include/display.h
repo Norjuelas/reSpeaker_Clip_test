@@ -37,6 +37,7 @@ enum ui_state {
 	UI_STATE_USB_CONNECTED,        /**< USB plugged in */
 	UI_STATE_OTA,                  /**< OTA update in progress */
 	UI_STATE_OTA_PROGRESS,         /**< OTA with progress bar */
+	UI_STATE_ERROR,                /**< Error message display */
 };
 
 /* =============================================================================
@@ -60,6 +61,7 @@ enum ui_event {
 	UI_EVENT_OTA_START,            /**< OTA update started */
 	UI_EVENT_OTA_DONE,             /**< OTA update completed */
 	UI_EVENT_TIMEOUT,              /**< State timeout */
+	UI_EVENT_ERROR_SHOW,           /**< Show error message */
 };
 
 /* =============================================================================
@@ -73,6 +75,8 @@ struct display_status {
 	uint8_t battery_percent;       /**< Battery percentage (0-100) */
 	bool battery_charging;         /**< Battery charging status */
 	bool ble_connected;            /**< BLE connected */
+	bool wifi_running;             /**< WiFi AP running */
+	uint32_t free_space_mb;        /**< Free storage space in MB */
 	bool transferring;             /**< File transfer in progress */
 };
 
@@ -125,6 +129,16 @@ int display_turn_off(void);
  * @param percent Progress percentage (0-100)
  */
 void display_set_ota_progress(uint8_t percent);
+
+/**
+ * @brief Show error message on display
+ *
+ * Displays an error message for 5 seconds then returns to OFF state.
+ * If already showing an error, replaces the message.
+ *
+ * @param msg Error message string (max 23 chars)
+ */
+void display_post_error(const char *msg);
 
 /**
  * @brief Set display brightness

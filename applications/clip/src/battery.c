@@ -19,6 +19,7 @@
 #include "display.h"
 #include "ble.h"
 #include "transfer.h"
+#include "haptic.h"
 
 LOG_MODULE_REGISTER(battery, CONFIG_CLIP_LOG_LEVEL);
 
@@ -55,6 +56,7 @@ static const struct device *charger_dev;
 /* Cached state */
 static uint8_t last_percent;
 static bool last_charging;
+static bool low_battery_warned;
 
 /* 60-second periodic battery level polling */
 static struct k_work_delayable battery_level_work;
@@ -110,6 +112,15 @@ static void read_and_update(void)
 			bt_bas_set_battery_level(percent);
 			ctx->status.battery_percent = percent;
 			LOG_INF("Battery: %u%% (%u mV)", percent, voltage_mv);
+
+			/* Low battery warning */
+			if (!last_charging) {
+				if (percent <= 15 && !low_battery_warned) {
+					display_post_error("Low Battery");
+					haptic_play_pattern(HAPTIC_SHORT);
+					low_battery_warned = true;
+				}
+			}
 		}
 	}
 
@@ -125,6 +136,7 @@ static void read_and_update(void)
 			ctx->status.battery_charging = charging;
 
 			if (charging) {
+				low_battery_warned = false;
 				bt_bas_bls_set_battery_charge_state(
 					BT_BAS_BLS_CHARGE_STATE_CHARGING);
 

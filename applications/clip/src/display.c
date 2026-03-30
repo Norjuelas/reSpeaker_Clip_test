@@ -12,6 +12,7 @@
 #include <math.h>
 
 #include "display.h"
+#include "wifi.h"
 #include "icons.h"
 #include "audio.h"
 #include "ble.h"
@@ -122,6 +123,8 @@ static struct display_status g_status = {
 	.battery_percent = 100,
 	.battery_charging = false,
 	.ble_connected = false,
+	.wifi_running = false,
+	.free_space_mb = 0,
 	.transferring = false,
 };
 
@@ -137,6 +140,10 @@ static int64_t g_status_bar_start_ms = 0;
 /* OTA progress (0-100) */
 static uint8_t g_ota_percent = 0;
 static bool g_ota_active = false;
+
+/* Error message */
+static char g_error_msg[24];
+static bool g_error_active = false;
 
 /* =============================================================================
  * Forward Declarations
@@ -604,10 +611,28 @@ static void render_status_bar(uint8_t *buf)
 	/* Percent symbol */
 	draw_percent(buf, digit_x + 1, digit_y);
 
-	/* BLE icon at (68, 17) */
+	/* BLE icon at (56, 17) */
 	if (g_status.ble_connected) {
-		draw_ble_icon(buf, 68, 17, true);
+		draw_ble_icon(buf, 56, 17, true);
 	}
+
+	/* WiFi icon at (68, 17) */
+	if (g_status.wifi_running) {
+		const uint8_t *wifi_bitmap = icon_get_bitmap(ICON_WIFI_CONNECTED, NULL, NULL);
+		if (wifi_bitmap) {
+			icon_draw_bitmap(buf, 68, 17, wifi_bitmap, ICON_WIDTH, ICON_HEIGHT);
+		}
+	}
+
+	/* Storage indicator at bottom */
+	char space_str[12];
+	if (g_status.free_space_mb >= 1024) {
+		snprintk(space_str, sizeof(space_str), "%uG", g_status.free_space_mb / 1024);
+	} else {
+		snprintk(space_str, sizeof(space_str), "%uM", g_status.free_space_mb);
+	}
+	int space_x = (OLED_WIDTH - (int)strlen(space_str) * 6 + 1) / 2;
+	draw_string_6x12(buf, space_str, space_x, 40);
 }
 
 /* =============================================================================
@@ -1018,6 +1043,9 @@ static void handle_event(enum ui_event event)
 		    g_ui_state == UI_STATE_USB_CONNECTED) {
 			if (g_ota_active) {
 				set_ui_state(UI_STATE_OTA_PROGRESS);
+			} else if (g_error_active) {
+				g_error_active = false;
+				set_ui_state(UI_STATE_OFF);
 			} else if (ble_is_bonded()) {
 				set_ui_state(UI_STATE_OFF);
 			} else {
@@ -1025,7 +1053,17 @@ static void handle_event(enum ui_event event)
 			}
 		} else if (g_ui_state == UI_STATE_REC_WAVE) {
 			set_ui_state(UI_STATE_REC_DOT);
+		} else if (g_ui_state == UI_STATE_ERROR) {
+			g_error_active = false;
+			set_ui_state(UI_STATE_OFF);
 		}
+		break;
+
+	case UI_EVENT_ERROR_SHOW:
+		k_work_cancel_delayable(&display_timeout_work);
+		g_error_active = true;
+		set_ui_state(UI_STATE_ERROR);
+		k_work_schedule(&display_timeout_work, K_MSEC(5000));
 		break;
 
 	default:
@@ -1186,6 +1224,19 @@ static void render_current_state(void)
 		break;
 	}
 
+	case UI_STATE_ERROR:
+	{
+		clear_screen(display_buffer);
+		/* Error icon (exclamation mark) */
+		int y = (OLED_HEIGHT - 24) / 2;
+		draw_string_6x12(display_buffer, "!", 40, y - 4);
+		/* Error message */
+		int msg_x = (OLED_WIDTH - (int)strlen(g_error_msg) * 6 + 1) / 2;
+		draw_string_6x12(display_buffer, g_error_msg, msg_x, y + 12);
+		flush_display();
+		break;
+	}
+
 	default:
 		break;
 	}
@@ -1297,6 +1348,12 @@ int display_update_status(const struct display_status *status)
 
 	memcpy(&g_status, status, sizeof(g_status));
 
+	/* Update WiFi and storage info */
+	g_status.wifi_running = wifi_ap_is_running();
+	struct clip_context *ctx = clip_get_context();
+	g_status.free_space_mb = ctx->status.free_space / 1024;
+	g_status.free_space_mb = g_status.free_space_mb > 0 ? g_status.free_space_mb : 0;
+
 	/* Update display if in status bar state */
 	if (g_ui_state == UI_STATE_STATUS_BAR) {
 		render_status_bar(display_buffer);
@@ -1348,4 +1405,15 @@ void display_set_ota_progress(uint8_t percent)
 			render_current_state();
 		}
 	}
+}
+
+void display_post_error(const char *msg)
+{
+	if (!msg || !msg[0]) {
+		return;
+	}
+
+	strncpy(g_error_msg, msg, sizeof(g_error_msg) - 1);
+	g_error_msg[sizeof(g_error_msg) - 1] = '\0';
+	display_post_event(UI_EVENT_ERROR_SHOW);
 }

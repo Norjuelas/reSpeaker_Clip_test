@@ -293,6 +293,7 @@ static enum clip_event_result execute_transition(enum clip_event event,
                 return CLIP_EVENT_BUSY;
             }
             LOG_ERR("audio_start_recording failed: %d", err);
+            display_post_error("Rec Fail");
             return CLIP_EVENT_ERROR;
         }
         haptic_play_pattern(HAPTIC_SHORT);
@@ -371,6 +372,7 @@ static enum clip_event_result execute_transition(enum clip_event event,
         err = wifi_on();
         if (err) {
             LOG_ERR("wifi_on failed: %d", err);
+            display_post_error("WiFi Fail");
             return CLIP_EVENT_ERROR;
         }
         return CLIP_EVENT_OK;
