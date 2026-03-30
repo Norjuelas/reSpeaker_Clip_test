@@ -533,6 +533,13 @@ int ble_init(void)
     /* Generate device name */
     generate_device_name();
 
+    /* Set GAP device name (shown after connection) */
+    err = bt_set_name(ble_ctx.device_name);
+    if (err) {
+        LOG_ERR("bt_set_device_name failed: %d", err);
+        return err;
+    }
+
     /* Build advertising data dynamically */
     adv_flags = BT_LE_AD_GENERAL | BT_LE_AD_NO_BREDR;
     ad[0].type = BT_DATA_FLAGS;
