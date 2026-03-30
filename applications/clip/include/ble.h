@@ -137,6 +137,14 @@ int ble_clear_bonds(void);
 struct bt_conn *ble_get_connection(void);
 
 /**
+ * @brief Get negotiated ATT MTU
+ *
+ * @param conn Connection pointer
+ * @return MTU value, or 23 (default) if not connected
+ */
+uint16_t ble_get_mtu(struct bt_conn *conn);
+
+/**
  * @brief Get device name
  *
  * @return Device name string

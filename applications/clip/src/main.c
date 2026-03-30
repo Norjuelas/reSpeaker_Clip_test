@@ -296,7 +296,8 @@ static void thread_stack_stats_cb(const struct k_thread *thread, void *user_data
 	stack_size = thread->stack_info.size;
 	if (k_thread_stack_space_get(thread, &free_bytes) == 0) {
 		size_t used = stack_size - free_bytes;
-		const char *name = k_thread_name_get(thread);
+		const char *name = k_thread_name_get(
+			(struct k_thread *)thread);
 		if (!name || name[0] == '\0') {
 			name = "?";
 		}

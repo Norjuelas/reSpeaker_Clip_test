@@ -656,11 +656,8 @@ int ble_send(const uint8_t *data, uint16_t len)
 int ble_send_file_data(const uint8_t *data, uint16_t len)
 {
     int err;
-    uint16_t max_len;
-    size_t offset = 0;
     int retry_count = 0;
     const int max_retries = 3;
-    int chunk_count = 0;
     static uint32_t total_sent = 0;
     static int64_t last_log_time = 0;
 
@@ -681,55 +678,33 @@ int ble_send_file_data(const uint8_t *data, uint16_t len)
         last_log_time = now;
     }
 
-    /* MTU - 3 bytes ATT header = max notify payload */
-    max_len = bt_gatt_get_mtu(ble_ctx.conn) - 3;
-
-    /* Split into chunks if needed */
-    while (offset < len)
+    /* Send as a single notification — protocol frames must not be split */
+    retry_count = 0;
+    do
     {
-        size_t chunk_len = len - offset;
-        if (chunk_len > max_len) {
-            chunk_len = max_len;
+        /* File Data characteristic value is at attrs[7] */
+        err = bt_gatt_notify(ble_ctx.conn, &clip_svc.attrs[7],
+                             data, len);
+
+        if (err == 0) {
+            break; /* Success */
         }
 
-        /* Retry logic for temporary failures */
-        retry_count = 0;
-        do
-        {
-            /* File Data characteristic value is at attrs[7] */
-            err = bt_gatt_notify(ble_ctx.conn, &clip_svc.attrs[7],
-                                 data + offset, chunk_len);
-
-            if (err == 0) {
-                break; /* Success */
+        /* Retry on temporary errors */
+        if (err == -ENOMEM || err == -EAGAIN || err == -EBUSY) {
+            retry_count++;
+            if (retry_count < max_retries) {
+                LOG_WRN("File notify failed (len=%u, err=%d), retrying %d/%d",
+                        len, err, retry_count, max_retries);
+                continue;
             }
-
-            /* Retry on temporary errors */
-            if (err == -ENOMEM || err == -EAGAIN || err == -EBUSY) {
-                retry_count++;
-                if (retry_count < max_retries) {
-                    LOG_WRN("File notify failed (offset=%u, err=%d), retrying %d/%d",
-                            (uint32_t)offset, err, retry_count, max_retries);
-                    k_sleep(K_MSEC(10)); /* Wait before retry */
-                    continue;
-                }
-            }
-
-            /* Fatal error or retries exhausted */
-            LOG_ERR("File notify failed at offset %u: %d (retries: %d)",
-                    (uint32_t)offset, err, retry_count);
-            return err;
-
-        } while (retry_count < max_retries);
-
-        offset += chunk_len;
-        chunk_count++;
-
-        /* Small delay between chunks to avoid overwhelming BLE stack */
-        if (offset < len) {
-            k_yield();
         }
-    }
+
+        /* Fatal error or retries exhausted */
+        LOG_ERR("File notify failed: %d (retries: %d)", err, retry_count);
+        return err;
+
+    } while (retry_count < max_retries);
 
     return 0;
 }
@@ -782,6 +757,14 @@ int ble_clear_bonds(void)
 struct bt_conn *ble_get_connection(void)
 {
     return ble_ctx.conn;
+}
+
+uint16_t ble_get_mtu(struct bt_conn *conn)
+{
+    if (!conn) {
+        return 23;  /* Default BLE ATT MTU */
+    }
+    return bt_gatt_get_mtu(conn);
 }
 
 const char *ble_get_device_name(void)

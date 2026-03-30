@@ -36,6 +36,12 @@ RESP_SEND_UUID = "6E400003-B5A3-F393-E0A9-E50E24DCCA9E"
 FILE_DATA_UUID = "6E400004-B5A3-F393-E0A9-E50E24DCCA9E"
 AUDIO_VIS_UUID = "6E400005-B5A3-F393-E0A9-E50E24DCCA9E"
 
+# Binary frame types (matching transport_ble.c)
+FRAME_DATA          = 0x01
+FRAME_FILE_START    = 0x10
+FRAME_FILE_END      = 0x11
+FRAME_TRANSFER_DONE = 0x12
+
 # Device discovery filter
 # Device name format: "Clip XXXX" where XXXX is last 4 hex digits of chip ID
 DEVICE_NAME_FILTER = "CLIP"
@@ -80,7 +86,7 @@ class ClipDevice:
         self._session_files = {}  # {filename: bytes}
         self._current_file_data = bytearray()
         self._current_filename = None
-        self._current_file_total = 0  # Total size of current file (from file_ready event)
+        self._current_file_total = 0  # Total size of current file (from FILE_START frame)
         self._transfer_complete = False
         self._canceled = False
         self._file_lock = threading.Lock()
@@ -312,53 +318,6 @@ class ClipDevice:
             try:
                 parsed = json.loads(response_str)
 
-                # Check if this is a file_complete event
-                event_type = parsed.get("event", "")
-                if event_type == "file_complete":
-                    filename = parsed.get("filename", "")
-                    if self._debug:
-                        print(f"[Notification] file_complete: {filename}, size={len(self._current_file_data)}")
-
-                    # Save completed file to session_files
-                    with self._file_lock:
-                        if len(self._current_file_data) > 0:
-                            save_filename = self._current_filename or filename
-                            if save_filename:
-                                self._session_files[save_filename] = bytes(self._current_file_data)
-                                if self._debug:
-                                    print(f"[Notification] Saved: {save_filename} ({len(self._current_file_data)} bytes)")
-                            self._current_file_data = bytearray()
-                            self._current_filename = None
-
-                    # Continue - don't queue file_complete events as responses
-                    self._response_buffer.clear()
-                    return
-
-                # Check if this is a transfer_complete event
-                if event_type == "transfer_complete":
-                    session_id = parsed.get("session_id", "")
-                    files_count = parsed.get("files", 0)
-                    if self._debug:
-                        print(f"[Notification] transfer_complete: {session_id}, files={files_count}")
-                    self._transfer_complete = True
-                    # Continue - don't queue transfer_complete events as responses
-                    self._response_buffer.clear()
-                    return
-
-                # Check if this is a file_ready event
-                if event_type == "file_ready":
-                    filename = parsed.get("filename", "")
-                    size = parsed.get("size", 0)
-                    if self._debug:
-                        print(f"[Notification] file_ready: {filename} ({size} bytes)")
-                    with self._file_lock:
-                        if self._current_filename is None or self._current_filename == filename:
-                            self._current_filename = filename
-                            self._current_file_total = size  # Store total size for progress tracking
-                    # Continue - don't queue file_ready events as responses
-                    self._response_buffer.clear()
-                    return
-
                 # Successfully parsed complete JSON (non-event response)
                 if self._debug:
                     print(f"[Notification] Complete response, queuing to event loop")
@@ -485,9 +444,78 @@ class ClipDevice:
                 self._response_buffer = bytearray(remaining.encode('utf-8'))
 
     def _file_data_handler(self, sender, data: bytearray):
-        """Handle file data during transfer."""
-        with self._file_lock:
-            self._current_file_data.extend(data)
+        """Handle binary frame protocol on File Data characteristic."""
+        if len(data) < 1:
+            return
+
+        frame_type = data[0]
+
+        if frame_type == FRAME_FILE_START:
+            # FILE_START: type(1) + fn_len(1) + filename(N) + file_size(4)
+            if len(data) < 2:
+                return
+            fn_len = data[1]
+            if len(data) < 2 + fn_len + 4:
+                return
+            filename = data[2:2 + fn_len].decode('utf-8')
+            file_size = int.from_bytes(data[2 + fn_len:2 + fn_len + 4], 'little')
+
+            if self._debug:
+                print(f"[FileData] FILE_START: {filename} ({file_size} bytes)")
+
+            with self._file_lock:
+                self._current_filename = filename
+                self._current_file_total = file_size
+                self._current_file_data = bytearray()
+
+        elif frame_type == FRAME_DATA:
+            # DATA: type(1) + seq(2) + len(2) + data(N)
+            if len(data) < 5:
+                return
+            data_len = int.from_bytes(data[3:5], 'little')
+            payload = data[5:5 + data_len]
+
+            with self._file_lock:
+                self._current_file_data.extend(payload)
+
+        elif frame_type == FRAME_FILE_END:
+            # FILE_END: type(1) + crc32(4)
+            if len(data) < 5:
+                return
+            expected_crc = int.from_bytes(data[1:5], 'little')
+
+            with self._file_lock:
+                import zlib
+                actual_crc = zlib.crc32(bytes(self._current_file_data)) & 0xFFFFFFFF
+
+                if self._debug:
+                    match = "OK" if actual_crc == expected_crc else "MISMATCH"
+                    print(f"[FileData] FILE_END: crc=0x{expected_crc:08x} {match}")
+
+                if self._current_filename and len(self._current_file_data) > 0:
+                    if actual_crc == expected_crc:
+                        self._session_files[self._current_filename] = bytes(self._current_file_data)
+                        if self._debug:
+                            print(f"[FileData] Saved: {self._current_filename} ({len(self._current_file_data)} bytes)")
+                    else:
+                        print(f"[FileData] CRC mismatch for {self._current_filename}!")
+
+                self._current_file_data = bytearray()
+                self._current_filename = None
+
+        elif frame_type == FRAME_TRANSFER_DONE:
+            # TRANSFER_DONE: type(1) + sid_len(1) + session_id(N) + file_count(4)
+            if len(data) < 2:
+                return
+            sid_len = data[1]
+            file_count = 0
+            if len(data) >= 2 + sid_len + 4:
+                session_id = data[2:2 + sid_len].decode('utf-8') if sid_len > 0 else ""
+                file_count = int.from_bytes(data[2 + sid_len:2 + sid_len + 4], 'little')
+                if self._debug:
+                    print(f"[FileData] TRANSFER_DONE: {session_id} ({file_count} files)")
+
+            self._transfer_complete = True
 
     def _audio_vis_handler(self, sender, data: bytearray):
         """

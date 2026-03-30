@@ -1,16 +1,106 @@
 /*
  * Copyright (c) 2025 Seeed Technology Co., Ltd.
  *
-* SPDX-License-Identifier: Apache-2.0
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * BLE Transport — Binary frame protocol over File Data characteristic.
+ *
+ * Uses the same frame types as UDP transport:
+ *   FILE_START (0x10): type(1) + fn_len(1) + filename(N) + file_size(4)
+ *   DATA      (0x01): type(1) + seq(2) + len(2) + data(N)    — no per-frame CRC (BLE link layer handles it)
+ *   FILE_END  (0x11): type(1) + crc32(4)                      — full-file CRC for end-to-end check
+ *   TRANSFER_DONE (0x12): type(1) + sid_len(1) + session_id(N) + file_count(4)
+ *
+ * No ACK needed — BLE link layer guarantees delivery.
  */
 
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
-#include <stdio.h>
+#include <zephyr/sys/crc.h>
+#include <string.h>
 #include "transport_ble.h"
 #include "ble.h"
 
 LOG_MODULE_REGISTER(transport_ble, CONFIG_CLIP_LOG_LEVEL);
+
+/* ---- Frame types (same as UDP) ---- */
+#define FRAME_DATA          0x01
+#define FRAME_FILE_START    0x10
+#define FRAME_FILE_END      0x11
+#define FRAME_TRANSFER_DONE 0x12
+
+/* DATA frame header: type(1) + seq(2) + len(2) = 5 bytes (no per-frame CRC for BLE) */
+#define BLE_DATA_HEADER_SIZE 5
+
+/* Max data payload per BLE DATA frame (computed from actual negotiated MTU) */
+static uint16_t max_data_payload;
+
+/* ---- Per-file state ---- */
+static uint16_t next_seq;
+static uint32_t current_file_crc;
+
+/* ---- Frame builders ---- */
+
+static int build_data_frame(uint8_t *buf, uint16_t seq,
+			    const uint8_t *data, uint16_t data_len)
+{
+	buf[0] = FRAME_DATA;
+	buf[1] = seq & 0xFF;
+	buf[2] = (seq >> 8) & 0xFF;
+	buf[3] = data_len & 0xFF;
+	buf[4] = (data_len >> 8) & 0xFF;
+	memcpy(&buf[BLE_DATA_HEADER_SIZE], data, data_len);
+	return BLE_DATA_HEADER_SIZE + data_len;
+}
+
+static int build_file_start_frame(uint8_t *buf,
+				  const char *filename, uint32_t size)
+{
+	uint8_t fn_len = (uint8_t)strlen(filename);
+	if (fn_len > 63) {
+		fn_len = 63;
+	}
+
+	buf[0] = FRAME_FILE_START;
+	buf[1] = fn_len;
+	memcpy(&buf[2], filename, fn_len);
+	buf[2 + fn_len]     = size & 0xFF;
+	buf[2 + fn_len + 1] = (size >> 8) & 0xFF;
+	buf[2 + fn_len + 2] = (size >> 16) & 0xFF;
+	buf[2 + fn_len + 3] = (size >> 24) & 0xFF;
+
+	return 2 + fn_len + 4;
+}
+
+static int build_file_end_frame(uint8_t *buf, uint32_t crc32)
+{
+	buf[0] = FRAME_FILE_END;
+	buf[1] = crc32 & 0xFF;
+	buf[2] = (crc32 >> 8) & 0xFF;
+	buf[3] = (crc32 >> 16) & 0xFF;
+	buf[4] = (crc32 >> 24) & 0xFF;
+	return 5;
+}
+
+static int build_transfer_done_frame(uint8_t *buf,
+				     const char *session_id,
+				     uint32_t file_count)
+{
+	uint8_t sid_len = (uint8_t)strlen(session_id);
+	if (sid_len > 63) {
+		sid_len = 63;
+	}
+
+	buf[0] = FRAME_TRANSFER_DONE;
+	buf[1] = sid_len;
+	memcpy(&buf[2], session_id, sid_len);
+	buf[2 + sid_len]     = file_count & 0xFF;
+	buf[2 + sid_len + 1] = (file_count >> 8) & 0xFF;
+	buf[2 + sid_len + 2] = (file_count >> 16) & 0xFF;
+	buf[2 + sid_len + 3] = (file_count >> 24) & 0xFF;
+
+	return 2 + sid_len + 4;
+}
 
 /* BLE Transport Context */
 static struct {
@@ -34,12 +124,49 @@ static int ble_transport_send(const uint8_t *data, uint16_t len)
 
 static int ble_transport_send_file_data(const uint8_t *data, uint16_t len)
 {
-    return ble_send_file_data(data, len);
+    /* Dynamically compute max payload from negotiated MTU.
+     * notify payload = MTU - 3 (ATT header)
+     * data payload = notify payload - 5 (frame header) */
+    void *conn = ble_get_connection();
+    if (conn) {
+	uint16_t mtu = ble_get_mtu(conn);
+	uint16_t notify_max = (mtu > 3) ? mtu - 3 : 20;
+	max_data_payload = (notify_max > BLE_DATA_HEADER_SIZE) ?
+			   notify_max - BLE_DATA_HEADER_SIZE : 15;
+	LOG_INF("BLE payload: %u bytes/frame (mtu=%u)", max_data_payload, mtu);
+    }
+
+    /* Slice into BLE-sized DATA frames */
+    uint16_t offset = 0;
+
+    while (offset < len) {
+	uint16_t chunk = len - offset;
+	if (chunk > max_data_payload) {
+		chunk = max_data_payload;
+	}
+
+	uint8_t frame[BLE_DATA_HEADER_SIZE + 512];
+	int frame_len = build_data_frame(frame, next_seq,
+					 data + offset, chunk);
+
+	int ret = ble_send_file_data(frame, frame_len);
+	if (ret < 0) {
+		LOG_WRN("DATA frame send error: %d (seq=%u)", ret, next_seq);
+		return ret;
+	}
+
+	/* Accumulate file CRC */
+	current_file_crc = crc32_ieee_update(current_file_crc,
+					      data + offset, chunk);
+	next_seq++;
+	offset += chunk;
+    }
+
+    return len;
 }
 
 static bool ble_transport_is_connected(void)
 {
-    /* BLE is ready for file transfer only if all conditions are met */
     bool conn = ble_is_connected();
     bool notify = ble_is_notify_enabled();
     bool file_data_notify = ble_is_file_data_notify_enabled();
@@ -55,42 +182,37 @@ static void *ble_transport_get_conn(void)
 static int ble_transport_send_file_start(const char *session_id,
                                           const char *filename, uint32_t size)
 {
-    char buf[256];
-    int len = snprintf(buf, sizeof(buf),
-                       "{\"ok\":true,\"event\":\"file_ready\","
-                       "\"session\":\"%s\",\"filename\":\"%s\",\"size\":%u}",
-                       session_id, filename, size);
-    if (len < 0 || len >= (int)sizeof(buf)) {
-        return -EINVAL;
-    }
-    return ble_send((const uint8_t *)buf, len);
+    ARG_UNUSED(session_id);
+
+    /* Reset per-file state */
+    next_seq = 0;
+    current_file_crc = 0;
+
+    uint8_t frame[128];
+    int frame_len = build_file_start_frame(frame, filename, size);
+
+    LOG_INF("FILE_START: %s (%u bytes)", filename, size);
+    return ble_send_file_data(frame, frame_len);
 }
 
 static int ble_transport_send_file_end(const char *filename)
 {
-    char buf[128];
-    int len = snprintf(buf, sizeof(buf),
-                       "{\"ok\":true,\"event\":\"file_complete\","
-                       "\"filename\":\"%s\"}",
-                       filename);
-    if (len < 0 || len >= (int)sizeof(buf)) {
-        return -EINVAL;
-    }
-    return ble_send((const uint8_t *)buf, len);
+    ARG_UNUSED(filename);
+
+    uint8_t frame[5];
+    int frame_len = build_file_end_frame(frame, current_file_crc);
+
+    LOG_INF("FILE_END: crc=0x%08x", current_file_crc);    return ble_send_file_data(frame, frame_len);
 }
 
 static int ble_transport_send_transfer_done(const char *session_id,
                                              uint32_t file_count)
 {
-    char buf[256];
-    int len = snprintf(buf, sizeof(buf),
-                       "{\"ok\":true,\"event\":\"transfer_complete\","
-                       "\"session_id\":\"%s\",\"files\":%u}",
-                       session_id, file_count);
-    if (len < 0 || len >= (int)sizeof(buf)) {
-        return -EINVAL;
-    }
-    return ble_send((const uint8_t *)buf, len);
+    uint8_t frame[128];
+    int frame_len = build_transfer_done_frame(frame, session_id, file_count);
+
+    LOG_INF("TRANSFER_DONE: %s (%u files)", session_id, file_count);
+    return ble_send_file_data(frame, frame_len);
 }
 
 static const struct transport_ops ble_transport_ops = {
@@ -124,7 +246,11 @@ int transport_ble_init(void)
     ble_ctx.tp.ready = false;
     ble_ctx.tp.conn = NULL;
 
-    LOG_INF("BLE transport initialized");
+    next_seq = 0;
+    current_file_crc = 0;
+    max_data_payload = 20;  /* Safe default, updated on first send */
+
+    LOG_INF("BLE transport initialized (binary frame protocol)");
     return 0;
 }
 
