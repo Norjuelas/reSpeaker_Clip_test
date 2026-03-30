@@ -19,6 +19,7 @@
 #include "wifi.h"
 #include "wifi_udp.h"
 #include "transport_udp.h"
+#include "config.h"
 
 
 #ifdef CONFIG_NRF70_SR_COEX
@@ -207,8 +208,8 @@ static int wifi_enable_ap(struct net_if *iface)
 	memset(&req, 0, sizeof(req));
 	req.ssid = (const uint8_t *)ap_ssid;
 	req.ssid_length = strlen(ap_ssid);
-	req.psk = (const uint8_t *)WIFI_AP_PASSWORD;
-	req.psk_length = strlen(WIFI_AP_PASSWORD);
+	req.psk = (const uint8_t *)config_get_wifi_password();
+	req.psk_length = strlen(config_get_wifi_password());
 	req.channel = WIFI_AP_CHANNEL;
 	req.security = WIFI_SECURITY_TYPE_PSK;
 	req.mfp = WIFI_MFP_OPTIONAL;
@@ -410,7 +411,7 @@ const char *wifi_get_ssid(void)
 
 const char *wifi_get_password(void)
 {
-	return WIFI_AP_PASSWORD;
+	return config_get_wifi_password();
 }
 
 const char *wifi_get_ip_address(void)

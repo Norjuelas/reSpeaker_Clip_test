@@ -19,6 +19,7 @@
 #include "transport_ble.h"
 #include "transfer.h"
 #include "display.h"
+#include "config.h"
 
 LOG_MODULE_REGISTER(ble, CONFIG_CLIP_LOG_LEVEL);
 
@@ -61,6 +62,9 @@ static struct bt_data ad[2];
 static struct bt_data sd[1];
 static uint8_t adv_flags = BT_LE_AD_GENERAL | BT_LE_AD_NO_BREDR;
 static uint8_t svc_uuid_bytes[16];
+
+/* Bond count before current connection (for detecting new pairing) */
+static int prev_bond_count;
 
 /* Work queue for advertising restart */
 static struct k_work adv_work;
@@ -317,6 +321,7 @@ static void connected(struct bt_conn *conn, uint8_t err)
     /* Check whether this is a known bonded device or a new one */
     int bond_count = 0;
     bt_foreach_bond(BT_ID_DEFAULT, count_bond_cb, &bond_count);
+    prev_bond_count = bond_count;
 
     if (bond_count > 0) {
         LOG_INF("BLE connected: %s (bonded device, re-encrypting)", addr);
@@ -454,6 +459,15 @@ static void pairing_complete(struct bt_conn *conn, bool bonded)
         } else {
             LOG_INF("Bonding keys saved");
         }
+
+        /* Check if this is a new device (bond count increased) */
+        int new_bond_count = 0;
+        bt_foreach_bond(BT_ID_DEFAULT, count_bond_cb, &new_bond_count);
+        if (new_bond_count != prev_bond_count) {
+            LOG_INF("New device paired, regenerating WiFi password");
+            config_generate_wifi_password();
+        }
+
         display_post_event(UI_EVENT_BONDED);
     }
 }

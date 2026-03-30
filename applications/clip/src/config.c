@@ -5,6 +5,7 @@
  */
 
 #include <zephyr/kernel.h>
+#include <zephyr/random/random.h>
 #include <string.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/fs/fs.h>
@@ -24,6 +25,7 @@ LOG_MODULE_REGISTER(config, CONFIG_CLIP_LOG_LEVEL);
 #define SETTING_AUTODEL         "config/auto_delete_days"
 #define SETTING_DEREVERB        "config/dereverb_enabled"
 #define SETTING_BRIGHTNESS      "config/oled_brightness"
+#define SETTING_WIFI_PASSWORD   "config/wifi_password"
 #define SETTING_TIME_UNIX       "time/unix_timestamp"
 
 /* Config entry for settings handler */
@@ -40,6 +42,7 @@ static const struct config_entry config_table[] = {
     { SETTING_AUTODEL,        offsetof(struct clip_config, auto_delete_days), sizeof(int8_t) },
     { SETTING_DEREVERB,       offsetof(struct clip_config, dereverb_enabled), sizeof(bool) },
     { SETTING_BRIGHTNESS,       offsetof(struct clip_config, oled_brightness),  sizeof(uint8_t) },
+    { SETTING_WIFI_PASSWORD,    offsetof(struct clip_config, wifi_password),    sizeof(char[9]) },
 };
 
 #define CONFIG_TABLE_SIZE (sizeof(config_table) / sizeof(config_table[0]))
@@ -59,7 +62,7 @@ static int config_settings_set(const char *name, size_t len,
         const char *key = entry->name + 7;  /* Skip "config/" */
 
         if (strcmp(name, key) == 0) {
-            uint8_t buffer[16];
+            uint8_t buffer[32];
             int rc = read_cb(cb_arg, buffer, entry->size);
             if (rc < 0) {
                 return rc;
@@ -148,6 +151,7 @@ static void config_set_defaults(struct clip_context *ctx)
     ctx->config.auto_delete_days = CONFIG_CLIP_DEFAULT_AUTODEL;
     ctx->config.dereverb_enabled = IS_ENABLED(CONFIG_CLIP_DEFAULT_DEREVERB);
     ctx->config.oled_brightness = CONFIG_CLIP_DEFAULT_BRIGHTNESS;
+    ctx->config.wifi_password[0] = '\0';
 }
 
 int config_init(void)
@@ -208,6 +212,11 @@ int config_init(void)
 
     LOG_INF("Configuration initialized");
 
+    /* Generate WiFi password if not set */
+    if (ctx->config.wifi_password[0] == '\0') {
+        config_generate_wifi_password();
+    }
+
     return 0;
 }
 
@@ -250,6 +259,7 @@ static const char *key_to_setting(uint16_t key)
     case CONFIG_KEY_AUTODEL:    return SETTING_AUTODEL;
     case CONFIG_KEY_DEREVERB:   return SETTING_DEREVERB;
     case CONFIG_KEY_BRIGHTNESS: return SETTING_BRIGHTNESS;
+    case CONFIG_KEY_WIFI_PASSWORD: return SETTING_WIFI_PASSWORD;
     default:                    return NULL;
     }
 }
@@ -292,6 +302,14 @@ int config_set(uint16_t key, const void *value, size_t len)
     case CONFIG_KEY_BRIGHTNESS:
         if (len == sizeof(uint8_t)) {
             ctx->config.oled_brightness = *(const uint8_t *)value;
+        } else {
+            ret = -EINVAL;
+        }
+        break;
+    case CONFIG_KEY_WIFI_PASSWORD:
+        if (len <= 8) {
+            strncpy(ctx->config.wifi_password, value, len);
+            ctx->config.wifi_password[len] = '\0';
         } else {
             ret = -EINVAL;
         }
@@ -345,6 +363,12 @@ int config_get(uint16_t key, void *value, size_t len)
     case CONFIG_KEY_BRIGHTNESS:
         if (len == sizeof(uint8_t)) {
             *(uint8_t *)value = ctx->config.oled_brightness;
+            return 0;
+        }
+        break;
+    case CONFIG_KEY_WIFI_PASSWORD:
+        if (len >= 9) {
+            strncpy(value, ctx->config.wifi_password, 9);
             return 0;
         }
         break;
@@ -462,4 +486,51 @@ int config_set_dereverb_enabled(bool enabled)
 int config_set_oled_brightness(uint8_t brightness)
 {
     return config_set(CONFIG_KEY_BRIGHTNESS, &brightness, sizeof(brightness));
+}
+
+/* ========================================================================== */
+/* WiFi Password Management                                                     */
+/* ========================================================================== */
+
+/* Character set: alphanumeric, excluding easily confused 0/O/l/1/I */
+static const char password_chars[] = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+#define PASSWORD_CHAR_COUNT (sizeof(password_chars) - 1)
+
+int config_generate_wifi_password(void)
+{
+    struct clip_context *ctx = clip_get_context();
+    uint8_t rand_bytes[8];
+
+    sys_rand_get(rand_bytes, sizeof(rand_bytes));
+
+    for (int i = 0; i < 8; i++) {
+        ctx->config.wifi_password[i] = password_chars[rand_bytes[i] % PASSWORD_CHAR_COUNT];
+    }
+    ctx->config.wifi_password[8] = '\0';
+
+    int err = settings_save_one(SETTING_WIFI_PASSWORD,
+                            (const uint8_t *)ctx->config.wifi_password, 9);
+    if (err) {
+        LOG_ERR("Failed to save wifi_password: %d", err);
+        return err;
+    }
+
+    LOG_INF("WiFi password generated: %s", ctx->config.wifi_password);
+    return 0;
+}
+
+int config_set_wifi_password(const char *password)
+{
+    return config_set(CONFIG_KEY_WIFI_PASSWORD, password, strlen(password));
+}
+
+const char *config_get_wifi_password(void)
+{
+    struct clip_context *ctx = clip_get_context();
+
+    if (ctx->config.wifi_password[0] == '\0') {
+        return "12345678";  /* Fallback if not generated yet */
+    }
+
+    return ctx->config.wifi_password;
 }

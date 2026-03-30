@@ -16,6 +16,7 @@
 #define CONFIG_KEY_AUTODEL       0x06
 #define CONFIG_KEY_DEREVERB      0x09
 #define CONFIG_KEY_BRIGHTNESS    0x0A
+#define CONFIG_KEY_WIFI_PASSWORD 0x0B
 
 
 /**
@@ -135,5 +136,29 @@ int config_set_dereverb_enabled(bool enabled);
  * @return 0 on success, negative error code on failure
  */
 int config_set_oled_brightness(uint8_t brightness);
+
+/**
+ * @brief Generate a random WiFi AP password and save to config
+ *
+ * Generates 8-char alphanumeric password (excluding 0/O/l/1/I).
+ *
+ * @return 0 on success, negative error code on failure
+ */
+int config_generate_wifi_password(void);
+
+/**
+ * @brief Set WiFi AP password
+ *
+ * @param password Password string (up to 8 chars)
+ * @return 0 on success, negative error code on failure
+ */
+int config_set_wifi_password(const char *password);
+
+/**
+ * @brief Get WiFi AP password
+ *
+ * @return Password string, or "12345678" if not set
+ */
+const char *config_get_wifi_password(void);
 
 #endif /* CLIP_CONFIG_H */
