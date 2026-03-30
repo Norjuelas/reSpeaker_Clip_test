@@ -44,7 +44,7 @@ FRAME_TRANSFER_DONE = 0x12
 
 # Device discovery filter
 # Device name format: "Clip XXXX" where XXXX is last 4 hex digits of chip ID
-DEVICE_NAME_FILTER = "CLIP"
+DEVICE_NAME_FILTER = "Clip"
 
 # Timeouts (seconds)
 CONNECT_TIMEOUT = 10.0

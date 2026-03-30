@@ -39,106 +39,6 @@ class FileTransfer:
         self.commands = commands or ClipCommands(device)
         self._canceled = False
 
-    async def download_file(
-        self,
-        session_id: str,
-        filename: str,
-        output_path: Optional[Path] = None,
-        progress_callback: Optional[Callable[[int], None]] = None,
-        timeout: float = 60.0,
-    ) -> bytes:
-        """
-        Download a single file from a session.
-
-        Args:
-            session_id: Session ID
-            filename: Filename to download
-            output_path: Optional path to save file
-            progress_callback: Optional callback with byte count
-            timeout: Transfer timeout in seconds
-
-        Returns:
-            Downloaded file data
-
-        Raises:
-            TransferError: If download fails
-        """
-        file_path = f"{session_id}/{filename}"
-        return await self._download_legacy(
-            file_path,
-            output_path,
-            progress_callback,
-            timeout,
-        )
-
-    async def _download_legacy(
-        self,
-        path: str,
-        output_path: Optional[Path],
-        progress_callback: Optional[Callable[[int], None]],
-        timeout: float,
-    ) -> bytes:
-        """Download using legacy single-file mode."""
-        self.device._clear_file_state()
-        self._canceled = False
-
-        # Start download
-        response = await self.device.send_command(f"AT+DOWNLOAD={path}")
-        if not response.get("ok"):
-            raise TransferError(response.get("error", "Failed to start download"))
-
-        # Wait for transfer
-        start_time = time.time()
-        last_size = 0
-        total_received = 0
-
-        while time.time() - start_time < timeout:
-            await asyncio.sleep(0.1)
-
-            # Check for completion
-            if self.device._last_response:
-                try:
-                    notif = self.device._last_response
-                    # Check for done notification in response
-                    import json
-                    try:
-                        parsed = json.loads(notif)
-                        if parsed.get("done"):
-                            break
-                    except json.JSONDecodeError:
-                        pass
-                except Exception:
-                    pass
-
-            # Check for cancellation
-            if self._canceled:
-                raise TransferError("Transfer canceled")
-
-            # Track progress
-            current_size = len(self.device._file_data_buffer)
-            if current_size > last_size:
-                new_bytes = current_size - last_size
-                total_received += new_bytes
-                last_size = current_size
-                start_time = time.time()  # Reset timeout
-
-                if progress_callback:
-                    progress_callback(total_received)
-
-        if time.time() - start_time >= timeout:
-            raise TimeoutError("File transfer timed out")
-
-        # Get data
-        data = await self.device.get_file_data()
-
-        # Save to file if requested
-        if output_path:
-            output_path = Path(output_path)
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            output_path.write_bytes(data)
-
-        return data
-
     async def download_session(
         self,
         session_id: str,
@@ -448,11 +348,12 @@ class SessionSync(FileTransfer):
         self,
         session_id: str,
         output_dir: Path,
-        delete_after: bool = True,
+        delete_after: bool = False,
         continuous: bool = False,
         force: bool = False,
         progress_callback: Optional[Callable[[str, int, int], None]] = None,
         session_info: Optional[Any] = None,
+        start_file: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Sync a session with resume support.
@@ -465,6 +366,7 @@ class SessionSync(FileTransfer):
             force: Force re-sync from beginning (ignore synced status)
             progress_callback: Optional callback(filename, file_count, total_size)
             session_info: Optional pre-fetched session info (avoids redundant AT+LIST call)
+            start_file: Override start file (e.g., "0015.opus"), ignores auto-detected resume
 
         Returns:
             Dict with sync results
@@ -518,13 +420,12 @@ class SessionSync(FileTransfer):
             return result
 
         # Determine start file based on synced_files from device
-        # If force=True, ignore synced_files and start from beginning
-        start_file = None
-        if not force and synced_files > 0 and synced_files < total_files:
+        # If force=True or start_file override provided, ignore synced_files
+        if start_file is None and not force and synced_files > 0 and synced_files < total_files:
             # Start from the file after the last synced file
             next_num = synced_files + 1
             start_file = f"{next_num:04d}.opus"
-        elif existing_files:
+        elif start_file is None and existing_files:
             # Fallback: check local files if device doesn't have synced info
             # Only accept NNNN.opus format (4-digit sequential files)
             import re
@@ -576,7 +477,7 @@ class SessionSync(FileTransfer):
     async def sync_all(
         self,
         output_dir: Path,
-        delete_after: bool = True,
+        delete_after: bool = False,
         progress_callback: Optional[Callable[[str, int, int], None]] = None,
     ) -> List[Dict[str, Any]]:
         """

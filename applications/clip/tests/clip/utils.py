@@ -268,6 +268,24 @@ def validate_session_id(session_id: str) -> bool:
     return bool(re.match(r'^\d{8}_\d{6}$', session_id))
 
 
+def format_speed(bytes_per_sec: float) -> str:
+    """
+    Format transfer speed as human-readable string.
+
+    Args:
+        bytes_per_sec: Speed in bytes per second
+
+    Returns:
+        Formatted string (e.g., "45.2 KB/s", "1.23 MB/s")
+    """
+    if bytes_per_sec < 1024:
+        return f"{bytes_per_sec:.1f} B/s"
+    elif bytes_per_sec < 1024 * 1024:
+        return f"{bytes_per_sec / 1024:.1f} KB/s"
+    else:
+        return f"{bytes_per_sec / (1024 * 1024):.2f} MB/s"
+
+
 def merge_opus_files(file_paths: List[Path], output_path: Path) -> bool:
     """
     Merge multiple Opus files into one.

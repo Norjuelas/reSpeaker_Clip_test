@@ -11,14 +11,14 @@ Usage:
 import asyncio
 import sys
 import time
-import struct
 from pathlib import Path
 
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from clip import ClipDevice, SessionSync, ClipCommands
-from clip.utils import format_bytes, format_duration
+from clip.codec import convert_to_ogg_opus
+from clip.utils import format_bytes, format_duration, format_speed
 
 try:
     from tqdm import tqdm
@@ -26,180 +26,6 @@ try:
     HAS_TQDM = True
 except ImportError:
     HAS_TQDM = False
-
-
-# ============================================================================
-# OGG CRC32 Implementation (OGG-specific polynomial)
-# ============================================================================
-
-def _ogg_crc32_init():
-    """Generate CRC32 lookup table for OGG (polynomial 0x04C11DB7)."""
-    table = []
-    for i in range(256):
-        crc = i << 24
-        for _ in range(8):
-            if crc & 0x80000000:
-                crc = (crc << 1) ^ 0x04C11DB7
-            else:
-                crc = crc << 1
-            crc &= 0xFFFFFFFF
-        table.append(crc)
-    return table
-
-_OGG_CRC_TABLE = _ogg_crc32_init()
-
-def ogg_crc32(data: bytes) -> int:
-    """Calculate OGG CRC32 (uses different polynomial than standard CRC32)."""
-    crc = 0
-    for byte in data:
-        crc = ((crc << 8) ^ _OGG_CRC_TABLE[((crc >> 24) ^ byte) & 0xFF]) & 0xFFFFFFFF
-    return crc
-
-
-# ============================================================================
-# Simple OGG Opus Writer (no external dependencies)
-# ============================================================================
-
-class OggOpusWriter:
-    """Simple OGG Opus file writer."""
-
-    OPUS_INTERNAL_RATE = 48000
-
-    def __init__(self, filename: str, sample_rate: int = 16000, channels: int = 1):
-        self.file = open(filename, 'wb')
-        self.sample_rate = sample_rate
-        self.channels = channels
-        self.serial = 0x12345678
-        self.page_seq = 0
-        self.granule = 0
-        self.frame_size = self.OPUS_INTERNAL_RATE // 50  # 20ms = 960 samples at 48kHz
-
-    def _write_page(self, granule: int, header_type: int, data: bytes):
-        """Write an OGG page."""
-        segment_table = []
-        remaining = len(data)
-        while remaining > 0:
-            seg_size = min(255, remaining)
-            segment_table.append(seg_size)
-            remaining -= seg_size
-
-        if not segment_table:
-            segment_table = [0]
-
-        header = bytearray()
-        header.extend(b'OggS')
-        header.append(0)
-        header.append(header_type)
-        header.extend(struct.pack('<Q', granule))
-        header.extend(struct.pack('<I', self.serial))
-        header.extend(struct.pack('<I', self.page_seq))
-        header.extend(struct.pack('<I', 0))  # CRC placeholder
-        header.append(len(segment_table))
-        header.extend(bytes(segment_table))
-
-        page_data = bytes(header) + data
-        crc = ogg_crc32(page_data)
-        struct.pack_into('<I', header, 22, crc)
-
-        self.file.write(bytes(header) + data)
-        self.page_seq += 1
-
-    def write_header(self):
-        """Write OpusHead and OpusTags pages."""
-        opus_head = bytearray()
-        opus_head.extend(b'OpusHead')
-        opus_head.append(1)
-        opus_head.append(self.channels)
-        opus_head.extend(struct.pack('<H', 312))  # Pre-skip
-        opus_head.extend(struct.pack('<I', self.sample_rate))
-        opus_head.extend(struct.pack('<H', 0))  # Output gain
-        opus_head.append(0)  # Channel mapping family
-
-        self._write_page(0, 0x02, bytes(opus_head))
-
-        opus_tags = bytearray()
-        opus_tags.extend(b'OpusTags')
-        vendor = b'ReSpeaker Clip'
-        opus_tags.extend(struct.pack('<I', len(vendor)))
-        opus_tags.extend(vendor)
-        opus_tags.extend(struct.pack('<I', 0))
-
-        self._write_page(0, 0x00, bytes(opus_tags))
-
-    def write_packet(self, opus_data: bytes):
-        """Write an Opus audio packet."""
-        self.granule += self.frame_size
-        self._write_page(self.granule, 0x00, opus_data)
-
-    def close(self):
-        """Close file."""
-        self.file.close()
-
-
-def parse_raw_opus_frames(raw_data: bytes):
-    """Parse raw Opus frames from device format."""
-    frames = []
-    offset = 0
-
-    while offset < min(200, len(raw_data)):
-        if offset + 2 > len(raw_data):
-            break
-        frame_len = struct.unpack('<H', raw_data[offset:offset+2])[0]
-        if 10 <= frame_len <= 500:
-            break
-        offset += 2
-
-    while offset < len(raw_data):
-        if offset + 2 > len(raw_data):
-            break
-
-        frame_len = struct.unpack('<H', raw_data[offset:offset+2])[0]
-        offset += 2
-
-        if frame_len < 10 or frame_len > 1000:
-            break
-
-        if offset + frame_len > len(raw_data):
-            break
-
-        frame_data = raw_data[offset:offset+frame_len]
-        offset += frame_len
-        frames.append(frame_data)
-
-    return frames
-
-
-def convert_to_ogg_opus(input_file: Path, output_file: Path,
-                        sample_rate: int = 16000, channels: int = 1) -> bool:
-    """Convert raw Opus frames to OGG Opus format."""
-    with open(input_file, 'rb') as f:
-        raw_data = f.read()
-
-    if len(raw_data) == 0:
-        return False
-
-    frames = parse_raw_opus_frames(raw_data)
-    if not frames:
-        return False
-
-    try:
-        output_file.parent.mkdir(parents=True, exist_ok=True)
-
-        writer = OggOpusWriter(str(output_file), sample_rate, channels)
-        writer.write_header()
-
-        for frame in frames:
-            writer.write_packet(frame)
-
-        writer.close()
-
-        duration = len(frames) * 20 / 1000
-        print(f"  Created: {output_file.name} ({format_bytes(output_file.stat().st_size)}, {duration:.1f}s)")
-        return True
-
-    except Exception as e:
-        print(f"  Error: {e}")
-        return False
 
 
 async def main():
@@ -228,6 +54,7 @@ Examples:
 
     parser.add_argument("--device", "-d", help="Device MAC address")
     parser.add_argument("--session", "-s", help="Specific session to sync")
+    parser.add_argument("--file", "-f", help="Start from specific file (e.g., 0015.opus)")
     parser.add_argument("--all-sessions", "-a", action="store_true",
                        help="Sync all sessions from device")
     parser.add_argument("--status", action="store_true", help="Show status and exit")
@@ -235,8 +62,8 @@ Examples:
                        help="Convert existing .opus files to .ogg format (no device connection needed)")
     parser.add_argument("--output", "-o", type=Path, default=Path("recordings"),
                        help="Output directory (default: recordings/)")
-    parser.add_argument("--keep", "-k", action="store_true",
-                       help="Keep sessions on device after sync")
+    parser.add_argument("--delete", action="store_true",
+                       help="Delete sessions from device after sync")
     parser.add_argument("--resync", "-r", action="store_true",
                        help="Force re-sync from beginning (ignore synced status)")
     parser.add_argument("--oneshot", action="store_true",
@@ -440,7 +267,7 @@ Examples:
                 result = await sync.sync(
                     session.id,
                     session_dir,
-                    delete_after=not args.keep,
+                    delete_after=args.delete,
                     continuous=False,
                     force=args.resync,
                     progress_callback=session_progress_callback,
@@ -622,10 +449,11 @@ Examples:
             sync.sync(
                 session_id,
                 args.output / device_dir_name / session_id,
-                delete_after=not args.keep,
+                delete_after=args.delete,
                 continuous=continuous,
                 force=args.resync,
                 progress_callback=update_progress,
+                start_file=args.file,
             )
         )
 
@@ -793,16 +621,6 @@ Examples:
         return 1
     finally:
         await device.disconnect()
-
-
-def format_speed(bytes_per_sec: float) -> str:
-    """Format transfer speed."""
-    if bytes_per_sec < 1024:
-        return f"{bytes_per_sec:.1f} B/s"
-    elif bytes_per_sec < 1024 * 1024:
-        return f"{bytes_per_sec / 1024:.1f} KB/s"
-    else:
-        return f"{bytes_per_sec / (1024 * 1024):.2f} MB/s"
 
 
 if __name__ == "__main__":

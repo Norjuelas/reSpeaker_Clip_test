@@ -12,16 +12,16 @@ import asyncio
 import sys
 import signal
 import time
-import struct
 import threading
 from pathlib import Path
-from typing import Optional, List
+from typing import Optional
 
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from clip import ClipDevice, ClipCommands, SessionSync
-from clip.utils import format_bytes, format_duration
+from clip.codec import convert_to_ogg_opus
+from clip.utils import format_bytes, format_duration, format_speed
 
 
 # ============================================================================
@@ -108,236 +108,6 @@ class AudioVisualizer:
             sys.stdout.write("\033[F\033[J" * line_count)
             sys.stdout.flush()
             self.last_display = ""
-
-
-def format_speed(bytes_per_sec: float) -> str:
-    """Format transfer speed."""
-    if bytes_per_sec < 1024:
-        return f"{bytes_per_sec:.1f} B/s"
-    elif bytes_per_sec < 1024 * 1024:
-        return f"{bytes_per_sec / 1024:.1f} KB/s"
-    else:
-        return f"{bytes_per_sec / (1024 * 1024):.2f} MB/s"
-
-
-# ============================================================================
-# OGG CRC32 Implementation (OGG-specific polynomial)
-# ============================================================================
-
-def _ogg_crc32_init():
-    """Generate CRC32 lookup table for OGG (polynomial 0x04C11DB7)."""
-    table = []
-    for i in range(256):
-        crc = i << 24
-        for _ in range(8):
-            if crc & 0x80000000:
-                crc = (crc << 1) ^ 0x04C11DB7
-            else:
-                crc = crc << 1
-            crc &= 0xFFFFFFFF
-        table.append(crc)
-    return table
-
-_OGG_CRC_TABLE = _ogg_crc32_init()
-
-def ogg_crc32(data: bytes) -> int:
-    """Calculate OGG CRC32 (uses different polynomial than standard CRC32)."""
-    crc = 0
-    for byte in data:
-        crc = ((crc << 8) ^ _OGG_CRC_TABLE[((crc >> 24) ^ byte) & 0xFF]) & 0xFFFFFFFF
-    return crc
-
-
-# ============================================================================
-# Simple OGG Opus Writer (no external dependencies)
-# ============================================================================
-
-class OggOpusWriter:
-    """
-    Simple OGG Opus file writer.
-
-    Creates a valid OGG Opus file from raw Opus packets.
-    No external dependencies required.
-    """
-
-    # Opus internally runs at 48kHz, granule positions must use this rate
-    OPUS_INTERNAL_RATE = 48000
-
-    def __init__(self, filename: str, sample_rate: int = 16000, channels: int = 1):
-        self.file = open(filename, 'wb')
-        self.sample_rate = sample_rate  # Input sample rate (for OpusHead)
-        self.channels = channels
-        self.serial = 0x12345678  # Fixed serial for simplicity
-        self.page_seq = 0
-        self.granule = 0
-        # Granule is in Opus internal rate (48kHz), 20ms = 960 samples
-        self.frame_size = self.OPUS_INTERNAL_RATE // 50  # 20ms = 960 samples at 48kHz
-
-        # Buffer for collecting packets into pages
-        self.page_packets = []
-        self.page_granule = 0
-
-    def _write_page(self, granule: int, header_type: int, data: bytes):
-        """Write an OGG page."""
-        # Build segment table
-        segment_table = []
-        remaining = len(data)
-        offset = 0
-        while remaining > 0:
-            seg_size = min(255, remaining)
-            segment_table.append(seg_size)
-            remaining -= seg_size
-
-        if not segment_table:
-            segment_table = [0]
-
-        # Build page header (27 bytes + segment table)
-        header = bytearray()
-        header.extend(b'OggS')                      # Capture pattern (4)
-        header.append(0)                             # Stream structure version (1)
-        header.append(header_type)                   # Header type (1)
-        header.extend(struct.pack('<Q', granule))    # Granule position (8)
-        header.extend(struct.pack('<I', self.serial))  # Bitstream serial number (4)
-        header.extend(struct.pack('<I', self.page_seq))  # Page sequence number (4)
-        header.extend(struct.pack('<I', 0))          # CRC checksum (4) - placeholder
-        header.append(len(segment_table))            # Number of page segments (1)
-        header.extend(bytes(segment_table))          # Segment table (N)
-
-        # Calculate CRC over header + data
-        page_data = bytes(header) + data
-        crc = ogg_crc32(page_data)
-
-        # Insert CRC into header (at offset 22)
-        struct.pack_into('<I', header, 22, crc)
-
-        # Write complete page
-        self.file.write(bytes(header) + data)
-        self.page_seq += 1
-
-    def write_header(self):
-        """Write OpusHead and OpusTags pages."""
-        # OpusHead packet
-        # https://wiki.xiph.org/OggOpus#ID_Header
-        opus_head = bytearray()
-        opus_head.extend(b'OpusHead')        # Magic signature (8)
-        opus_head.append(1)                   # Version (1)
-        opus_head.append(self.channels)       # Output channel count (1)
-        opus_head.extend(struct.pack('<H', 312))  # Pre-skip (2) - 312 samples (6ms at 48kHz)
-        opus_head.extend(struct.pack('<I', self.sample_rate))  # Input sample rate (4)
-        opus_head.extend(struct.pack('<H', 0))   # Output gain (2)
-        opus_head.append(0)                   # Channel mapping family (1)
-
-        # First page: BOS (beginning of stream)
-        self._write_page(0, 0x02, bytes(opus_head))
-
-        # OpusTags packet
-        opus_tags = bytearray()
-        opus_tags.extend(b'OpusTags')         # Magic signature (8)
-        vendor = b'ReSpeaker Clip'
-        opus_tags.extend(struct.pack('<I', len(vendor)))  # Vendor string length (4)
-        opus_tags.extend(vendor)              # Vendor string (N)
-        opus_tags.extend(struct.pack('<I', 0))  # User comment list length (4)
-
-        # Second page
-        self._write_page(0, 0x00, bytes(opus_tags))
-
-    def write_packet(self, opus_data: bytes):
-        """Write an Opus audio packet."""
-        self.granule += self.frame_size
-        self._write_page(self.granule, 0x00, opus_data)
-
-    def close(self):
-        """Close file."""
-        self.file.close()
-
-
-def parse_raw_opus_frames(raw_data: bytes) -> List[bytes]:
-    """
-    Parse raw Opus frames from device format.
-
-    Device format: [2-byte LE length][Opus frame]...
-
-    Frame size guide (20ms at 16kHz):
-    - Mono 16kbps: ~40 bytes
-    - Mono 32kbps: ~80 bytes
-    - Stereo 32kbps: ~80 bytes (mono bitrate x2)
-    - Stereo 64kbps: ~160 bytes
-    """
-    frames = []
-    offset = 0
-
-    # Find first valid frame (allow larger range for stereo)
-    while offset < min(200, len(raw_data)):
-        if offset + 2 > len(raw_data):
-            break
-        frame_len = struct.unpack('<H', raw_data[offset:offset+2])[0]
-        if 10 <= frame_len <= 500:  # Wider range for stereo
-            break
-        offset += 2
-
-    # Parse all frames
-    while offset < len(raw_data):
-        if offset + 2 > len(raw_data):
-            break
-
-        frame_len = struct.unpack('<H', raw_data[offset:offset+2])[0]
-        offset += 2
-
-        # Allow larger frames for stereo (up to ~500 bytes for 64kbps stereo)
-        if frame_len < 10 or frame_len > 1000:
-            break
-
-        if offset + frame_len > len(raw_data):
-            break
-
-        frame_data = raw_data[offset:offset+frame_len]
-        offset += frame_len
-        frames.append(frame_data)
-
-    return frames
-
-
-def convert_to_ogg_opus(input_file: Path, output_file: Path,
-                        sample_rate: int = 16000, channels: int = 1) -> bool:
-    """
-    Convert raw Opus frames to OGG Opus format.
-
-    No external dependencies required!
-    """
-    # Read raw data
-    with open(input_file, 'rb') as f:
-        raw_data = f.read()
-
-    if len(raw_data) == 0:
-        print("  Error: Input file is empty")
-        return False
-
-    # Parse frames
-    frames = parse_raw_opus_frames(raw_data)
-    if not frames:
-        print("  Error: No valid Opus frames found")
-        return False
-
-    try:
-        output_file.parent.mkdir(parents=True, exist_ok=True)
-
-        writer = OggOpusWriter(str(output_file), sample_rate, channels)
-        writer.write_header()
-
-        for frame in frames:
-            writer.write_packet(frame)
-
-        writer.close()
-
-        duration = len(frames) * 20 / 1000  # 20ms per frame
-        print(f"  Created: {output_file.name} ({format_bytes(output_file.stat().st_size)}, {duration:.1f}s)")
-        return True
-
-    except Exception as e:
-        print(f"  Error: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
 
 
 # ============================================================================
@@ -459,6 +229,7 @@ async def record_and_sync(
     duration: int = None,
     output_dir: Path = Path("recordings"),
     device_address: str = None,
+    delete: bool = False,
 ):
     """Record and sync in real-time. Press SPACE to add bookmarks."""
     device = ClipDevice(address=device_address, debug=False)
@@ -619,7 +390,7 @@ async def record_and_sync(
             sync.sync(
                 session_id,
                 output_path,
-                delete_after=True,
+                delete_after=delete,
                 continuous=True,
                 progress_callback=progress_callback,
                 session_info=session_info,  # Pass pre-fetched session info to avoid redundant AT+LIST
@@ -794,7 +565,7 @@ async def record_and_sync(
             pass  # Use defaults from mode
 
         # Delete session from device (same for both attach and normal mode)
-        if device.is_connected and session_id:
+        if delete and device.is_connected and session_id:
             try:
                 print(f"Deleting session from device: {session_id}")
                 await commands.delete_session(session_id)
@@ -833,8 +604,7 @@ async def record_and_sync(
         if bookmarks:
             print(f"\n  Bookmark details:")
             for bm in bookmarks[:5]:
-                note = f" - {bm.note}" if bm.note else ""
-                print(f"    {bm.offset}s{note}")
+                print(f"    {bm.offset}s")
             if len(bookmarks) > 5:
                 print(f"    ... and {len(bookmarks) - 5} more")
 
@@ -924,6 +694,8 @@ Output files:
                        help="Auto-stop after N seconds (default: wait for Ctrl+C)")
     parser.add_argument("--output", "-o", type=Path, default=Path("recordings"),
                        help="Output directory (default: recordings/)")
+    parser.add_argument("--delete", action="store_true",
+                       help="Delete session from device after sync")
 
     args = parser.parse_args()
 
@@ -932,6 +704,7 @@ Output files:
         duration=args.duration,
         output_dir=args.output,
         device_address=args.device,
+        delete=args.delete,
     )
 
 

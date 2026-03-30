@@ -1,3 +1,11 @@
-# Python requirements for Clip2 AT command tests
+# Python requirements for Clip Python SDK
 
+# BLE communication
 bleak>=0.20.0
+
+# Progress bars
+tqdm>=4.60.0
+
+# Web interface (clip-web.py)
+fastapi>=0.100.0
+uvicorn>=0.21.0
