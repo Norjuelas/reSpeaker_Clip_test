@@ -99,9 +99,45 @@ The device sends:
 **UUID**: `6E400004-B5A3-F393-E0A9-E50E24DCCA9E`
 **Properties**: Notify
 **Max Length**: MTU - 3 (typically 244 bytes for MTU 247)
-**Purpose**: Stream binary file data during transfer
+**Purpose**: Stream binary frame protocol during file transfer
 
-Raw Opus file data is sent through this characteristic without JSON wrapping. Each notification contains a chunk of file data.
+Binary frames are sent through this characteristic. Each notification contains one frame, identified by the first byte (frame type). See Section 4 for the complete binary frame protocol specification.
+
+Frame types sent on this characteristic:
+- `0x01` DATA — file data chunk
+- `0x10` FILE_START — begin file transfer
+- `0x11` FILE_END — end file (with CRC32)
+- `0x12` TRANSFER_DONE — all files complete
+
+#### 2.2.4 Audio Visualization (Notify)
+
+**UUID**: `6E400005-B5A3-F393-E0A9-E50E24DCCA9E`
+**Properties**: Notify
+**Max Length**: MTU - 3 (typically 244 bytes for MTU 247)
+**Purpose**: Real-time audio energy visualization data
+
+Sends 7 bytes of packed audio energy levels when recording is active.
+
+**Data Format (7 bytes):**
+```
+[byte0] [byte1] [byte2] [byte3] [byte4] [byte5] [byte6]
+  H L     H L     H L     H L     H L     H L     H _
+```
+
+- Each byte contains two 4-bit nibble values (High nibble = even index, Low nibble = odd index)
+- 6 bytes × 2 values + 1 byte × 1 value = **13 audio energy values**
+- Each value range: 0–10 (energy level per frequency band)
+- Update rate: ~100 ms when recording is active
+- Idle: no notifications sent
+
+**Decoding example (Python):**
+```python
+values = []
+for i in range(6):
+    values.append(data[i] >> 4)       # high nibble
+    values.append(data[i] & 0x0F)     # low nibble
+values.append(data[6] & 0x0F)         # 13th value (low nibble of last byte)
+```
 
 ### 2.3 Connection Requirements
 
@@ -214,15 +250,7 @@ All responses use JSON with consistent structure:
 }
 ```
 
-**Progress notification:**
-```json
-{
-  "ok": true,
-  "progress": 50,
-  "transferred": 360000,
-  "total": 720000
-}
-```
+**Note:** File transfer progress is communicated via binary frames on the File Data characteristic (see Section 4), not as JSON responses.
 
 ### 3.3 Command Reference
 
@@ -724,35 +752,18 @@ AT+DOWNLOAD=20250225143000:0016.opus
 }
 ```
 
-**Events During Transfer:**
+**Binary Frames During Transfer:**
 
-File Ready Event:
-```json
-{
-  "ok": true,
-  "event": "file_ready",
-  "filename": "0001.opus",
-  "size": 52598
-}
-```
-
-File Complete Event:
-```json
-{
-  "ok": true,
-  "event": "file_complete",
-  "filename": "0001.opus"
-}
-```
+After the start response, the device sends binary frames on the File Data characteristic (`0x6E400004`). See Section 4 for the complete frame protocol specification.
 
 **Data Flow:**
-1. Device sends start response
+1. Device sends JSON start response on Response characteristic
 2. For each file:
-   - Device sends `file_ready` event (optional, may be lost)
-   - Device streams file data via File Data characteristic
-   - Device sends `file_complete` event
-3. Client can resume by sending `AT+DOWNLOAD=session:next_file`
-4. Transfer continues until all files transferred
+   - Device sends `FILE_START` frame (filename + size)
+   - Device sends `DATA` frames (file data chunks)
+   - Device sends `FILE_END` frame (full-file CRC32)
+3. Device sends `TRANSFER_DONE` frame (session_id + file_count)
+4. Client can resume by sending `AT+DOWNLOAD=session:next_file`
 
 **Disconnect/Resume Flow:**
 1. During transfer, BLE disconnects
@@ -1325,198 +1336,187 @@ AT+REBOOT
 
 ---
 
-## 4. File Transfer Protocol
+## 4. File Transfer Protocol (BLE Binary Frame)
 
-### 4.1 Transfer States
+### 4.1 Overview
+
+File transfer uses a binary frame protocol over the File Data characteristic (`0x6E400004`). Each BLE notification carries one binary frame, identified by the first byte (frame type). This protocol is shared with the WiFi UDP transport (see Appendix D), with minor differences.
+
+### 4.2 Frame Types
+
+| Type | Hex | Direction | Description |
+|------|-----|-----------|-------------|
+| DATA | `0x01` | Device→App | File data chunk |
+| FILE_START | `0x10` | Device→App | Begin file transfer |
+| FILE_END | `0x11` | Device→App | End file (with full-file CRC32) |
+| TRANSFER_DONE | `0x12` | Device→App | All files complete |
+
+**BLE-specific behavior:**
+- No per-frame CRC (BLE link layer guarantees reliable delivery)
+- No FILE_ACK (no retransmission needed)
+- No HEARTBEAT (BLE connection management handles keepalive)
+
+### 4.3 Frame Formats
+
+#### DATA Frame
+
+File data chunk with sequence number.
 
 ```
-┌─────────────────────────────────────────────────┐
-│                    File Transfer State Machine          │
-├─────────────────────────────────────────────────────────┤
-│                                                         │
-│   ┌─────────┐    AT+DOWNLOAD    ┌──────────────┐       │
-│   │   IDLE  │ ─────────────────>│ TRANSMITTING │──────>│ IDLE │
-│   └─────────┘                    └──────┬───────┘       └───────┘
-│        ▲                                │               │           ▲
-│        │                          AT+CANCEL│              │           │
-│        │                          disconnect│              │           │
-│        ▼                                ▼               │           │
-│   TRANSMITTING <───────────────────────────────────────────────┘
-│        │                                                         │
-│        │                                                         │
-│        ▼                                                         │
-│      IDLE <──────────────────────────────────────────────────────────
-│                                                                  │
-└───────────────────────────────────────────────────────────────────┘
+[type:1][seq_lo:1][seq_hi:1][len_lo:1][len_hi:1][payload:N]
 ```
 
-**States:**
-- **IDLE**: No transfer in progress
-- **TRANSMITTING**: Actively sending file data
-- **COMPLETED**: Transfer finished (transient state, returns to IDLE)
+| Offset | Size | Field | Description |
+|--------|------|-------|-------------|
+| 0 | 1 | type | `0x01` |
+| 1 | 2 | seq | Sequence number (uint16 LE) |
+| 3 | 2 | len | Payload length (uint16 LE) |
+| 5 | N | payload | Raw Opus data |
 
-### 4.2 Flow Control (Non-blocking Commands)
+**Header size:** 5 bytes
+**Max payload:** MTU - 3 - 5 (e.g., 239 bytes for MTU 247)
 
-Critical design feature: Commands can be processed during file transfer!
+#### FILE_START Frame
 
-**How it works:**
-1. File transfer runs in background
-2. AT commands interrupt transfer
-3. Transfer pauses during command processing
-4. Transfer resumes after command response
+Signals the beginning of a new file transfer.
 
-**Supported Commands During Transfer:**
-- `AT+GSTAT` - Query status (returns "TRANSMITTING" state)
-- `AT+CANCEL` - Cancel transfer
-- `AT+PAUSE` - Pause transfer
-- `AT+RESUME` - Resume paused transfer
-
-**Sequence:**
 ```
-App: AT+DOWNLOAD=session/file.opus
-Device: {"ok":true}
-Device: <data chunk 1>
-Device: <data chunk 2>
-App: AT+GSTAT  (Non-blocking!)
-Device: {"ok":true, "data":{"state":"TRANSMITTING",...}}
-Device: <data chunk 3>
-Device: <data chunk 4>
-...
-Device: {"ok":true,"data":{"done":true,"size":720000}}
+[type:1][fn_len:1][filename:fn_len][file_size:4]
 ```
 
-### 4.3 Data Format
+| Offset | Size | Field | Description |
+|--------|------|-------|-------------|
+| 0 | 1 | type | `0x10` |
+| 1 | 1 | fn_len | Filename length |
+| 2 | N | filename | UTF-8 filename (e.g., `"0015.opus"`) |
+| 2+N | 4 | file_size | Total file size in bytes (uint32 LE) |
 
-**Raw Opus Frames:**
+#### FILE_END Frame
 
-Each file consists of concatenated Opus frames:
+Signals the end of the current file with a full-file CRC32 for integrity verification.
+
 ```
-[2 bytes length][Opus frame data][2 bytes length][Opus frame data]...
-```
-
-- **Length field**: 2 bytes, little-endian uint16
-- **Frame data**: Raw Opus encoded audio
-
-**Transfer Chunk:**
-
-Each BLE notification contains a chunk of the file:
-```
-Opus data chunk (N bytes, where N = chunk_size or less)
+[type:1][crc32:4]
 ```
 
-Last chunk will be smaller than `chunk_size` (unless file size is exact multiple).
+| Offset | Size | Field | Description |
+|--------|------|-------|-------------|
+| 0 | 1 | type | `0x11` |
+| 1 | 4 | crc32 | IEEE CRC32 of entire file data (uint32 LE) |
+
+CRC32 is computed over all DATA frame payloads concatenated (i.e., the complete file data). Uses polynomial 0xEDB88320 (same as zlib.crc32 with initial value 0xFFFFFFFF).
+
+#### TRANSFER_DONE Frame
+
+Signals that all files in the session have been transferred.
+
+```
+[type:1][sid_len:1][session_id:sid_len][file_count:4]
+```
+
+| Offset | Size | Field | Description |
+|--------|------|-------|-------------|
+| 0 | 1 | type | `0x12` |
+| 1 | 1 | sid_len | Session ID length |
+| 2 | N | session_id | Session ID string (e.g., `"20260326120000"`) |
+| 2+N | 4 | file_count | Total files transferred (uint32 LE) |
+
+### 4.4 Transfer Flow
+
+```
+App                              Device
+ │                                  │
+ │─ AT+DOWNLOAD=20260326120000 ───>│
+ │<─ {"ok":true} ──────────────────│
+ │                                  │
+ │  For each file in session:
+ │                                  │
+ │<─ FILE_START("0001.opus", 2400)─│
+ │<─ DATA(seq=0, len=239, ...) ────│
+ │<─ DATA(seq=1, len=239, ...) ────│
+ │<─ DATA(seq=2, len=239, ...) ────│
+ │<─ ...                          │
+ │<─ DATA(seq=9, len=183, ...) ────│  Last chunk (<239)
+ │<─ FILE_END(crc32=0xA1B2C3D4) ──│
+ │                                  │
+ │<─ FILE_START("0002.opus", 2400)─│
+ │<─ DATA(seq=0, ...) ─────────────│
+ │<─ ...                          │
+ │<─ FILE_END(crc32=...) ──────────│
+ │                                  │
+ │<─ TRANSFER_DONE("20260326120000", 30)│
+ │                                  │
+```
+
+**Key points:**
+- All frames for a session are sent on the same File Data characteristic
+- AT command responses continue to arrive on the Response characteristic during transfer
+- The device can process AT commands (e.g., `AT+GSTAT`) concurrently with file transfer
+
+### 4.5 Flow Control
+
+File transfer runs in the background. AT commands can be sent during transfer:
+
+**Supported during transfer:**
+- `AT+GSTAT` — Query status (returns "TRANSMITTING" state)
+- `AT+CANCEL` — Cancel transfer
+- `AT+PAUSE` — Pause transfer
+- `AT+RESUME` — Resume paused transfer
 
 **Example:**
 ```
-File: 720000 bytes
-Chunk size: 500 bytes
-Notifications: 1440 (1439 full + 1 partial)
-
-Notification 1-1439: 500 bytes each
-Notification 1440: 500 bytes (exact)
+App: AT+DOWNLOAD=20260326120000
+Device: {"ok":true}
+Device: <FILE_START frame>
+Device: <DATA frames...>
+App: AT+GSTAT  (Non-blocking!)
+Device: {"ok":true, "data":{"state":"TRANSMITTING",...}}
+Device: <DATA frames continue...>
+Device: <FILE_END frame>
+Device: <TRANSFER_DONE frame>
 ```
 
-### 4.4 Progress Reporting
+### 4.6 Resume from File
 
-Progress notifications are sent periodically:
-
-**Triggers:**
-- Every 10% of file transferred
-- On completion
-
-**Progress Notification:**
-```json
-{
-  "ok": true,
-  "progress": 50,
-  "transferred": 360000,
-  "total": 720000
-}
-```
-
-**Completion Notification:**
-```json
-{
-  "ok": true,
-  "done": true,
-  "size": 720000
-}
-```
-
-### 4.5 Error Recovery
-
-**Connection Dropout:**
-1. Detect disconnection
-2. Pause transfer (state → PAUSED)
-3. Wait for reconnection
-4. Auto-resume if within timeout
-5. Cancel if timeout expires
-
-**File Write Errors:**
-1. Detect write failure
-2. Send error response
-3. Close file
-4. Delete incomplete file (if created)
-5. Return to IDLE
-
-**SD Card Removal:**
-1. Detect removal
-2. Send error response: "SD card removed"
-3. Close all files
-4. Return to ERROR state
-
-### 4.6 Transfer Examples
-
-#### Single File Transfer
+To resume a partially transferred session, use the colon syntax:
 
 ```
-App                          Device
- │                              │
- │─ AT+DOWNLOAD=2024/0001.opus ─>│
- │                              │  Open file
- │                              │  Get size
- │<─ {"ok":true} ────────────────│
- │<════ [500 bytes] ════════════│
- │<════ [500 bytes] ════════════│
- │<════ [500 bytes] ════════════│
- │<─ {"progress":10} ────────────│
- │<════ [500 bytes] ════════════│
- ...                            │
- │<════ [120 bytes] ════════════│  Last chunk (<500)
- │<─ {"ok":true,"done":true,     │
- │     "size":720000} ───────────│
- │                              │  Create .transferred
+AT+DOWNLOAD=<session_id>:<start_file>
 ```
 
-#### Session Transfer (Multiple Files)
+**Resume logic:**
+1. Client queries session details: `AT+LIST=<session_id>`
+2. Response includes `synced` count (e.g., 15 files already transferred)
+3. Client calculates next file: `synced + 1` → file `0016.opus`
+4. Client sends: `AT+DOWNLOAD=<session_id>:0016.opus`
+5. Device transfers from `0016.opus` onwards
 
+**Example:**
 ```
-App                          Device
- │                              │
- │─ AT+LIST ───────────────────>│
- │<─ ["20240203100000"] ────────│
- │                              │
- │─ AT+LIST=20240203100000 ───>│
- │<─ ["0001.opus","0002.opus"] ────│
- │                              │
- │─ AT+MARKS=20240203100000 ──>│
- │<─ [{offset:10,note:"..."}] ───│
- │                              │
- │─ AT+DOWNLOAD=20240203/0001.opus>│
- │<─ {"ok":true} ────────────────│
- │<════ [Opus data...] ═════════│
- ...                            │
- │<─ {"ok":true,"done":true} ────│
- │                              │
- │─ AT+DOWNLOAD=20240203/0002.opus>│
- │<─ {"ok":true} ────────────────│
- │<════ [Opus data...] ═════════│
- ...                            │
- │<─ {"ok":true,"done":true} ────│
- │                              │
- │─ AT+DELETE=20240203100000 ──>│
- │<─ {"ok":true,"freed":1440000} │
+# Query synced count
+AT+LIST=20260326120000
+→ {"ok":true,"data":{"synced":15,"files":30,...}}
+
+# Resume from file 0016.opus
+AT+DOWNLOAD=20260326120000:0016.opus
+→ {"ok":true}
 ```
+
+### 4.7 Continuous Sync (Real-time)
+
+When the device is actively recording, the client can start a transfer that continues until recording stops. This enables real-time file download during recording.
+
+**Flow:**
+1. Start recording: `AT+START=enhanced`
+2. Immediately start download: `AT+DOWNLOAD=<session_id>`
+3. Device streams files as they are written to SD card
+4. When recording stops (`AT+STOP`), device sends `TRANSFER_DONE`
+5. Client knows all files have been received
+
+**Usage in tools:**
+- `record.py` — real-time sync during recording
+- `clip-web.py` — background sync task when recording starts
+- Both use `SessionSync(continuous=True)`
 
 ## 5. State Machines
 
@@ -1913,20 +1913,9 @@ The device sends unsolicited notifications via the Response characteristic for i
 
 **Trigger:** Any error condition
 
-### 7.2 Progress Events
+### 7.2 Audio Visualization Data
 
-During file transfer, progress updates are sent every 10%:
-
-```json
-{
-  "ok": true,
-  "progress": 50,
-  "transferred": 360000,
-  "total": 720000
-}
-```
-
-**Triggers:** Every 10% of file transferred
+Real-time audio energy data is sent via the Audio Visualization characteristic (`0x6E400005`), not as a JSON event. See Section 2.2.4 for the data format.
 
 ### 7.3 System Events
 
@@ -2156,11 +2145,13 @@ To prevent BLE congestion:
 ```
 1. List sessions: AT+LIST
 2. For each session:
-   a. List files: AT+LIST=<session>
+   a. Get session info: AT+LIST=<session>  (includes synced count, audio format)
    b. Get bookmarks: AT+MARKS=<session>
-   c. Download each file: AT+DOWNLOAD=<session>/<file>
-   d. Wait for completion: {"done":true}
-3. Delete session: AT+DELETE=<session>
+   c. Download: AT+DOWNLOAD=<session>
+   d. Receive binary frames (FILE_START → DATA → FILE_END per file)
+   e. Receive TRANSFER_DONE frame
+   f. Verify file CRC32 from FILE_END frames
+3. Optionally delete session: AT+DELETE=<session>
 ```
 
 ### 11.3 Error Recovery Sequences
@@ -2248,7 +2239,7 @@ App: AT+START
 Device: {"ok":true,"data":{"session":"20240203100000",...}}
 Device: {"ok":true,"event":"recording_started","session":"20240203100000"}
 
-[Recording in progress...]
+[Recording in progress, Audio Vis data streaming on char 0x6E400005...]
 
 App: AT+MARK=Important point
 Device: {"ok":true,"data":{"timestamp":1706918430,...}}
@@ -2259,26 +2250,39 @@ Device: {"ok":true,"data":{"duration":600,...}}
 Device: {"ok":true,"event":"recording_stopped",...}
 
 App: AT+LIST
-Device: {"ok":true,"data":["20240203100000"]}
+Device: {"ok":true,"data":{"total":1,"sessions":[...]}}
 
 App: AT+DOWNLOAD=20240203100000
 Device: {"ok":true}
-Device: <file data stream...>
-Device: {"ok":true,"done":true,"size":3600000}
+Device: <FILE_START "0001.opus" size=2400>
+Device: <DATA seq=0 len=239 payload=...>
+Device: <DATA seq=1 len=239 payload=...>
+...
+Device: <FILE_END crc32=0xA1B2C3D4>
+Device: <FILE_START "0002.opus" size=2400>
+Device: <DATA seq=0 ...>
+...
+Device: <FILE_END crc32=...>
+Device: <TRANSFER_DONE "20240203100000" count=30>
 ```
 
 ## Appendix C: Performance Characteristics
 
-### Expected Transfer Rates
+### BLE Transfer Rates
 
-| MTU | Chunk Size | Throughput | 1MB Time |
-|-----|------------|------------|----------|
-| 23 | 500 | ~8 KB/s | ~2m 5s |
-| 247 | 500 | ~22 KB/s | ~46s |
-| 517 | 500 | ~25 KB/s | ~40s |
-| 517 | 4096 | ~28 KB/s | ~36s |
+| MTU | Throughput | 1MB Time |
+|-----|------------|----------|
+| 23 | ~8 KB/s | ~2m 5s |
+| 247 | ~22 KB/s | ~46s |
+| 517 | ~28 KB/s | ~36s |
 
-**Optimal Configuration:** MTU 517, Chunk size 2000-4096
+**Optimal Configuration:** MTU 517
+
+### WiFi UDP Transfer Rates
+
+| Scenario | Throughput | 1MB Time |
+|----------|------------|----------|
+| Typical WiFi | ~500 KB/s | ~2s |
 
 ### Memory Usage
 
@@ -2292,3 +2296,139 @@ Device: {"ok":true,"done":true,"size":3600000}
 | Total fixed | ~116 KB |
 
 **Available heap:** ~32 KB from 192 KB non-secure SRAM
+
+## Appendix D: WiFi UDP Transfer Protocol
+
+The WiFi UDP transport provides high-speed local file transfer when the device is in WiFi AP mode. It uses the same binary frame protocol as BLE (Section 4) with additional frames for reliability and keepalive.
+
+### D.1 WiFi AP Configuration
+
+| Parameter | Value |
+|-----------|-------|
+| SSID | `ClipAP_XXXX` (last 4 hex digits of chip ID) |
+| Password | `12345678` |
+| IP Address | `192.168.4.1` |
+| UDP Port | `8089` |
+| Protocol | UDP |
+
+### D.2 Frame Types
+
+| Type | Hex | Direction | Description |
+|------|-----|-----------|-------------|
+| DATA | `0x01` | Device→Client | File data (with per-frame CRC32) |
+| FILE_ACK | `0x03` | Client→Device | File verification result |
+| FILE_START | `0x10` | Device→Client | Begin file transfer |
+| FILE_END | `0x11` | Device→Client | End file (full-file CRC32) |
+| TRANSFER_DONE | `0x12` | Device→Client | All files complete |
+| AT_RESP | `0x20` | Device→Client | AT command response (JSON) |
+| HEARTBEAT | `0x30` | Bidirectional | Keepalive |
+
+### D.3 BLE vs WiFi UDP Comparison
+
+| | BLE | WiFi UDP |
+|---|---|---|
+| AT command | BLE Write char | UDP plain text `"AT+XXX\n"` |
+| AT response | BLE Notify (JSON) | UDP AT_RESP frame (`0x20`) |
+| DATA header | 5 bytes | 9 bytes (+4 CRC32) |
+| Per-frame CRC | None (link layer) | IEEE CRC32 per frame |
+| FILE_ACK | None | Yes (CRC mismatch → retransmit) |
+| Heartbeat | None | 5s interval, 30s timeout |
+| Throughput | ~15 KB/s | ~500 KB/s |
+
+### D.4 Frame Formats (UDP-specific differences)
+
+#### DATA Frame (UDP)
+
+```
+[type:1][seq_lo:1][seq_hi:1][len_lo:1][len_hi:1][crc32:4][payload:N]
+```
+
+| Offset | Size | Field | Description |
+|--------|------|-------|-------------|
+| 0 | 1 | type | `0x01` |
+| 1 | 2 | seq | Sequence number (uint16 LE, wraps at 4096) |
+| 3 | 2 | len | Payload length (uint16 LE) |
+| 5 | 4 | crc32 | IEEE CRC32 of payload (uint32 LE) |
+| 9 | N | payload | Raw Opus data |
+
+**Header size:** 9 bytes (4 bytes larger than BLE due to per-frame CRC32)
+**Max payload:** 1024 bytes
+
+#### FILE_ACK Frame (Client→Device)
+
+```
+[type:1][result:1]
+```
+
+| Offset | Size | Field | Description |
+|--------|------|-------|-------------|
+| 0 | 1 | type | `0x03` |
+| 1 | 1 | result | `0x00` = CRC OK, `0x01` = CRC mismatch |
+
+Sent by client after receiving FILE_END. If CRC mismatch, device retransmits the file (up to 3 retries).
+
+#### AT_RESP Frame
+
+```
+[type:1][len_lo:1][len_hi:1][json_data:N]
+```
+
+| Offset | Size | Field | Description |
+|--------|------|-------|-------------|
+| 0 | 1 | type | `0x20` |
+| 1 | 2 | len | JSON response length (uint16 LE) |
+| 3 | N | json_data | JSON response text |
+
+#### HEARTBEAT Frame (Bidirectional)
+
+```
+[type:1][timestamp:4]
+```
+
+| Offset | Size | Field | Description |
+|--------|------|-------|-------------|
+| 0 | 1 | type | `0x30` |
+| 1 | 4 | timestamp | Uptime in milliseconds (uint32 LE) |
+
+**Interval:** 5 seconds
+**Timeout:** 30 seconds (connection considered lost)
+
+### D.5 AT Command Format (UDP)
+
+AT commands are sent as plain text over UDP (no binary framing):
+
+```
+AT+GSTAT\n
+AT+LIST\n
+AT+DOWNLOAD=20260326120000\n
+```
+
+The trailing newline (`\n`) is required.
+
+### D.6 Shared Frame Formats
+
+FILE_START, FILE_END, and TRANSFER_DONE frames use the same format as BLE (see Section 4.3).
+
+### D.7 Transfer Flow (UDP)
+
+```
+Client                            Device (192.168.4.1:8089)
+ │                                  │
+ │─ AT+DOWNLOAD=20260326120000\n ─>│
+ │<─ AT_RESP({"ok":true,...}) ─────│
+ │                                  │
+ │  For each file:
+ │<─ FILE_START("0001.opus", 2400)─│
+ │<─ DATA(seq=0, len=1024, ...) ───│
+ │<─ DATA(seq=1, len=1024, ...) ───│
+ │<─ ...                          │
+ │<─ FILE_END(crc32=0xA1B2C3D4) ──│
+ │─ FILE_ACK(0x00) ──────────────>│  CRC OK
+ │                                  │
+ │  (If CRC mismatch:)
+ │<─ FILE_END(crc32=...) ──────────│  Retransmit
+ │─ FILE_ACK(0x01) ──────────────>│  CRC NACK
+ │                                  │
+ │<─ TRANSFER_DONE("20260326...", 30)│
+ │                                  │
+```
