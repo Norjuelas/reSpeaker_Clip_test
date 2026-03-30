@@ -1271,6 +1271,7 @@ static void display_thread_fn(void *p1, void *p2, void *p3)
 {
 	enum ui_event event;
 
+	k_thread_name_set(k_current_get(), "display");
 	LOG_INF("Display thread started");
 
 	while (true) {

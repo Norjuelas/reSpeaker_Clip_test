@@ -201,4 +201,14 @@ config CLIP_UDP_CONNECTION_TIMEOUT_MS
 	int "UDP connection timeout (ms)"
 	default 30000
 
+# =============================================================================
+# Debug Configuration
+# =============================================================================
+
+config CLIP_DEBUG_STATS
+	bool "Enable periodic thread stack and heap usage logging"
+	default n
+	help
+	  Print thread stack usage and heap stats every 10 seconds.
+
 endif # CLIP

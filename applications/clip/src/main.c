@@ -7,6 +7,9 @@
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 #include <app_version.h>
+#include <zephyr/sys/util.h>
+#include <zephyr/sys/mem_stats.h>
+#include <zephyr/sys/sys_heap.h>
 
 #include <nrfx_clock.h>
 
@@ -281,9 +284,34 @@ int clip_init(void)
     return 0;
 }
 
+extern struct k_heap _system_heap;
+
+static void thread_stack_stats_cb(const struct k_thread *thread, void *user_data)
+{
+	ARG_UNUSED(user_data);
+
+	size_t stack_size, free_bytes;
+
+#ifdef CONFIG_THREAD_STACK_INFO
+	stack_size = thread->stack_info.size;
+	if (k_thread_stack_space_get(thread, &free_bytes) == 0) {
+		size_t used = stack_size - free_bytes;
+		const char *name = k_thread_name_get(thread);
+		if (!name || name[0] == '\0') {
+			name = "?";
+		}
+		LOG_INF("  %-20s %5u/%5u (%2u%%)",
+			name, used, stack_size,
+			stack_size > 0 ? (uint32_t)(used * 100 / stack_size) : 0);
+	}
+#endif
+}
+
 void clip_main_loop(void)
 {
     LOG_INF("Entering main loop");
+
+    int stats_counter = 0;
 
     while (true) {
         /* Wait for events (timeout 1s for recording time update) */
@@ -295,6 +323,23 @@ void clip_main_loop(void)
         /* Update recording time if recording */
         if (clip_event_get_state() == CLIP_STATE_RECORDING) {
             g_ctx.status.recording_time++;
+        }
+
+        /* Print thread stack stats every 10 seconds */
+        if (IS_ENABLED(CONFIG_CLIP_DEBUG_STATS) && ++stats_counter >= 10) {
+            stats_counter = 0;
+
+            LOG_INF("--- Thread Stack Usage ---");
+            k_thread_foreach(thread_stack_stats_cb, NULL);
+
+            /* Heap usage */
+            struct sys_memory_stats hs;
+            if (sys_heap_runtime_stats_get(&_system_heap.heap, &hs) == 0) {
+                LOG_INF("  HEAP: %u/%u used (peak %u)",
+                        hs.allocated_bytes,
+                        hs.allocated_bytes + hs.free_bytes,
+                        hs.max_allocated_bytes);
+            }
         }
     }
 }
