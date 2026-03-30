@@ -273,8 +273,9 @@ function updateStatus(data) {
   fill.style.background = batt > 20 ? 'var(--accent)' : 'var(--danger)';
 
   const isRec = state === 'RECORDING';
+  const isWifi = state === 'WIFI_SYNC';
   const btnStart = document.getElementById('btn-start');
-  btnStart.disabled = isRec;
+  btnStart.disabled = isRec || isWifi;
   document.getElementById('btn-pause').disabled = !isRec;
   document.getElementById('btn-stop').disabled = !isRec && state !== 'PAUSED';
   document.getElementById('btn-mark').disabled = !isRec;
@@ -283,9 +284,15 @@ function updateStatus(data) {
     btnStart.className = 'btn btn-recording';
     btnStart.textContent = 'Recording...';
     document.getElementById('stat-state').className = 'stat-val recording';
+  } else if (isWifi) {
+    btnStart.className = 'btn btn-accent';
+    btnStart.textContent = 'WiFi Active';
+    btnStart.title = 'Cannot record while WiFi is active';
+    document.getElementById('stat-state').className = 'stat-val';
   } else {
     btnStart.className = 'btn btn-accent';
     btnStart.textContent = 'Record';
+    btnStart.title = '';
     document.getElementById('stat-state').className = 'stat-val';
   }
 
