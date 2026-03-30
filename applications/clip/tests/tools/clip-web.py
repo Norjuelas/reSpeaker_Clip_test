@@ -96,6 +96,8 @@ class SyncRequest(BaseModel):
 
 class RecordStartRequest(BaseModel):
     mode: str = "normal"
+    attach: bool = False
+    session_id: Optional[str] = None
 
 
 # ---- FastAPI app ----
@@ -109,7 +111,7 @@ static_dir = Path(__file__).parent / "static"
 async def index():
     index_path = static_dir / "index.html"
     if index_path.exists():
-        return HTMLResponse(index_path.read_text())
+        return HTMLResponse(index_path.read_text(encoding='utf-8'))
     return HTMLResponse("<h1>clip-web</h1><p>Static files not found.</p>")
 
 
@@ -146,6 +148,12 @@ async def api_sessions():
 async def api_record_start(req: RecordStartRequest):
     global _sync_task
     device = await get_device()
+
+    if req.attach and req.session_id:
+        # Attach mode: device is already recording, just start sync
+        await _start_realtime_sync(device, req.session_id)
+        return {"ok": True, "data": {"session": req.session_id, "attached": True}}
+
     resp = await device.send_command(f"AT+START={req.mode}")
 
     if resp.get("ok"):

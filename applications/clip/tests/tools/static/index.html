@@ -148,7 +148,12 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
     <!-- Recording -->
     <div class="card">
       <h3>Recording</h3>
-      <div class="btn-row">
+      <div class="rec-timer" id="rec-timer" style="display:none">
+        <span class="rec-dot" style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--danger);margin-right:6px;animation:blink 1.5s infinite"></span>
+        <span id="rec-duration" style="font-family:'SF Mono',monospace;font-size:20px;font-weight:700;color:var(--danger)">0:00</span>
+        <span id="rec-session" style="font-family:'SF Mono',monospace;font-size:12px;color:var(--text2);margin-left:8px"></span>
+      </div>
+      <div class="btn-row" id="rec-btns">
         <button class="btn btn-accent" id="btn-start" onclick="startRecording()">Record</button>
         <button class="btn btn-ghost" id="btn-pause" onclick="pauseRecording()" disabled>Pause</button>
         <button class="btn btn-red" id="btn-stop" onclick="stopRecording()" disabled>Stop</button>
@@ -235,6 +240,10 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 const API = '';
 let ws = null, reconnectTimer = null;
 let audioEl, audioCtx, isPlaying = false, currentSpeed = 1;
+let isAttached = false;  // Attached to an existing recording (read-only)
+let recTimerStart = 0;  // Timestamp when we started tracking duration
+let recBaseDuration = 0; // Device-reported duration at attach time (seconds)
+let recTimerInterval = null;
 
 function fmt(bytes) {
   if (bytes >= 1073741824) return (bytes / 1073741824).toFixed(1) + ' GB';
@@ -275,24 +284,78 @@ function updateStatus(data) {
   const isRec = state === 'RECORDING';
   const isWifi = state === 'WIFI_SYNC';
   const btnStart = document.getElementById('btn-start');
-  btnStart.disabled = isRec || isWifi;
-  document.getElementById('btn-pause').disabled = !isRec;
-  document.getElementById('btn-stop').disabled = !isRec && state !== 'PAUSED';
-  document.getElementById('btn-mark').disabled = !isRec;
+  const btnPause = document.getElementById('btn-pause');
+  const btnStop = document.getElementById('btn-stop');
+  const btnMark = document.getElementById('btn-mark');
+  const timerEl = document.getElementById('rec-timer');
 
   if (isRec) {
-    btnStart.className = 'btn btn-recording';
-    btnStart.textContent = 'Recording...';
+    // Recording active — show timer
+    timerEl.style.display = '';
     document.getElementById('stat-state').className = 'stat-val recording';
-  } else if (isWifi) {
-    btnStart.className = 'btn btn-accent';
-    btnStart.textContent = 'WiFi Active';
-    btnStart.title = 'Cannot record while WiFi is active';
-    document.getElementById('stat-state').className = 'stat-val';
+
+    // Start duration timer if not already running
+    if (!recTimerInterval) {
+      recBaseDuration = d.duration || 0;
+      recTimerStart = Date.now();
+      recTimerInterval = setInterval(() => {
+        const elapsed = recBaseDuration + (Date.now() - recTimerStart) / 1000;
+        document.getElementById('rec-duration').textContent = fmtTime(elapsed);
+      }, 500);
+      document.getElementById('rec-duration').textContent = fmtTime(recBaseDuration);
+    }
+
+    // Show session ID in timer
+    const sessionId = d.session || '';
+    document.getElementById('rec-session').textContent = sessionId;
+
+    if (isAttached) {
+      // Attached mode: hide Start/Pause, show Stop + Bookmark
+      btnStart.style.display = 'none';
+      btnPause.style.display = 'none';
+      btnStop.disabled = false;
+      btnMark.disabled = false;
+    } else {
+      btnStart.style.display = '';
+      btnPause.style.display = '';
+      btnStart.disabled = true;
+      btnStart.className = 'btn btn-recording';
+      btnStart.textContent = 'Recording...';
+      btnPause.disabled = false;
+      btnStop.disabled = false;
+      btnMark.disabled = false;
+    }
   } else {
-    btnStart.className = 'btn btn-accent';
-    btnStart.textContent = 'Record';
-    btnStart.title = '';
+    // Not recording — stop timer
+    if (recTimerInterval) {
+      clearInterval(recTimerInterval);
+      recTimerInterval = null;
+    }
+    timerEl.style.display = 'none';
+    document.getElementById('rec-session').textContent = '';
+    isAttached = false;
+
+    if (isWifi) {
+      btnStart.style.display = '';
+      btnPause.style.display = '';
+      btnStart.className = 'btn btn-accent';
+      btnStart.textContent = 'WiFi Active';
+      btnStart.title = 'Cannot record while WiFi is active';
+      btnStart.disabled = true;
+      btnPause.disabled = true;
+      btnStop.disabled = true;
+      btnMark.disabled = true;
+    } else {
+      btnStart.style.display = '';
+      btnPause.style.display = '';
+      btnStart.className = 'btn btn-accent';
+      btnStart.textContent = 'Record';
+      btnStart.title = '';
+      btnStart.disabled = false;
+      btnPause.disabled = true;
+      btnStop.disabled = true;
+      btnMark.disabled = true;
+    }
     document.getElementById('stat-state').className = 'stat-val';
   }
 
@@ -555,7 +618,20 @@ function connectWS() {
 
 // ---- Init ----
 (async () => {
-  await api('/api/status').then(updateStatus);
+  const status = await api('/api/status');
+  updateStatus(status);
+
+  // If device is already recording, attach to it
+  if (status.ok && status.data && status.data.state === 'RECORDING') {
+    isAttached = true;
+    const sessionId = status.data.session;
+    if (sessionId) {
+      toast('Attached to recording ' + sessionId);
+      // Start real-time sync for the existing session
+      await api('/api/record/start', { method:'POST', body: JSON.stringify({mode: status.data.mode || 'normal', attach: true, session_id: sessionId}) });
+    }
+  }
+
   await api('/api/sessions').then(updateSessions);
   loadRecordings();
   setupPlayerEvents();
