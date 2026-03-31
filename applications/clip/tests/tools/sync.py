@@ -484,6 +484,7 @@ Examples:
 
                 # Update tqdm if there's new data (updates every 0.5s for smoother display)
                 if current_total > last_pbar_update and time.time() - last_shown_pbar > 0.5:
+                    last_shown = time.time()  # Reset no-progress timer
                     delta = current_total - last_total
                     if delta > 0:
                         # Update description with current file being received

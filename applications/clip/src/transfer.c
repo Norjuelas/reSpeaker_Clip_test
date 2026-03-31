@@ -284,6 +284,12 @@ int transfer_resume_from(const char *session_id, const char *start_file, struct 
     transfer_complete_sent = false;
     transfer_pause_requested = false;
 
+    /* Save the transport for this transfer session */
+    current_transport = tp;
+    LOG_INF("Transfer using transport type %d", tp->type);
+
+    clip_cpu_boost_acquire();
+
     /* Initialize transfer state */
     memset(&current_transfer, 0, sizeof(current_transfer));
     current_transfer.state = TRANSFER_STATE_TRANSMITTING;
@@ -465,6 +471,11 @@ int transfer_set_synced_files(const char *session_id, uint32_t count)
                 for (size_t i = new_len; i < old_len; i++) {
                     p[i] = ' ';
                 }
+            } else {
+                /* New value is longer — shift remaining content */
+                size_t tail_len = strlen(end);
+                memmove(p + new_len, end, tail_len + 1);
+                memcpy(p, new_count, new_len);
             }
         }
     }
@@ -550,14 +561,18 @@ process_next_file:
             if (ret != 0) {
                 if (ret == -ENOENT) {
                     /* No more files */
-                    LOG_INF("Transfer completed: %u files", current_transfer.file_index);
+                    LOG_INF("Transfer completed: %u files", current_transfer.synced_files);
                     current_transfer.state = TRANSFER_STATE_COMPLETED;
                     send_transfer_complete_once(current_transfer.session_id,
-                                                 (int)current_transfer.file_index);
+                                                 (int)current_transfer.synced_files);
                     transfer_cleanup();
                     transfer_thread_waiting = true;
                     k_sem_take(&transfer_trigger_sem, K_FOREVER);
                     transfer_thread_waiting = false;
+                    goto process_next_file;
+                } else if (ret == -EAGAIN) {
+                    /* Missing file skipped — try next immediately */
+                    consecutive_file_errors = 0;
                     goto process_next_file;
                 } else {
                     /* Non-ENOENT error */
@@ -567,6 +582,8 @@ process_next_file:
                     if (consecutive_file_errors > 10) {
                         LOG_ERR("Too many consecutive file errors, aborting transfer");
                         current_transfer.state = TRANSFER_STATE_ERROR;
+                        send_transfer_complete_once(current_transfer.session_id,
+                                                     (int)current_transfer.synced_files);
                         transfer_cleanup();
                         transfer_thread_waiting = true;
                         k_sem_take(&transfer_trigger_sem, K_FOREVER);
@@ -623,6 +640,9 @@ process_next_file:
                             file_retry++;
                             LOG_WRN("File NACK, retransmitting (%d/%d)", file_retry, TRANSFER_MAX_FILE_RETRIES);
 
+                            /* Backoff: let WiFi channel settle before retransmit */
+                            k_msleep(50 * file_retry);
+
                             /* Seek back to file start */
                             fs_seek(&transfer_file, 0, FS_SEEK_SET);
                             current_transfer.bytes_transferred = 0;
@@ -663,7 +683,9 @@ process_next_file:
                             LOG_ERR("File retransmit failed after %d retries", file_retry);
                             fs_close(&transfer_file);
                             transfer_file_open = false;
-                            current_transfer.state = TRANSFER_STATE_IDLE;
+                            current_transfer.state = TRANSFER_STATE_ERROR;
+                            send_transfer_complete_once(current_transfer.session_id,
+                                                         (int)current_transfer.synced_files);
                             transfer_cleanup();
                             break;
                         }
@@ -674,13 +696,15 @@ process_next_file:
                         LOG_ERR("FILE_END failed: %d", file_ret);
                         fs_close(&transfer_file);
                         transfer_file_open = false;
-                        current_transfer.state = TRANSFER_STATE_IDLE;
+                        current_transfer.state = TRANSFER_STATE_ERROR;
+                        send_transfer_complete_once(current_transfer.session_id,
+                                                     (int)current_transfer.synced_files);
                         transfer_cleanup();
                         break;
                     }
 
-                    /* File ACKed OK */
-                    current_transfer.synced_files++;
+                    /* File ACKed OK — store the file number (1-based) synced up to */
+                    current_transfer.synced_files = current_transfer.file_index + 1;
 
                     /* Close file */
                     fs_close(&transfer_file);
@@ -697,8 +721,9 @@ process_next_file:
                         transfer_file_open = false;
                     }
                     /* Do NOT increment synced_files - file was not completed */
-                    /* Do NOT save synced count - transfer was interrupted */
-                    current_transfer.state = TRANSFER_STATE_IDLE;
+                    current_transfer.state = TRANSFER_STATE_ERROR;
+                    send_transfer_complete_once(current_transfer.session_id,
+                                                 (int)current_transfer.synced_files);
                     transfer_cleanup();
                     break;
                 } else {
@@ -708,7 +733,9 @@ process_next_file:
                         fs_close(&transfer_file);
                         transfer_file_open = false;
                     }
-                    current_transfer.state = TRANSFER_STATE_IDLE;
+                    current_transfer.state = TRANSFER_STATE_ERROR;
+                    send_transfer_complete_once(current_transfer.session_id,
+                                                 (int)current_transfer.synced_files);
                     transfer_cleanup();
                     break;
                 }
@@ -766,6 +793,18 @@ static int transfer_next_file(void)
 
                 /* Check if recording stopped - if so, no more files coming */
                 if (!audio_is_recording() && wait_count > 4) {
+                    /* Check if next file exists (skip missing files) */
+                    uint32_t next_num = file_num + 1;
+                    char next_filepath[128];
+                    generate_filename(next_num, next_filepath);
+                    snprintf(next_filepath, sizeof(next_filepath), "/SD:/REC/%s/%s",
+                             current_transfer.session_id, next_filepath);
+                    if (fs_stat(next_filepath, &entry) == 0) {
+                        LOG_WRN("File missing: %s, skipping", current_transfer.current_file);
+                        current_transfer.file_index = file_num;
+                        current_transfer.current_file[0] = '\0';
+                        return -EAGAIN;
+                    }
                     LOG_INF("Recording stopped, ending transfer");
                     return -ENOENT;
                 }
@@ -830,8 +869,18 @@ wait_for_write:
 
         /* Check if file exists */
         if (fs_stat(filepath, &entry) != 0) {
-            LOG_DBG("No more files: %s", filepath);
-            return -ENOENT;
+            /* Check if we've passed the expected file count */
+            if (current_transfer.total_files > 0 &&
+                file_num > current_transfer.total_files) {
+                LOG_INF("All files transferred");
+                return -ENOENT;
+            }
+
+            /* File missing in sequence — skip and try next */
+            LOG_WRN("File missing: %s, skipping", current_transfer.current_file);
+            current_transfer.file_index = file_num;  /* Advance past missing file */
+            current_transfer.current_file[0] = '\0';  /* Clear so next call generates new filename */
+            return -EAGAIN;
         }
 
         /* Check if we've transferred all files */

@@ -133,7 +133,6 @@ static int ble_transport_send_file_data(const uint8_t *data, uint16_t len)
 	uint16_t notify_max = (mtu > 3) ? mtu - 3 : 20;
 	max_data_payload = (notify_max > BLE_DATA_HEADER_SIZE) ?
 			   notify_max - BLE_DATA_HEADER_SIZE : 15;
-	LOG_INF("BLE payload: %u bytes/frame (mtu=%u)", max_data_payload, mtu);
     }
 
     /* Slice into BLE-sized DATA frames */

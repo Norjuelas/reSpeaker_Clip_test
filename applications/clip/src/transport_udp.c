@@ -260,7 +260,7 @@ static int udp_send(const uint8_t *data, uint16_t len)
  *
  * Sends all data as frames without waiting for per-frame ACK.
  * Slices data > UDP_MAX_DATA_PER_FRAME into multiple frames.
- * Pacing delay between frames prevents WiFi TX queue overflow.
+ * 1ms pacing between frames prevents WiFi TX queue overflow.
  */
 static int udp_send_file_data_impl(const uint8_t *data, uint16_t len)
 {

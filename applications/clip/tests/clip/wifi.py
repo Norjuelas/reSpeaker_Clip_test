@@ -392,6 +392,19 @@ class WiFiSync:
         session_dir.mkdir(parents=True, exist_ok=True)
         downloaded_files = []
 
+        # Pre-fetch session size BEFORE starting download
+        # (DOWNLOAD triggers data streaming, so LIST must be sent first)
+        total_files = 0
+        total_bytes = 0
+        try:
+            info_resp = self._send_at_command(f"LIST={session_id}")
+            if info_resp.get("ok"):
+                info_data = info_resp.get("data", {})
+                total_files = info_data.get("files", info_data.get("total", 0))
+                total_bytes = info_data.get("size", 0)
+        except Exception:
+            pass
+
         # Start download (with optional start file)
         if start_file:
             result = self._send_at_command(f"DOWNLOAD={session_id}:{start_file}")
@@ -402,9 +415,14 @@ class WiFiSync:
             print(f"  Error: {result.get('error', 'unknown')}")
             return False
 
+        # Override with DOWNLOAD response if available (more accurate)
         data = result.get("data", {})
-        total_files = data.get("files", data.get("total", 0))
-        total_bytes = data.get("bytes", data.get("size", 0))
+        dl_files = data.get("files", data.get("total", 0))
+        dl_bytes = data.get("bytes", data.get("size", 0))
+        if dl_files > 0:
+            total_files = dl_files
+        if dl_bytes > 0:
+            total_bytes = dl_bytes
 
         if total_files == 0:
             print(f"  Session {session_id}: no files (may have been deleted)")
@@ -442,16 +460,15 @@ class WiFiSync:
         last_progress_time = time.time()
         file_crc = 0
         last_pbar_size = 0
+        received_bytes = 0  # Cumulative bytes received across all files
 
         try:
             while True:
                 data = self._recv_frame(5.0)
                 if data is None:
                     elapsed = time.time() - last_progress_time
-                    if elapsed > 30:
-                        print(f"\n  Timeout ({frame_count} frames)")
-                    elif elapsed > 3 and frame_count > 0:
-                        print(f"\n  No data for {elapsed:.1f}s")
+                    if elapsed > 60:
+                        print(f"\n  Timeout ({frame_count} frames, {elapsed:.0f}s)")
                         return False
                     continue
 
@@ -497,6 +514,8 @@ class WiFiSync:
 
                 # DATA
                 if frame_type == UDP_FRAME_DATA:
+                    if current_name is None:
+                        continue  # No active file, discard stale frames
                     if len(data) < UDP_DATA_HEADER_SIZE:
                         continue
                     seq = data[1] | (data[2] << 8)
@@ -517,19 +536,14 @@ class WiFiSync:
                     file_crc = binascii.crc32(payload, file_crc) & 0xFFFFFFFF
                     frame_count += 1
                     last_progress_time = time.time()
+                    received_bytes += len(payload)
 
                     # Update progress bar
                     if pbar is not None:
-                        completed = sum(
-                            Path(session_dir / f).stat().st_size
-                            for _, f in downloaded_files
-                            if (session_dir / f).exists()
-                        )
-                        current_total = completed + len(current_data)
-                        delta = current_total - last_pbar_size
-                        if delta > 0:
+                        delta = received_bytes - last_pbar_size
+                        if delta >= 4096:  # Update every ~4KB to reduce overhead
                             pbar.update(delta)
-                            last_pbar_size = current_total
+                            last_pbar_size = received_bytes
                     else:
                         # Progress dots fallback
                         if frame_count < 5 or len(current_data) % (64 * 1024) < data_len:
@@ -553,6 +567,13 @@ class WiFiSync:
                             if current_name.endswith('.opus'):
                                 downloaded_files.append((current_name, out_file))
                             files_received += 1
+
+                        # Flush remaining progress for this file
+                        if pbar is not None:
+                            remaining = received_bytes - last_pbar_size
+                            if remaining > 0:
+                                pbar.update(remaining)
+                                last_pbar_size = received_bytes
                     else:
                         self._send_file_ack(False)
                         current_name = None

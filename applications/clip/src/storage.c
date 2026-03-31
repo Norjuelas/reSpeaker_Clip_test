@@ -847,17 +847,14 @@ int storage_get_session_info(const char *session_id, struct storage_session_info
                 }
             }
 
-            /* Parse recording flag - if recording, set synced_files = 0 */
+            /* Parse recording flag - if still recording, reset synced */
             p = strstr(json_buf, "\"recording\":");
             if (p && strncmp(p + 12, "true", 4) == 0)
             {
                 info->synced_files = 0; /* Still recording, nothing synced yet */
             }
-            else
-            {
-                /* Recording completed, all files are synced */
-                info->synced_files = info->file_count;
-            }
+            /* Note: do NOT override synced_files when recording is done.
+             * The synced field in session.json is the authoritative value. */
         }
     }
 

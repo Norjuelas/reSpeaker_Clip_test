@@ -630,7 +630,7 @@ static int cmd_purgeable_handler(struct at_cmd_ctx *ctx, char *response, size_t 
         return create_json_response(false, "Failed to list sessions", NULL, response, len);
     }
 
-    /* Find fully synced sessions (synced_files == file_count && file_count > 0) */
+    /* Find fully synced sessions (synced up to last file) */
     int purgeable_count = 0;
     uint64_t total_bytes = 0;
     char ids_buf[1024];
@@ -1333,7 +1333,14 @@ static int cmd_download_handler(struct at_cmd_ctx *ctx, char *response, size_t l
     }
 
     /* Start transfer using the transport that received the command */
-    int err = transfer_start(session_id, filename, tp);
+    int err;
+    if (filename) {
+        /* Resume from specific file — transfer all remaining files */
+        err = transfer_resume_from(session_id, filename, tp);
+    } else {
+        /* Transfer entire session */
+        err = transfer_start(session_id, NULL, tp);
+    }
     if (err) {
         const char *msg = "Failed to start transfer";
         if (err == -ENOENT) msg = "Session or file not found";

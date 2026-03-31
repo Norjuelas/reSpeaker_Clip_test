@@ -119,6 +119,11 @@ static void udp_server_thread(void *p1, void *p2, void *p3)
     };
     zsock_setsockopt(server_sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 
+    /* Increase socket buffers to reduce packet loss under load */
+    int sock_buf = CONFIG_CLIP_UDP_SOCKET_BUF_SIZE;
+    zsock_setsockopt(server_sock, SOL_SOCKET, SO_RCVBUF, &sock_buf, sizeof(sock_buf));
+    zsock_setsockopt(server_sock, SOL_SOCKET, SO_SNDBUF, &sock_buf, sizeof(sock_buf));
+
     if (zsock_bind(server_sock, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
         LOG_ERR("bind() failed: %d", errno);
         zsock_close(server_sock);

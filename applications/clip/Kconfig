@@ -187,7 +187,11 @@ config CLIP_UDP_THREAD_PRIORITY
 
 config CLIP_UDP_RECV_BUF_SIZE
 	int "UDP receive buffer size"
-	default 1024
+	default 2048
+
+config CLIP_UDP_SOCKET_BUF_SIZE
+	int "UDP socket SO_RCVBUF/SO_SNDBUF size"
+	default 4096
 
 config CLIP_UDP_MAX_DATA_SIZE
 	int "UDP maximum data per packet"
