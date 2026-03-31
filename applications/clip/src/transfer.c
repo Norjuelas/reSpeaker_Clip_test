@@ -703,8 +703,8 @@ process_next_file:
                         break;
                     }
 
-                    /* File ACKed OK — store the file number (1-based) synced up to */
-                    current_transfer.synced_files = current_transfer.file_index + 1;
+                    /* File ACKed OK — file_index is already 1-based */
+                    current_transfer.synced_files = current_transfer.file_index;
 
                     /* Close file */
                     fs_close(&transfer_file);

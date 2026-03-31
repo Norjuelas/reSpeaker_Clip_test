@@ -39,6 +39,7 @@ static struct fs_file_t *current_file_ptr = NULL;
 static uint32_t total_chunks = 0;
 static uint64_t total_bytes = 0;
 static uint32_t free_space_mb = 0;
+static uint64_t session_bytes_base = 0;  /* total_bytes at session start */
 
 /* Current recording session */
 static char current_session_id[STORAGE_SESSION_ID_LEN] = {0};
@@ -57,7 +58,7 @@ static int create_session_json(const char *path, const char *session_id,
                                uint8_t channels, uint32_t sample_rate,
                                const char *mode);
 static int update_session_json(const char *session_id, uint32_t duration_sec,
-                               uint32_t chunk_count);
+                               uint32_t chunk_count, uint64_t session_bytes);
 static int flush_write_buffer(void);
 
 int storage_init(void)
@@ -180,6 +181,7 @@ int storage_create_session(const char *session_id, uint8_t channels,
     /* Store current session */
     strncpy(current_session_id, session_id, sizeof(current_session_id) - 1);
     current_session_id[sizeof(current_session_id) - 1] = '\0';
+    session_bytes_base = total_bytes;
 
     return 0;
 }
@@ -192,11 +194,13 @@ int storage_close_session(const char *session_id, uint32_t duration_sec,
         return -EINVAL;
     }
 
-    LOG_INF("Closing session: %s (chunks=%u, duration=%u sec)",
-            session_id, chunk_count, duration_sec);
+    uint64_t session_bytes = total_bytes - session_bytes_base;
+
+    LOG_INF("Closing session: %s (chunks=%u, bytes=%llu, duration=%u sec)",
+            session_id, chunk_count, session_bytes, duration_sec);
 
     /* Update session.json with final values */
-    update_session_json(session_id, duration_sec, chunk_count);
+    update_session_json(session_id, duration_sec, chunk_count, session_bytes);
 
     /* Clear current session if matching */
     if (strcmp(current_session_id, session_id) == 0)
@@ -858,13 +862,7 @@ int storage_get_session_info(const char *session_id, struct storage_session_info
         }
     }
 
-    /* Calculate total bytes from file count (approximate: ~3KB per 20s at 24kbps) */
-    if (info->file_count > 0 && info->total_bytes == 0)
-    {
-        /* Approximate: each file is roughly duration/20 * (bitrate/8) bytes */
-        /* For simplicity, estimate based on file_count */
-        info->total_bytes = (uint64_t)info->file_count * 3000; /* Rough estimate */
-    }
+    /* No estimate — size should be written by storage_close_session */
 
     return 0;
 }
@@ -1146,7 +1144,7 @@ static int create_session_json(const char *dir_path, const char *session_id,
 }
 
 static int update_session_json(const char *session_id, uint32_t duration_sec,
-                               uint32_t chunk_count)
+                               uint32_t chunk_count, uint64_t session_bytes)
 {
     char json_path[128];
     struct fs_file_t file;
@@ -1226,14 +1224,16 @@ static int update_session_json(const char *session_id, uint32_t duration_sec,
                    "  \"id\": \"%s\",\n"
                    "  \"duration\": %u,\n"
                    "  \"files\": %u,\n"
+                   "  \"size\": %llu,\n"
                    "  \"synced\": %s,\n"
                    "  \"channels\": %s,\n"
                    "  \"sample_rate\": %s,\n"
                    "  \"mode\": \"%s\",\n"
                    "  \"recording\": false\n"
                    "}\n",
-                   session_id, duration_sec, chunk_count, synced_str,
-                   channels_str, sample_rate_str, mode_str);
+                   session_id, duration_sec, chunk_count,
+                   (unsigned long long)session_bytes,
+                   synced_str, channels_str, sample_rate_str, mode_str);
 
     if (len < 0 || len >= (int)sizeof(json_buf))
     {

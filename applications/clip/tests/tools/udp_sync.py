@@ -89,7 +89,11 @@ def main():
         print(f"\nDone: {ok}/{len(sessions_to_sync)}")
 
     except KeyboardInterrupt:
-        print("\nInterrupted")
+        print("\nInterrupted, stopping transfer...")
+        try:
+            sync._send_at_command("CANCEL")
+        except Exception:
+            pass
     except Exception as e:
         print(f"\nError: {e}")
     finally:

@@ -613,7 +613,11 @@ Examples:
         return 0
 
     except KeyboardInterrupt:
-        print("\nInterrupted by user")
+        print("\nInterrupted, stopping transfer...")
+        try:
+            await device.send_command("CANCEL")
+        except Exception:
+            pass
         return 130
     except Exception as e:
         print(f"\nError: {e}")
