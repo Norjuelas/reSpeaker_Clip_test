@@ -228,7 +228,7 @@ int storage_get_session_info(const char *session_id, struct storage_session_info
  * @param max_chunks Maximum chunks to return
  * @return Number of chunks found, or negative error code
  */
-int storage_list_chunks(const char *session_id, uint32_t *chunks, int max_chunks);
+int storage_list_chunks(const char *session_id, uint32_t *chunks, int max_chunks, int skip);
 
 /**
  * @brief Delete a session and all its chunks

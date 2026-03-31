@@ -872,13 +872,14 @@ int storage_get_session_info(const char *session_id, struct storage_session_info
     return 0;
 }
 
-int storage_list_chunks(const char *session_id, uint32_t *chunks, int max_chunks)
+int storage_list_chunks(const char *session_id, uint32_t *chunks, int max_chunks, int skip)
 {
     char dir_path[128];
     struct fs_dir_t dirp;
     struct fs_dirent entry;
     int count = 0;
     int rc;
+    int skipped = 0;
 
     if (!sd_mounted || !session_id || !chunks)
     {
@@ -887,7 +888,7 @@ int storage_list_chunks(const char *session_id, uint32_t *chunks, int max_chunks
 
     /* Open session directory */
     snprintf(dir_path, sizeof(dir_path), "%s/%s", STORAGE_BASE_PATH, session_id);
-    LOG_DBG("Listing chunks in: %s (max=%d)", dir_path, max_chunks);
+    LOG_DBG("Listing chunks in: %s (max=%d, skip=%d)", dir_path, max_chunks, skip);
 
     fs_dir_t_init(&dirp);
     rc = fs_opendir(&dirp, dir_path);
@@ -910,6 +911,12 @@ int storage_list_chunks(const char *session_id, uint32_t *chunks, int max_chunks
         size_t len = strlen(entry.name);
         if (len == 9 && strcmp(entry.name + 4, ".opus") == 0)
         {
+            /* Skip files before the requested offset */
+            if (skipped < skip)
+            {
+                skipped++;
+                continue;
+            }
             /* Extract chunk number from filename (0001.opus -> 1) */
             chunks[count] = (uint32_t)atoi(entry.name);
             count++;

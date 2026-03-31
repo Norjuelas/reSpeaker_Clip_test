@@ -1023,15 +1023,14 @@ static int cmd_list_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
 
             /* List files with pagination */
             uint32_t chunks[20];
-            int file_count = storage_list_chunks(session_id, chunks, per_page);
+            int skip = (page - 1) * per_page;
+            int file_count = storage_list_chunks(session_id, chunks, per_page, skip);
             if (file_count < 0) {
                 return create_json_response(false, "Failed to list files", NULL, response, len);
             }
 
-            /* Calculate pagination bounds */
-            int start_index = (page - 1) * per_page;
-            int end_index = start_index + per_page;
-            if (end_index > file_count) end_index = file_count;
+            /* file_count is the number of files returned for this page */
+            int end_index = file_count;
 
             /* Build JSON response */
             char *json_data = response;
@@ -1047,8 +1046,8 @@ static int cmd_list_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
             remaining -= n;
             total_written += n;
 
-            for (int i = start_index; i < end_index && remaining > 50; i++) {
-                if (i > start_index) {
+            for (int i = 0; i < end_index && remaining > 50; i++) {
+                if (i > 0) {
                     n = snprintf(json_data, remaining, ",");
                     if (n < 0 || n >= remaining) return AT_ERR_NOMEM;
                     json_data += n;
