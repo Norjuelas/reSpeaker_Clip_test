@@ -139,14 +139,6 @@ static int cmd_gstat_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
      * Clip wraps data in "data" field: {"ok":true,"data":{...}}
      */
     char data_buf[512];
-    const char *state_str = clip_state_to_string(clip_event_get_state());
-
-    /* Fix inconsistency: if audio is recording but state is not RECORDING,
-     * report RECORDING state */
-    if (audio_is_recording() && strcmp(state_str, "RECORDING") != 0) {
-        state_str = "RECORDING";
-    }
-
     int data_len = snprintf(data_buf, sizeof(data_buf),
                      "{\"state\":\"%s\","
                      "\"recording\":%s,"
@@ -158,7 +150,7 @@ static int cmd_gstat_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
                      "\"bitrate\":%u,"
                      "\"free_space\":%u,"
                      "\"device\":\"%s\"}",
-                     state_str,
+                     clip_state_to_string(clip_event_get_state()),
                      audio_is_recording() ? "true" : "false",
                      session_id ? "\"" : "", session_id ? session_id : "null", session_id ? "\"" : "",
                      recording_duration,
