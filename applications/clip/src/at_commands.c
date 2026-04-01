@@ -776,11 +776,14 @@ static int cmd_stop_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
     int ret = clip_post_event_sync(CLIP_EVENT_STOP, &info);
 
     if (ret != 0 || info.result != CLIP_EVENT_OK) {
-        if (info.result == CLIP_EVENT_INVALID) {
+        /* Fallback: if audio is actually recording but state machine is
+         * out of sync, stop audio directly */
+        if (audio_is_recording() && info.result == CLIP_EVENT_INVALID) {
+            LOG_WRN("State/audio mismatch, forcing audio stop");
+            audio_stop_recording();
+        } else {
             return create_json_response(false, "Not recording", NULL, response, len);
         }
-        return create_json_response(false, "Failed to stop recording",
-                                   NULL, response, len);
     }
 
     struct audio_stats audio_stats;
