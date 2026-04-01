@@ -96,6 +96,20 @@ static int create_json_response(bool success, const char *message,
     return AT_ERR_NOMEM;
 }
 
+/* Validate session_id: must be exactly 14 digits (YYYYMMDDHHMMSS) */
+static bool is_valid_session_id(const char *id)
+{
+    if (!id || strlen(id) != 14) {
+        return false;
+    }
+    for (int i = 0; i < 14; i++) {
+        if (id[i] < '0' || id[i] > '9') {
+            return false;
+        }
+    }
+    return true;
+}
+
 /* GSTAT Command Handler - Get device status */
 static int cmd_gstat_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
 {
@@ -125,6 +139,14 @@ static int cmd_gstat_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
      * Clip wraps data in "data" field: {"ok":true,"data":{...}}
      */
     char data_buf[512];
+    const char *state_str = clip_state_to_string(clip_event_get_state());
+
+    /* Fix inconsistency: if audio is recording but state is not RECORDING,
+     * report RECORDING state */
+    if (audio_is_recording() && strcmp(state_str, "RECORDING") != 0) {
+        state_str = "RECORDING";
+    }
+
     int data_len = snprintf(data_buf, sizeof(data_buf),
                      "{\"state\":\"%s\","
                      "\"recording\":%s,"
@@ -136,7 +158,7 @@ static int cmd_gstat_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
                      "\"bitrate\":%u,"
                      "\"free_space\":%u,"
                      "\"device\":\"%s\"}",
-                     clip_state_to_string(clip_event_get_state()),
+                     state_str,
                      audio_is_recording() ? "true" : "false",
                      session_id ? "\"" : "", session_id ? session_id : "null", session_id ? "\"" : "",
                      recording_duration,
@@ -990,6 +1012,12 @@ static int cmd_list_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
         char *query = strchr(args_copy, '?');
         char *session_id = args_copy;
 
+        /* Validate session_id: must be exactly 14 digits */
+        size_t sid_len = query ? (size_t)(query - session_id) : strlen(session_id);
+        if (sid_len != 14 || !is_valid_session_id(session_id)) {
+            return create_json_response(false, "Invalid session ID", NULL, response, len);
+        }
+
         if (query) {
             *query = '\0';
             query++;
@@ -1199,8 +1227,12 @@ static int cmd_marks_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
 
     if (question_mark) {
         *question_mark = '\0';
-        session_id = args_copy;
         query = question_mark + 1;
+
+        /* Validate session_id */
+        if (!is_valid_session_id(session_id)) {
+            return create_json_response(false, "Invalid session ID", NULL, response, len);
+        }
 
         /* Parse pagination: page&per_page */
         char *token = strtok(query, "&");
@@ -1214,6 +1246,11 @@ static int cmd_marks_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
             if (per_page < 1) per_page = 20;
             if (per_page > 100) per_page = 100;
         }
+    }
+
+    /* Validate session_id (covers both query and no-query paths) */
+    if (!is_valid_session_id(session_id)) {
+        return create_json_response(false, "Invalid session ID", NULL, response, len);
     }
 
     /* If no query, return summary */
@@ -1332,6 +1369,11 @@ static int cmd_download_handler(struct at_cmd_ctx *ctx, char *response, size_t l
         filename = colon + 1;
     }
 
+    /* Validate session_id: must be exactly 14 digits */
+    if (!is_valid_session_id(session_id)) {
+        return create_json_response(false, "Invalid session ID", NULL, response, len);
+    }
+
     /* Start transfer using the transport that received the command */
     int err;
     if (filename) {
@@ -1417,6 +1459,11 @@ static int cmd_delete_handler(struct at_cmd_ctx *ctx, char *response, size_t len
     char *end = session_id + strlen(session_id) - 1;
     while (end > session_id && (*end == ' ' || *end == '\t' || *end == '\r' || *end == '\n')) {
         *end-- = '\0';
+    }
+
+    /* Validate session_id: must be exactly 14 digits */
+    if (!is_valid_session_id(session_id)) {
+        return create_json_response(false, "Invalid session ID", NULL, response, len);
     }
 
     int err = storage_delete_session(session_id);

@@ -862,7 +862,40 @@ int storage_get_session_info(const char *session_id, struct storage_session_info
         }
     }
 
-    /* No estimate — size should be written by storage_close_session */
+    /* Fallback: if session.json has no file info (empty/corrupt),
+     * count files from directory */
+    if (info->file_count == 0 && info->total_bytes == 0 &&
+        info->channels == 0 && info->sample_rate_khz == 0)
+    {
+        char dir_path[128];
+        struct fs_dir_t dirp;
+        struct fs_dirent entry;
+
+        snprintf(dir_path, sizeof(dir_path), "%s/%s",
+                 STORAGE_BASE_PATH, session_id);
+        fs_dir_t_init(&dirp);
+        if (fs_opendir(&dirp, dir_path) == 0)
+        {
+            uint32_t file_count = 0;
+            while (fs_readdir(&dirp, &entry) == 0 && entry.name[0] != '\0')
+            {
+                size_t len = strlen(entry.name);
+                if ((len == 9 && strcmp(entry.name + 4, ".opus") == 0) ||
+                    (len == 9 && strcmp(entry.name + 4, ".ogg") == 0))
+                {
+                    file_count++;
+                }
+            }
+            fs_closedir(&dirp);
+            if (file_count > 0)
+            {
+                info->file_count = file_count;
+                LOG_WRN("session.json missing/empty for %s, "
+                        "counted %u files from directory",
+                        session_id, file_count);
+            }
+        }
+    }
 
     return 0;
 }
