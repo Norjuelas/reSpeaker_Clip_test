@@ -13,7 +13,7 @@
 #include "transport.h"
 
 /* Transfer configuration */
-#define TRANSFER_MAX_FILE_RETRIES  5  /* Max file-level retransmissions before abort */
+#define TRANSFER_MAX_FILE_RETRIES  10  /* Max file-level retransmissions before abort */
 
 /* Transfer states */
 enum transfer_state {

@@ -594,10 +594,23 @@ class WiFiSync:
 
         except socket.timeout:
             print("  Connection timeout")
-            return False
+        except KeyboardInterrupt:
+            print("\n  Interrupted, canceling transfer...")
+            try:
+                self._send_at_command("CANCEL")
+                # Wait for TRANSFER_DONE from device
+                deadline = time.time() + 3.0
+                while time.time() < deadline:
+                    try:
+                        data = self._recv_frame(1.0)
+                        if data and len(data) >= 1 and data[0] == UDP_FRAME_TRANSFER_DONE:
+                            break
+                    except Exception:
+                        break
+            except Exception:
+                pass
         except Exception as e:
             print(f"  Error: {e}")
-            return False
         finally:
             if pbar is not None:
                 pbar.close()

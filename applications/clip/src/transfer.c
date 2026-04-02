@@ -48,6 +48,7 @@ static int64_t file_transfer_start_ms = 0;
 
 /* Transfer control flags */
 static volatile bool transfer_pause_requested = false;
+static volatile bool transfer_cancel_requested = false;
 static volatile bool transfer_complete_sent = false;
 
 /* Forward declarations */
@@ -344,9 +345,8 @@ int transfer_cancel(void)
     }
 
     LOG_INF("Transfer canceled");
+    transfer_cancel_requested = true;
     transfer_pause_requested = false;
-    current_transfer.state = TRANSFER_STATE_IDLE;
-    transfer_cleanup();
 
     return 0;
 }
@@ -527,6 +527,25 @@ static void transfer_thread_main(void *p1, void *p2, void *p3)
         static int consecutive_file_errors = 0;
 
 process_next_file:
+        /* Handle cancel: send TRANSFER_DONE then cleanup */
+        if (transfer_cancel_requested) {
+            LOG_INF("Transfer thread handling cancel");
+            if (transfer_file_open) {
+                fs_close(&transfer_file);
+                transfer_file_open = false;
+            }
+            if (current_transfer.session_id[0] != '\0') {
+                send_transfer_complete_once(current_transfer.session_id,
+                                             (int)current_transfer.synced_files);
+            }
+            transfer_cancel_requested = false;
+            transfer_cleanup();
+            transfer_thread_waiting = true;
+            k_sem_take(&transfer_trigger_sem, K_FOREVER);
+            transfer_thread_waiting = false;
+            goto process_next_file;
+        }
+
         /* Check if we should be processing transfers */
         if (current_transfer.state != TRANSFER_STATE_TRANSMITTING) {
             /* Not in transmitting state, wait for next transfer */
@@ -600,7 +619,8 @@ process_next_file:
 
         /* Send data chunks */
         while (transfer_thread_running &&
-               current_transfer.state == TRANSFER_STATE_TRANSMITTING) {
+               current_transfer.state == TRANSFER_STATE_TRANSMITTING &&
+               !transfer_cancel_requested) {
 
             /* Check if transport is connected before sending */
             if (!transport_is_connected()) {
@@ -1089,6 +1109,7 @@ static void transfer_cleanup(void)
     current_transfer.total_bytes = 0;
     current_transfer.progress_percent = 0;
     transfer_pause_requested = false;
+    transfer_cancel_requested = false;
     transfer_complete_sent = false;
 }
   

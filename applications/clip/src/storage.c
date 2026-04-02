@@ -821,6 +821,13 @@ int storage_get_session_info(const char *session_id, struct storage_session_info
                 }
             }
 
+            /* Parse size (total bytes) */
+            p = strstr(json_buf, "\"size\":");
+            if (p)
+            {
+                info->total_bytes = (uint64_t)strtoull(p + 7, NULL, 10);
+            }
+
             /* Parse channels */
             p = strstr(json_buf, "\"channels\":");
             if (p)
