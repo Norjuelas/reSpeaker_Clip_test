@@ -284,8 +284,12 @@ static int udp_send_file_data_impl(const uint8_t *data, uint16_t len)
             if (!udp_ready) {
                 return -ENOTCONN;
             }
-            /* Transient send error — skip this frame, per-file CRC will catch it */
+            /* Transient send error — skip this frame, don't update CRC
+             * so CRC only reflects data actually received by client */
             LOG_WRN("DATA seq %d send error, continuing", seq);
+            next_seq = (seq + 1) & (UDP_SEQ_MODULO - 1);
+            offset += data_len;
+            continue;
         }
 
         next_seq = (seq + 1) & (UDP_SEQ_MODULO - 1);
