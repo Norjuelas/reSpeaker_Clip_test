@@ -1393,14 +1393,14 @@ static int cmd_download_handler(struct at_cmd_ctx *ctx, char *response, size_t l
     char data[256];
     if (filename) {
         snprintf(data, sizeof(data),
-                 "{\"state\":\"transmitting\",\"session\":\"%s\",\"file\":\"%s\",\"total\":%u,\"bytes\":%llu}",
+                 "{\"state\":\"transmitting\",\"session\":\"%s\",\"file\":\"%s\",\"total\":%u,\"bytes\":%u}",
                  info.session_id, info.current_file, (unsigned int)info.total_files,
-                 (unsigned long long)info.total_bytes);
+                 (unsigned int)info.total_bytes);
     } else {
         snprintf(data, sizeof(data),
-                 "{\"state\":\"transmitting\",\"session\":\"%s\",\"total\":%u,\"bytes\":%llu}",
+                 "{\"state\":\"transmitting\",\"session\":\"%s\",\"total\":%u,\"bytes\":%u}",
                  info.session_id, (unsigned int)info.total_files,
-                 (unsigned long long)info.total_bytes);
+                 (unsigned int)info.total_bytes);
     }
 
     return create_json_response(true, NULL, data, response, len);
