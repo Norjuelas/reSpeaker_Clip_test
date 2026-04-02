@@ -864,6 +864,10 @@ static int cmd_mark_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
 }
 
 /* LIST Command Handler - List sessions or chunks (matches clip protocol) */
+/* Shared sorted session cache for LIST commands */
+static struct storage_session_info cached_sessions[100];
+static int cached_count = -1;  /* -1 = not populated */
+
 static int cmd_list_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
 {
     /*
@@ -886,9 +890,9 @@ static int cmd_list_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
         return create_json_response(false, "SD card not mounted", NULL, response, len);
     }
 
-    /* Static buffers to avoid stack overflow */
-    static struct storage_session_info session_buffer[20];  /* Max 20 sessions per page */
+    /* Shared sorted session cache (populated on first call) */
     static char file_buffer[20][16];  /* File names: 0001.opus format */
+    static uint32_t chunk_buffer[20]; /* Chunk numbers for file listing */
 
     /* Default pagination values */
     int page = 1;
@@ -922,16 +926,34 @@ static int cmd_list_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
             /* Limit per_page to buffer size */
             if (per_page > 20) per_page = 20;
 
-            /* Get total count first */
-            int total_count = storage_count_sessions();
-            if (total_count < 0) {
-                return create_json_response(false, "Failed to count sessions", NULL, response, len);
+            /* Populate cache on first call */
+            if (cached_count < 0) {
+                cached_count = storage_list_sessions(cached_sessions, 100);
+                if (cached_count < 0) {
+                    cached_count = -1;
+                    return create_json_response(false, "Failed to list sessions", NULL, response, len);
+                }
+                /* Delete empty sessions and remove from cache */
+                int write = 0;
+                for (int i = 0; i < cached_count; i++) {
+                    if (cached_sessions[i].file_count == 0) {
+                        LOG_INF("Deleting empty session: %s", cached_sessions[i].session_id);
+                        storage_delete_session(cached_sessions[i].session_id);
+                    } else {
+                        if (write != i) {
+                            cached_sessions[write] = cached_sessions[i];
+                        }
+                        write++;
+                    }
+                }
+                cached_count = write;
             }
 
-            /* Calculate offset */
+            int total_count = cached_count;
+
+            /* Calculate offset and slice */
             int offset = (page - 1) * per_page;
             if (offset >= total_count) {
-                /* Page beyond available data */
                 int n = snprintf(response, len,
                     "{\"ok\":true,\"data\":{\"total\":%d,\"page\":%d,\"per_page\":%d,\"sessions\":[]}}",
                     total_count, page, per_page);
@@ -940,11 +962,9 @@ static int cmd_list_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
                 return n + 1;
             }
 
-            /* Get paginated sessions */
-            int result_count = storage_list_sessions_paginated(session_buffer, offset, per_page);
-            if (result_count < 0) {
-                return create_json_response(false, "Failed to list sessions", NULL, response, len);
-            }
+            int end = offset + per_page;
+            if (end > total_count) end = total_count;
+            int result_count = end - offset;
 
             /* Build JSON response, filtering out empty sessions and deleting them */
             char *json_data = response;
@@ -960,15 +980,8 @@ static int cmd_list_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
             remaining -= n;
             total_written += n;
 
-            for (int i = 0; i < result_count && remaining > 100; i++) {
-                /* Skip empty sessions and delete them */
-                if (session_buffer[i].file_count == 0) {
-                    LOG_INF("Deleting empty session: %s", session_buffer[i].session_id);
-                    storage_delete_session(session_buffer[i].session_id);
-                    continue;
-                }
-
-                int bookmark_count = storage_count_bookmarks(session_buffer[i].session_id);
+            for (int i = offset; i < end && remaining > 100; i++) {
+                int bookmark_count = storage_count_bookmarks(cached_sessions[i].session_id);
                 if (bookmark_count < 0) bookmark_count = 0;
 
                 if (actual_count > 0) {
@@ -981,9 +994,9 @@ static int cmd_list_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
 
                 n = snprintf(json_data, remaining,
                     "{\"id\":\"%s\",\"files\":%u,\"size\":%u,\"bookmarks\":%d}",
-                    session_buffer[i].session_id,
-                    session_buffer[i].file_count,
-                    (unsigned int)session_buffer[i].total_bytes,
+                    cached_sessions[i].session_id,
+                    cached_sessions[i].file_count,
+                    (unsigned int)cached_sessions[i].total_bytes,
                     bookmark_count);
                 if (n < 0 || n >= remaining) return AT_ERR_NOMEM;
                 json_data += n;
@@ -1120,28 +1133,31 @@ static int cmd_list_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
         return create_json_response(true, NULL, data, response, len);
     }
 
-    /* No arguments - list first page of sessions */
-    /* Read all sessions, sort newest first, delete empty ones */
-    static struct storage_session_info all_sessions[100];
-    int all_count = storage_list_sessions(all_sessions, 100);
-    if (all_count > 0) {
-        for (int i = 0; i < all_count; i++) {
-            if (all_sessions[i].file_count == 0) {
-                LOG_INF("Deleting empty session: %s", all_sessions[i].session_id);
-                storage_delete_session(all_sessions[i].session_id);
+    /* No arguments - list first page (reuse shared cache) */
+    if (cached_count < 0) {
+        cached_count = storage_list_sessions(cached_sessions, 100);
+        if (cached_count < 0) {
+            cached_count = -1;
+            return create_json_response(false, "Failed to list sessions", NULL, response, len);
+        }
+        int write = 0;
+        for (int i = 0; i < cached_count; i++) {
+            if (cached_sessions[i].file_count == 0) {
+                LOG_INF("Deleting empty session: %s", cached_sessions[i].session_id);
+                storage_delete_session(cached_sessions[i].session_id);
+            } else {
+                if (write != i) {
+                    cached_sessions[write] = cached_sessions[i];
+                }
+                write++;
             }
         }
+        cached_count = write;
     }
 
-    /* Count sessions after cleanup */
-    int total_count = storage_count_sessions();
-    if (total_count < 0) {
-        return create_json_response(false, "Failed to count sessions", NULL, response, len);
-    }
-
-    /* Use first per_page entries from sorted list */
+    int total_count = cached_count;
     per_page = 10;
-    int result_count = all_count < per_page ? all_count : per_page;
+    int result_count = total_count < per_page ? total_count : per_page;
 
     /* Build JSON response */
     char *json_data = response;
@@ -1157,7 +1173,7 @@ static int cmd_list_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
     total_written += n;
 
     for (int i = 0; i < result_count && remaining > 100; i++) {
-        int bookmark_count = storage_count_bookmarks(all_sessions[i].session_id);
+        int bookmark_count = storage_count_bookmarks(cached_sessions[i].session_id);
         if (bookmark_count < 0) bookmark_count = 0;
 
         if (i > 0) {
@@ -1170,9 +1186,9 @@ static int cmd_list_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
 
         n = snprintf(json_data, remaining,
             "{\"id\":\"%s\",\"files\":%u,\"size\":%u,\"bookmarks\":%d}",
-            all_sessions[i].session_id,
-            all_sessions[i].file_count,
-            (unsigned int)all_sessions[i].total_bytes,
+            cached_sessions[i].session_id,
+            cached_sessions[i].file_count,
+            (unsigned int)cached_sessions[i].total_bytes,
             bookmark_count);
         if (n < 0 || n >= remaining) return AT_ERR_NOMEM;
         json_data += n;
@@ -1466,6 +1482,8 @@ static int cmd_delete_handler(struct at_cmd_ctx *ctx, char *response, size_t len
         return create_json_response(false, "Failed to delete session", NULL, response, len);
     }
 
+    cached_count = -1;  /* Invalidate cache */
+
     return create_json_response(true, NULL, "{\"deleted\":true}", response, len);
 }
 
@@ -1506,6 +1524,9 @@ static int cmd_purge_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
 
     char data[64];
     snprintf(data, sizeof(data), "{\"purged\":%d,\"failed\":%d}", deleted, failed);
+
+    cached_count = -1;  /* Invalidate cache */
+
     return create_json_response(true, NULL, data, response, len);
 }
 
