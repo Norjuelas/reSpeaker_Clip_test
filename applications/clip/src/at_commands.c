@@ -1121,9 +1121,9 @@ static int cmd_list_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
     }
 
     /* No arguments - list first page of sessions */
-    /* First pass: get all sessions and delete empty ones */
-    static struct storage_session_info all_sessions[50];  /* Temp buffer for cleanup */
-    int all_count = storage_list_sessions(all_sessions, 50);
+    /* Read all sessions, sort newest first, delete empty ones */
+    static struct storage_session_info all_sessions[100];
+    int all_count = storage_list_sessions(all_sessions, 100);
     if (all_count > 0) {
         for (int i = 0; i < all_count; i++) {
             if (all_sessions[i].file_count == 0) {
@@ -1133,21 +1133,15 @@ static int cmd_list_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
         }
     }
 
-    /* Now count sessions after cleanup */
+    /* Count sessions after cleanup */
     int total_count = storage_count_sessions();
     if (total_count < 0) {
         return create_json_response(false, "Failed to count sessions", NULL, response, len);
     }
 
-    /* Use default pagination: page=1, per_page=10 */
+    /* Use first per_page entries from sorted list */
     per_page = 10;
-    if (per_page > 20) per_page = 20;
-
-    int offset = 0;
-    int result_count = storage_list_sessions_paginated(session_buffer, offset, per_page);
-    if (result_count < 0) {
-        return create_json_response(false, "Failed to list sessions", NULL, response, len);
-    }
+    int result_count = all_count < per_page ? all_count : per_page;
 
     /* Build JSON response */
     char *json_data = response;
@@ -1163,7 +1157,7 @@ static int cmd_list_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
     total_written += n;
 
     for (int i = 0; i < result_count && remaining > 100; i++) {
-        int bookmark_count = storage_count_bookmarks(session_buffer[i].session_id);
+        int bookmark_count = storage_count_bookmarks(all_sessions[i].session_id);
         if (bookmark_count < 0) bookmark_count = 0;
 
         if (i > 0) {
@@ -1176,9 +1170,9 @@ static int cmd_list_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
 
         n = snprintf(json_data, remaining,
             "{\"id\":\"%s\",\"files\":%u,\"size\":%u,\"bookmarks\":%d}",
-            session_buffer[i].session_id,
-            session_buffer[i].file_count,
-            (unsigned int)session_buffer[i].total_bytes,
+            all_sessions[i].session_id,
+            all_sessions[i].file_count,
+            (unsigned int)all_sessions[i].total_bytes,
             bookmark_count);
         if (n < 0 || n >= remaining) return AT_ERR_NOMEM;
         json_data += n;
