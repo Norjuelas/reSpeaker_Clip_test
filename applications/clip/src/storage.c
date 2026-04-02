@@ -759,6 +759,17 @@ int storage_list_sessions_paginated(struct storage_session_info *sessions,
 
     fs_closedir(&dirp);
 
+    /* Sort by session_id descending (newest first) */
+    for (int i = 0; i < count - 1; i++) {
+        for (int j = i + 1; j < count; j++) {
+            if (strcmp(sessions[i].session_id, sessions[j].session_id) < 0) {
+                struct storage_session_info tmp = sessions[i];
+                sessions[i] = sessions[j];
+                sessions[j] = tmp;
+            }
+        }
+    }
+
     return count;
 }
 
