@@ -86,11 +86,44 @@ K_MSGQ_DEFINE(clip_ev_msgq, sizeof(struct clip_event_item),
 struct k_sem event_notify_sem;
 
 /* ========================================================================== */
+/* OTA Progress Polling (Work Queue)                                             */
+/* ========================================================================== */
+
+#define OTA_PROGRESS_POLL_INTERVAL_MS  200
+
+static struct k_work_delayable ota_progress_work;
+static bool ota_in_progress = false;
+
+static void ota_progress_work_handler(struct k_work *work)
+{
+    if (ota_in_progress && g_img_mgmt_state.size > 0) {
+        size_t offset = g_img_mgmt_state.off;
+        size_t total = g_img_mgmt_state.size;
+        uint8_t pct = 0;
+
+        if (offset <= total) {
+            pct = (uint8_t)((offset * 100) / total);
+            display_set_ota_progress(pct);
+        }
+
+        /* Reschedule work if OTA still in progress and not complete */
+        if (ota_in_progress && pct < 100) {
+            k_work_schedule(&ota_progress_work, K_MSEC(OTA_PROGRESS_POLL_INTERVAL_MS));
+        }
+    }
+}
+
+/* ========================================================================== */
 /* State                                                                       */
 /* ========================================================================== */
 
 static atomic_t g_state;
 static atomic_t g_boost_refcnt;
+
+/* OTA progress tracking - store total size for percentage calculation */
+static size_t g_ota_total_size = 0;
+/* OTA chunk counter for fallback progress display */
+static uint32_t g_ota_chunk_count = 0;
 
 /* ========================================================================== */
 /* Forward Declarations                                                         */
@@ -111,16 +144,77 @@ static enum mgmt_cb_return mcumgr_dfu_cb(uint32_t event, enum mgmt_cb_return pre
 {
     if (event == MGMT_EVT_OP_IMG_MGMT_DFU_STARTED) {
         LOG_INF("MCUmgr: DFU upload started");
+        g_ota_total_size = 0;
+        g_ota_chunk_count = 0;
+        ota_in_progress = true;
+        /* Start periodic work to poll g_img_mgmt_state */
+        k_work_schedule(&ota_progress_work, K_MSEC(OTA_PROGRESS_POLL_INTERVAL_MS));
         clip_post_event(CLIP_EVENT_OTA_START);
     } else if (event == MGMT_EVT_OP_IMG_MGMT_DFU_CHUNK) {
-        /* Update OTA progress on the display */
-        if (g_img_mgmt_state.size > 0) {
-            uint8_t pct = (uint8_t)(g_img_mgmt_state.off * 100 /
-                                    g_img_mgmt_state.size);
-            display_set_ota_progress(pct);
+        /*
+         * data contains struct img_mgmt_upload_check with:
+         * - action->size: total image size
+         * - req->off: current offset
+         */
+        LOG_DBG("MCUmgr: DFU CHUNK event, data=%p, data_size=%zu",
+                data, data_size);
+
+        if (data && data_size >= sizeof(struct img_mgmt_upload_check)) {
+            struct img_mgmt_upload_check *check = (struct img_mgmt_upload_check *)data;
+
+            LOG_DBG("check=%p, action=%p, req=%p",
+                    check, check->action, check->req);
+
+            /* Get total size from action (only once, on first chunk) */
+            if (check->action && g_ota_total_size == 0) {
+                unsigned long long action_size = check->action->size;
+                if (action_size > 0) {
+                    g_ota_total_size = (size_t)action_size;
+                    LOG_INF("OTA total size from action: %zu bytes", g_ota_total_size);
+                }
+            }
+
+            /* Calculate and update progress using offset if available */
+            if (check->req) {
+                size_t offset = check->req->off;
+                size_t req_size = check->req->size;
+
+                LOG_DBG("req: off=%zu, size=%zu", offset, req_size);
+
+                /* Use req->size if total size not yet set */
+                if (g_ota_total_size == 0 && req_size > 0 && req_size != SIZE_MAX) {
+                    g_ota_total_size = req_size;
+                    LOG_INF("OTA total size from req: %zu bytes", g_ota_total_size);
+                }
+
+                if (g_ota_total_size > 0 && offset <= g_ota_total_size) {
+                    uint8_t pct = (uint8_t)((offset * 100) / g_ota_total_size);
+                    LOG_DBG("OTA progress: %u%% (offset=%zu/%zu)",
+                            pct, offset, g_ota_total_size);
+                    display_set_ota_progress(pct);
+                }
+            }
+
+            /* Fallback: use chunk count for visual feedback */
+            g_ota_chunk_count++;
+            if (g_ota_total_size == 0 && g_ota_chunk_count > 1) {
+                /* Show animated progress based on chunk count (0-90%) */
+                uint8_t pct = (g_ota_chunk_count % 90);
+                display_set_ota_progress(pct);
+                LOG_DBG("OTA fallback progress: %u%% (chunk %u)",
+                        pct, g_ota_chunk_count);
+            }
+        } else {
+            LOG_WRN("DFU CHUNK: invalid data pointer or size");
         }
     } else if (event == MGMT_EVT_OP_IMG_MGMT_DFU_PENDING) {
-        LOG_INF("MCUmgr: DFU upload complete, pending reboot");
+        LOG_INF("MCUmgr: DFU upload complete, pending reboot (chunks: %u)",
+                g_ota_chunk_count);
+        g_ota_total_size = 0;
+        g_ota_chunk_count = 0;
+        ota_in_progress = false;
+        /* Cancel the progress work */
+        k_work_cancel_delayable(&ota_progress_work);
         display_set_ota_progress(100);
     }
 
@@ -137,6 +231,8 @@ int clip_event_init(void)
 {
     atomic_set(&g_state, CLIP_STATE_IDLE);
     k_sem_init(&event_notify_sem, 0, 1);
+
+    k_work_init_delayable(&ota_progress_work, ota_progress_work_handler);
 
     mgmt_callback_register(&mcumgr_dfu_cb_handler);
 
