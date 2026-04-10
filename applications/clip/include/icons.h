@@ -41,6 +41,9 @@ typedef enum {
 	ICON_CONNECTED,          /**< Generic connected icon */
 	ICON_DISCONNECTED,       /**< Generic disconnected icon */
 	ICON_PHONE,              /**< Phone icon */
+	ICON_WIRED_CHARGING,     /**< Wired charging icon (power plug) */
+	ICON_JIANTOU,            /**< Arrow icon */
+	ICON_WIFI_CLIENT,        /**< WiFi client connected icon */
 } icon_id_t;
 
 /**

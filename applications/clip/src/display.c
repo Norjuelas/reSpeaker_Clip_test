@@ -19,6 +19,7 @@
 #include "clip.h"
 #include "config.h"
 #include "transfer.h"
+#include "transport.h"
 
 LOG_MODULE_REGISTER(display, CONFIG_CLIP_LOG_LEVEL);
 
@@ -611,16 +612,51 @@ static void render_status_bar(uint8_t *buf)
 	/* Percent symbol */
 	draw_percent(buf, digit_x + 1, digit_y);
 
-	/* BLE icon at (56, 17) */
-	if (g_status.ble_connected) {
+	/* BLE icon at (56, 17) - only show when WiFi is NOT connected */
+	if (g_status.ble_connected && !g_status.wifi_sta_connected) {
 		draw_ble_icon(buf, 56, 17, true);
 	}
 
-	/* WiFi icon at (68, 17) */
-	if (g_status.wifi_running) {
+	/* Right edge icon at (72, 17) - priority: charging > WiFi STA connected > WiFi transfer > BLE connected > arrow */
+	if (g_status.battery_charging) {
+		/* Show wired charging icon */
+		const uint8_t *bitmap = icon_get_bitmap(ICON_WIRED_CHARGING, NULL, NULL);
+		if (bitmap) {
+			icon_draw_bitmap(buf, 72, 17, bitmap, ICON_WIDTH, ICON_HEIGHT);
+		}
+	} else if (g_status.wifi_sta_connected) {
+		/* Show WiFi icon when device is connected to WiFi AP */
 		const uint8_t *wifi_bitmap = icon_get_bitmap(ICON_WIFI_CONNECTED, NULL, NULL);
 		if (wifi_bitmap) {
-			icon_draw_bitmap(buf, 68, 17, wifi_bitmap, ICON_WIDTH, ICON_HEIGHT);
+			icon_draw_bitmap(buf, 72, 17, wifi_bitmap, ICON_WIDTH, ICON_HEIGHT);
+		}
+	} else if (g_status.transferring) {
+		/* Check if transferring via WiFi (UDP) */
+		struct transport *active_tp = transport_get_active();
+		if (active_tp && active_tp->type == TRANSPORT_TYPE_UDP) {
+			/* Show WiFi icon when transferring via WiFi */
+			const uint8_t *wifi_bitmap = icon_get_bitmap(ICON_WIFI_CONNECTED, NULL, NULL);
+			if (wifi_bitmap) {
+				icon_draw_bitmap(buf, 72, 17, wifi_bitmap, ICON_WIDTH, ICON_HEIGHT);
+			}
+		} else if (g_status.ble_connected) {
+			/* Show BLE icon when transferring via BLE or BLE connected */
+			draw_ble_icon(buf, 72, 17, true);
+		} else {
+			/* Show arrow icon by default */
+			const uint8_t *arrow_bitmap = icon_get_bitmap(ICON_JIANTOU, NULL, NULL);
+			if (arrow_bitmap) {
+				icon_draw_bitmap(buf, 72, 17, arrow_bitmap, ICON_WIDTH, ICON_HEIGHT);
+			}
+		}
+	} else if (g_status.ble_connected) {
+		/* Show BLE icon when BLE is connected (no transfer) */
+		draw_ble_icon(buf, 72, 17, true);
+	} else {
+		/* Show arrow icon by default */
+		const uint8_t *arrow_bitmap = icon_get_bitmap(ICON_JIANTOU, NULL, NULL);
+		if (arrow_bitmap) {
+			icon_draw_bitmap(buf, 72, 17, arrow_bitmap, ICON_WIDTH, ICON_HEIGHT);
 		}
 	}
 
@@ -1074,12 +1110,12 @@ static void handle_event(enum ui_event event)
 static void render_current_state(void)
 {
 	switch (g_ui_state) {
-	case UI_STATE_OFF:
+	case UI_STATE_OFF://关屏
 		clear_screen(display_buffer);
 		flush_display();
 		break;
 
-	case UI_STATE_STATUS_BAR:
+	case UI_STATE_STATUS_BAR://状态栏
 		render_status_bar(display_buffer);
 		flush_display();
 		/* Check 3s timeout - transition to OFF or PAIRING_GUIDE */
@@ -1092,7 +1128,7 @@ static void render_current_state(void)
 		}
 		break;
 
-	case UI_STATE_REC_WAVE:
+	case UI_STATE_REC_WAVE://录制动画 波形
 		fast_anim_step();
 		render_recording_wave(display_buffer);
 		flush_display();
@@ -1102,7 +1138,7 @@ static void render_current_state(void)
 		}
 		break;
 
-	case UI_STATE_REC_DOT:
+	case UI_STATE_REC_DOT://录制动画 圆点
 		if (!g_dot_animation_played) {
 			/* Play dot animation (8 frames) */
 			for (int f = 0; f < DOT_CIRCLE_ANIM_FRAMES; f++) {
@@ -1119,7 +1155,7 @@ static void render_current_state(void)
 		}
 		break;
 
-	case UI_STATE_MARKING:
+	case UI_STATE_MARKING://标记动画
 		if (g_mark_frame == 0) {
 			/* Play mark animation synchronously (10 frames @ 6ms = 60ms) */
 			for (int f = 0; f < MARK_ANIM_FRAMES; f++) {
@@ -1144,23 +1180,23 @@ static void render_current_state(void)
 		/* Don't render again - animation is complete and state has changed */
 		break;
 
-	case UI_STATE_PAUSED:
+	case UI_STATE_PAUSED://暂停
 		clear_screen(display_buffer);
 		render_pause_icon(display_buffer);
 		flush_display();
 		break;
 
-	case UI_STATE_POWER_OFF:
+	case UI_STATE_POWER_OFF://关机
 		render_power_off(display_buffer);
 		flush_display();
 		break;
 
-	case UI_STATE_PAIRING_GUIDE:
+	case UI_STATE_PAIRING_GUIDE://配对引导
 		render_pairing_guide(display_buffer);
 		flush_display();
 		break;
 
-	case UI_STATE_USB_CONNECTED:
+	case UI_STATE_USB_CONNECTED://USB连接
 	{
 		clear_screen(display_buffer);
 		/* Centered text */
@@ -1172,29 +1208,29 @@ static void render_current_state(void)
 		break;
 	}
 
-	case UI_STATE_OTA:
+	case UI_STATE_OTA://OTA升级
 	{
 		clear_screen(display_buffer);
 		/* Centered text */
 		int y = (OLED_HEIGHT - 12) / 2;
-		draw_string_6x12(display_buffer, "OTA...", 26, y);
+		draw_string_6x12(display_buffer, "Updating...", 26, y);
 		flush_display();
 		break;
 	}
 
-	case UI_STATE_OTA_PROGRESS:
+	case UI_STATE_OTA_PROGRESS://OTA升级进度
 	{
 		clear_screen(display_buffer);
 
 		/* "OTA" label centered */
 		int label_y = 6;
-		draw_string_6x12(display_buffer, "OTA", 30, label_y);
+		draw_string_6x12(display_buffer, "Updating...", 26, label_y);
 
 		/* Progress bar */
 		int bar_x = 10;
 		int bar_y = 26;
 		int bar_w = OLED_WIDTH - 20;
-		int bar_h = 8;
+		int bar_h = 8;//进度条高度 改动
 
 		/* Outline */
 		for (int x = bar_x; x < bar_x + bar_w; x++) {
@@ -1224,7 +1260,7 @@ static void render_current_state(void)
 		break;
 	}
 
-	case UI_STATE_ERROR:
+	case UI_STATE_ERROR://错误显示
 	{
 		clear_screen(display_buffer);
 		/* Error icon (exclamation mark) */
@@ -1351,6 +1387,7 @@ int display_update_status(const struct display_status *status)
 
 	/* Update WiFi and storage info */
 	g_status.wifi_running = wifi_ap_is_running();
+	g_status.wifi_sta_connected = wifi_is_sta_connected();
 	struct clip_context *ctx = clip_get_context();
 	g_status.free_space_mb = ctx->status.free_space / 1024;
 	g_status.free_space_mb = g_status.free_space_mb > 0 ? g_status.free_space_mb : 0;
