@@ -33,6 +33,10 @@ LOG_MODULE_REGISTER(battery, CONFIG_CLIP_LOG_LEVEL);
 /* Battery full threshold (SoC %) */
 #define BATTERY_FULL_THRESHOLD  99
 
+/* SoC smoothing configuration for stable display */
+#define SOC_SMOOTH_ALPHA    0.3f    /* EMA factor: lower = smoother (0.1-0.5) */
+#define SOC_MAX_DELTA       3       /* Max SoC change allowed per poll cycle (%) */
+
 /* Battery model - using Nordic's preset model */
 static const struct battery_model battery_model = {
 #include "battery_model.inc"
@@ -50,6 +54,10 @@ static int64_t fg_ref_time;
 
 /* Fuel gauge state */
 static bool fg_initialized;
+
+/* SoC smoothing state */
+static float smoothed_soc = 100.0f;
+static bool soc_initialized = false;
 
 /* 60-second periodic battery level polling */
 static struct k_work_delayable battery_level_work;
@@ -184,17 +192,49 @@ static void read_and_update(void)
 				vbus_connected, is_trickle, is_cc, is_cv, charger_complete, percent, battery_full);
 		}
 	} else {
-		/* Fallback: use simple voltage-based SoC before fuel gauge init */
+		/* Fallback: piecewise-linear voltage-SoC curve for HSZ 362123 Li-Po */
 		if (voltage >= 4.15f) {
 			percent = 100;
-		} else if (voltage <= 3.3f) {
-			percent = 0;
+		} else if (voltage >= 3.75f) {
+			/* 3.75-4.15V: 50-100% (upper plateau) */
+			percent = (uint8_t)(50.0f + (voltage - 3.75f) / (4.15f - 3.75f) * 50.0f);
+		} else if (voltage >= 3.45f) {
+			/* 3.45-3.75V: 10-50% (mid plateau, relatively flat) */
+			percent = (uint8_t)(10.0f + (voltage - 3.45f) / (3.75f - 3.45f) * 40.0f);
+		} else if (voltage > 3.3f) {
+			/* 3.3-3.45V: 0-10% (steep drop at end) */
+			percent = (uint8_t)((voltage - 3.3f) / (3.45f - 3.3f) * 10.0f);
 		} else {
-			/* Linear approximation */
-			percent = (uint8_t)((voltage - 3.3f) / (4.15f - 3.3f) * 100.0f);
+			percent = 0;
 		}
 		bool battery_full = (percent >= BATTERY_FULL_THRESHOLD);
 		charging = charger_connected && (!charger_complete || !battery_full);
+	}
+
+	/* Apply SoC smoothing: EMA + rate limiting to reduce display jumping */
+	{
+		float raw_soc = (float)percent;
+		if (!soc_initialized) {
+			smoothed_soc = raw_soc;
+			soc_initialized = true;
+		} else {
+			float delta = raw_soc - smoothed_soc;
+			/* Rate limit: cap maximum change per update cycle */
+			if (delta > SOC_MAX_DELTA) {
+				delta = SOC_MAX_DELTA;
+			} else if (delta < -SOC_MAX_DELTA) {
+				delta = -SOC_MAX_DELTA;
+			}
+			/* Exponential moving average */
+			smoothed_soc += SOC_SMOOTH_ALPHA * delta;
+		}
+		if (smoothed_soc < 0.0f) {
+			smoothed_soc = 0.0f;
+		}
+		if (smoothed_soc > 100.0f) {
+			smoothed_soc = 100.0f;
+		}
+		percent = (uint8_t)(smoothed_soc + 0.5f);
 	}
 
 	/* Update battery percent */

@@ -648,6 +648,18 @@ static void render_status_bar(uint8_t *buf)
 		if (disc_bitmap) {
 			icon_draw_bitmap(buf, 72, 17, disc_bitmap, ICON_WIDTH, ICON_HEIGHT);
 		}
+	} else if (g_status.battery_charging) {
+		/* Show wired charging icon when USB power cable plugged in */
+		const uint8_t *youxian_bitmap = icon_get_bitmap(ICON_YOUXIAN_TRANSFER, NULL, NULL);
+		if (youxian_bitmap) {
+			icon_draw_bitmap(buf, 72, 17, youxian_bitmap, ICON_WIDTH, ICON_HEIGHT);
+		}
+	} else if (g_status.battery_percent < 15) {
+		/* Show low battery warning icon */
+		const uint8_t *low_bat_bitmap = icon_get_bitmap(ICON_LOW_BATTERY_DISPLAY, NULL, NULL);
+		if (low_bat_bitmap) {
+			icon_draw_bitmap(buf, 72, 17, low_bat_bitmap, ICON_WIDTH, ICON_HEIGHT);
+		}
 	} else {
 		/* Show arrow icon by default */
 		const uint8_t *arrow_bitmap = icon_get_bitmap(ICON_JIANTOU, NULL, NULL);
@@ -1380,6 +1392,8 @@ int display_update_status(const struct display_status *status)
 		return -EINVAL;
 	}
 
+	bool was_charging = g_status.battery_charging;
+
 	memcpy(&g_status, status, sizeof(g_status));
 
 	/* Update WiFi and storage info */
@@ -1398,6 +1412,9 @@ int display_update_status(const struct display_status *status)
 	if (g_ui_state == UI_STATE_STATUS_BAR) {
 		render_status_bar(display_buffer);
 		flush_display();
+	} else if (!was_charging && g_status.battery_charging) {
+		/* Charging just started, show status bar briefly */
+		display_post_event(UI_EVENT_STATUS_SHOW);
 	}
 
 	return 0;
