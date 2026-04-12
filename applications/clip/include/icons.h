@@ -44,6 +44,10 @@ typedef enum {
 	ICON_WIRED_CHARGING,     /**< Wired charging icon (power plug) */
 	ICON_JIANTOU,            /**< Arrow icon */
 	ICON_WIFI_CLIENT,        /**< WiFi client connected icon */
+	ICON_WIFI_UDP,           /**< WiFi UDP transfer icon */
+	ICON_YOUXIAN_TRANSFER,   /**< Wired transfer icon */
+	ICON_LOW_BATTERY_DISPLAY, /**< Low battery display icon */
+	ICON_DISCONNECT_NOT_TRANSFORM, /**< Disconnect not transfer icon */
 } icon_id_t;
 
 /**

@@ -132,6 +132,7 @@ static struct display_status g_status = {
 /* Recording mode */
 static bool g_recording = false;
 static bool g_enhanced_mode = false;
+static bool g_has_untransferred = false;
 
 /* REC_DOT animation tracking */
 static bool g_dot_animation_played = false;
@@ -612,19 +613,8 @@ static void render_status_bar(uint8_t *buf)
 	/* Percent symbol */
 	draw_percent(buf, digit_x + 1, digit_y);
 
-	/* BLE icon at (56, 17) - only show when WiFi is NOT connected */
-	if (g_status.ble_connected && !g_status.wifi_sta_connected) {
-		draw_ble_icon(buf, 56, 17, true);
-	}
-
-	/* Right edge icon at (72, 17) - priority: charging > WiFi STA connected > WiFi transfer > BLE connected > arrow */
-	if (g_status.battery_charging) {
-		/* Show wired charging icon */
-		const uint8_t *bitmap = icon_get_bitmap(ICON_WIRED_CHARGING, NULL, NULL);
-		if (bitmap) {
-			icon_draw_bitmap(buf, 72, 17, bitmap, ICON_WIDTH, ICON_HEIGHT);
-		}
-	} else if (g_status.wifi_sta_connected) {
+	/* Right edge icon at (72, 17) - priority: WiFi STA connected > WiFi transfer > BLE connected > arrow */
+	if (g_status.wifi_sta_connected) {
 		/* Show WiFi icon when device is connected to WiFi AP */
 		const uint8_t *wifi_bitmap = icon_get_bitmap(ICON_WIFI_CONNECTED, NULL, NULL);
 		if (wifi_bitmap) {
@@ -634,10 +624,10 @@ static void render_status_bar(uint8_t *buf)
 		/* Check if transferring via WiFi (UDP) */
 		struct transport *active_tp = transport_get_active();
 		if (active_tp && active_tp->type == TRANSPORT_TYPE_UDP) {
-			/* Show WiFi icon when transferring via WiFi */
-			const uint8_t *wifi_bitmap = icon_get_bitmap(ICON_WIFI_CONNECTED, NULL, NULL);
-			if (wifi_bitmap) {
-				icon_draw_bitmap(buf, 72, 17, wifi_bitmap, ICON_WIDTH, ICON_HEIGHT);
+			/* Show WiFi UDP transfer icon */
+			const uint8_t *wifi_udp_bitmap = icon_get_bitmap(ICON_WIFI_UDP, NULL, NULL);
+			if (wifi_udp_bitmap) {
+				icon_draw_bitmap(buf, 72, 17, wifi_udp_bitmap, ICON_WIDTH, ICON_HEIGHT);
 			}
 		} else if (g_status.ble_connected) {
 			/* Show BLE icon when transferring via BLE or BLE connected */
@@ -652,6 +642,12 @@ static void render_status_bar(uint8_t *buf)
 	} else if (g_status.ble_connected) {
 		/* Show BLE icon when BLE is connected (no transfer) */
 		draw_ble_icon(buf, 72, 17, true);
+	} else if (g_has_untransferred) {
+		/* Show disconnect icon when recording done but not transferred */
+		const uint8_t *disc_bitmap = icon_get_bitmap(ICON_DISCONNECT_NOT_TRANSFORM, NULL, NULL);
+		if (disc_bitmap) {
+			icon_draw_bitmap(buf, 72, 17, disc_bitmap, ICON_WIDTH, ICON_HEIGHT);
+		}
 	} else {
 		/* Show arrow icon by default */
 		const uint8_t *arrow_bitmap = icon_get_bitmap(ICON_JIANTOU, NULL, NULL);
@@ -1015,6 +1011,7 @@ static void handle_event(enum ui_event event)
 
 	case UI_EVENT_REC_STOP:
 		g_recording = false;
+		g_has_untransferred = true;
 		k_work_cancel_delayable(&display_timeout_work);
 		set_ui_state(UI_STATE_STATUS_BAR);
 		k_work_schedule(&display_timeout_work, K_MSEC(DISPLAY_STATUS_TIMEOUT_MS));
@@ -1230,7 +1227,7 @@ static void render_current_state(void)
 		int bar_x = 10;
 		int bar_y = 26;
 		int bar_w = OLED_WIDTH - 20;
-		int bar_h = 8;//进度条高度 改动
+		int bar_h = 2;//进度条高度 改动
 
 		/* Outline */
 		for (int x = bar_x; x < bar_x + bar_w; x++) {
@@ -1391,6 +1388,11 @@ int display_update_status(const struct display_status *status)
 	struct clip_context *ctx = clip_get_context();
 	g_status.free_space_mb = ctx->status.free_space / 1024;
 	g_status.free_space_mb = g_status.free_space_mb > 0 ? g_status.free_space_mb : 0;
+
+	/* Clear untransferred flag when transfer starts */
+	if (g_status.transferring) {
+		g_has_untransferred = false;
+	}
 
 	/* Update display if in status bar state */
 	if (g_ui_state == UI_STATE_STATUS_BAR) {
