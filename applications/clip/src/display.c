@@ -613,23 +613,16 @@ static void render_status_bar(uint8_t *buf)
 	/* Percent symbol */
 	draw_percent(buf, digit_x + 1, digit_y);
 
-	/* Right edge icon at (72, 17) - priority: WiFi STA connected > WiFi transfer > BLE connected > arrow */
-	if (g_status.wifi_sta_connected) {
-		/* Show WiFi icon when device is connected to WiFi AP */
-		const uint8_t *wifi_bitmap = icon_get_bitmap(ICON_WIFI_CONNECTED, NULL, NULL);
-		if (wifi_bitmap) {
-			icon_draw_bitmap(buf, 72, 17, wifi_bitmap, ICON_WIDTH, ICON_HEIGHT);
+	/* Right edge icon at (72, 17) - priority: UDP connected > transferring > BLE > arrow */
+	struct transport *active_tp = transport_get_active();
+	if (active_tp && active_tp->type == TRANSPORT_TYPE_UDP) {
+		/* UDP client connected — show WiFi UDP icon for entire sync session */
+		const uint8_t *wifi_udp_bitmap = icon_get_bitmap(ICON_WIFI_UDP, NULL, NULL);
+		if (wifi_udp_bitmap) {
+			icon_draw_bitmap(buf, 72, 17, wifi_udp_bitmap, ICON_WIDTH, ICON_HEIGHT);
 		}
 	} else if (g_status.transferring) {
-		/* Check if transferring via WiFi (UDP) */
-		struct transport *active_tp = transport_get_active();
-		if (active_tp && active_tp->type == TRANSPORT_TYPE_UDP) {
-			/* Show WiFi UDP transfer icon */
-			const uint8_t *wifi_udp_bitmap = icon_get_bitmap(ICON_WIFI_UDP, NULL, NULL);
-			if (wifi_udp_bitmap) {
-				icon_draw_bitmap(buf, 72, 17, wifi_udp_bitmap, ICON_WIDTH, ICON_HEIGHT);
-			}
-		} else if (g_status.ble_connected) {
+		if (g_status.ble_connected) {
 			/* Show BLE icon when transferring via BLE or BLE connected */
 			draw_ble_icon(buf, 72, 17, true);
 		} else {
@@ -639,9 +632,6 @@ static void render_status_bar(uint8_t *buf)
 				icon_draw_bitmap(buf, 72, 17, arrow_bitmap, ICON_WIDTH, ICON_HEIGHT);
 			}
 		}
-	} else if (g_status.ble_connected) {
-		/* Show BLE icon when BLE is connected (no transfer) */
-		draw_ble_icon(buf, 72, 17, true);
 	} else if (g_has_untransferred) {
 		/* Show disconnect icon when recording done but not transferred */
 		const uint8_t *disc_bitmap = icon_get_bitmap(ICON_DISCONNECT_NOT_TRANSFORM, NULL, NULL);
@@ -667,16 +657,6 @@ static void render_status_bar(uint8_t *buf)
 			icon_draw_bitmap(buf, 72, 17, arrow_bitmap, ICON_WIDTH, ICON_HEIGHT);
 		}
 	}
-
-	/* Storage indicator at bottom */
-	char space_str[12];
-	if (g_status.free_space_mb >= 1024) {
-		snprintk(space_str, sizeof(space_str), "%uG", g_status.free_space_mb / 1024);
-	} else {
-		snprintk(space_str, sizeof(space_str), "%uM", g_status.free_space_mb);
-	}
-	int space_x = (OLED_WIDTH - (int)strlen(space_str) * 6 + 1) / 2;
-	draw_string_6x12(buf, space_str, space_x, 40);
 }
 
 /* =============================================================================
@@ -944,7 +924,7 @@ static void render_pairing_guide(uint8_t *buf)
 	/* Get BLE device name */
 	const char *device_name = ble_get_device_name();
 	if (!device_name) {
-		device_name = "Clip ----";
+		device_name = "Clip C5EC";
 	}
 
 	/* Draw PHONE icon on the right, vertically centered with text */
@@ -1051,9 +1031,13 @@ static void handle_event(enum ui_event event)
 		break;
 
 	case UI_EVENT_BONDED:
-		if (g_ui_state == UI_STATE_PAIRING_GUIDE) {
+		g_status.ble_connected = ble_is_connected();
+		if (g_ui_state == UI_STATE_PAIRING_GUIDE || g_ui_state == UI_STATE_OFF) {
 			set_ui_state(UI_STATE_STATUS_BAR);
 			k_work_schedule(&display_timeout_work, K_MSEC(DISPLAY_STATUS_TIMEOUT_MS));
+		} else if (g_ui_state == UI_STATE_STATUS_BAR) {
+			render_status_bar(display_buffer);
+			flush_display();
 		}
 		break;
 
@@ -1220,6 +1204,13 @@ static void render_current_state(void)
 	case UI_STATE_OTA://OTA升级
 	{
 		clear_screen(display_buffer);
+
+		/* OTA icon in top-left corner */
+		const uint8_t *ota_icon = icon_get_bitmap(ICON_OTA, NULL, NULL);
+		if (ota_icon) {
+			icon_draw_bitmap(display_buffer, 0, 0, ota_icon, ICON_WIDTH, ICON_HEIGHT);
+		}
+
 		/* Centered text */
 		int y = (OLED_HEIGHT - 12) / 2;
 		draw_string_6x12(display_buffer, "Updating...", 26, y);
@@ -1230,6 +1221,12 @@ static void render_current_state(void)
 	case UI_STATE_OTA_PROGRESS://OTA升级进度
 	{
 		clear_screen(display_buffer);
+
+		/* OTA icon in top-left corner */
+		const uint8_t *ota_icon = icon_get_bitmap(ICON_OTA, NULL, NULL);
+		if (ota_icon) {
+			icon_draw_bitmap(display_buffer, 0, 0, ota_icon, ICON_WIDTH, ICON_HEIGHT);
+		}
 
 		/* "OTA" label centered */
 		int label_y = 6;
@@ -1259,11 +1256,14 @@ static void render_current_state(void)
 			}
 		}
 
-		/* Percentage text below bar */
+		/* Percentage text below bar - draw number and "%" separately for spacing */
 		char pct_str[8];
-		snprintk(pct_str, sizeof(pct_str), "%u%%", g_ota_percent);
-		int pct_x = (OLED_WIDTH - (int)strlen(pct_str) * 7 + 1) / 2;
-		draw_string_6x12(display_buffer, pct_str, pct_x, 38);
+		snprintk(pct_str, sizeof(pct_str), "%u", g_ota_percent);
+		int num_len = (int)strlen(pct_str);
+		int total_w = num_len * 6 + 1 + 6;  /* number chars + 1px gap + "%" */
+		int pct_x = (OLED_WIDTH - total_w) / 2;
+		int end_x = draw_string_6x12(display_buffer, pct_str, pct_x, 38);
+		draw_string_6x12(display_buffer, "%", end_x + 3, 38);
 
 		flush_display();
 		break;
@@ -1418,6 +1418,28 @@ int display_update_status(const struct display_status *status)
 	}
 
 	return 0;
+}
+
+void display_clear_untransferred(void)
+{
+	g_has_untransferred = false;
+}
+
+void display_set_transferring(bool transferring)
+{
+	g_status.transferring = transferring;
+
+	if (transferring) {
+		g_has_untransferred = false;
+	}
+
+	if (g_ui_state == UI_STATE_STATUS_BAR) {
+		render_status_bar(display_buffer);
+		flush_display();
+	} else if (transferring && g_ui_state == UI_STATE_OFF) {
+		set_ui_state(UI_STATE_STATUS_BAR);
+		k_work_schedule(&display_timeout_work, K_MSEC(DISPLAY_STATUS_TIMEOUT_MS));
+	}
 }
 
 int display_set_recording(bool recording, bool enhanced_mode)

@@ -48,6 +48,7 @@ typedef enum {
 	ICON_YOUXIAN_TRANSFER,   /**< Wired transfer icon */
 	ICON_LOW_BATTERY_DISPLAY, /**< Low battery display icon */
 	ICON_DISCONNECT_NOT_TRANSFORM, /**< Disconnect not transfer icon */
+	ICON_OTA,                 /**< OTA upgrade icon */
 } icon_id_t;
 
 /**

@@ -17,6 +17,7 @@
 #include "clip.h"
 #include "ble.h"
 #include "audio.h"
+#include "display.h"
 
 LOG_MODULE_REGISTER(transfer, CONFIG_CLIP_LOG_LEVEL);
 
@@ -173,6 +174,9 @@ int transfer_start(const char *session_id, const char *filename, struct transpor
     memset(&current_transfer, 0, sizeof(current_transfer));
     memset(last_transferred_file, 0, sizeof(last_transferred_file));
     current_transfer.state = TRANSFER_STATE_TRANSMITTING;
+
+    /* Show transfer icon on display immediately */
+    display_set_transferring(true);
     current_transfer.direction = TRANSFER_DIR_UPLOAD;
 
     strncpy(current_transfer.session_id, session_id, sizeof(current_transfer.session_id) - 1);
@@ -1084,6 +1088,9 @@ static void send_transfer_complete_once(const char *session_id, int file_count)
 
 static void transfer_cleanup(void)
 {
+    /* Restore display icon from transfer to arrow */
+    display_set_transferring(false);
+
     clip_cpu_boost_release();
 
     if (transfer_file_open) {

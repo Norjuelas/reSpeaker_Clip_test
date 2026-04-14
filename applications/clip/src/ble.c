@@ -325,6 +325,9 @@ static void connected(struct bt_conn *conn, uint8_t err)
 
     if (bond_count > 0) {
         LOG_INF("BLE connected: %s (bonded device, re-encrypting)", addr);
+        /* Already bonded: notify display immediately (no pairing_complete
+         * callback will fire for re-encryption of an existing bond). */
+        display_post_event(UI_EVENT_BONDED);
     } else {
         LOG_INF("BLE connected: %s (no bond - waiting for pairing)", addr);
     }

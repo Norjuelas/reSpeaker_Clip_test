@@ -148,4 +148,12 @@ void display_post_error(const char *msg);
  */
 int clip_display_set_brightness(uint8_t brightness);
 
+void display_clear_untransferred(void);
+
+/**
+ * @brief Update transfer status and refresh display immediately
+ * @param transferring true if transfer is active, false when done
+ */
+void display_set_transferring(bool transferring);
+
 #endif /* CLIP_DISPLAY_H */
