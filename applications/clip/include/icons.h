@@ -18,9 +18,9 @@
  * Each row uses 2 bytes (16 bits = 16 pixels)
  */
 
-#define ICON_WIDTH  16
-#define ICON_HEIGHT 16
-#define ICON_SIZE_BYTES 32  /* 16 rows * 2 bytes per row */
+#define ICON_WIDTH  24
+#define ICON_HEIGHT 24
+#define ICON_SIZE_BYTES 72  /* 24 rows * 3 bytes per row */
 
 /**
  * @brief Icon identifiers

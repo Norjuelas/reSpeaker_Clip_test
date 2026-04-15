@@ -169,14 +169,11 @@ static void read_and_update(void)
 			charge_status_inform(chg_status);
 		}
 
-		/* Convert current for Nordic lib (negative=charging) */
-		float current_nordic = -current;
-
 		/* Calculate time delta */
 		float delta = (float)k_uptime_delta(&fg_ref_time) / 1000.f;
 
 		/* Process fuel gauge to get SoC */
-		float soc = nrf_fuel_gauge_process(voltage, current_nordic, temp, delta, NULL);
+		float soc = nrf_fuel_gauge_process(voltage, current, temp, delta, NULL);
 		percent = (uint8_t)soc;
 
 		/* Determine charging status for display/BLE:
@@ -373,9 +370,6 @@ int battery_init(void)
 		LOG_INF("  Current: %.3f A (%d mA)", init_params.i0, (int)(init_params.i0 * 1000));
 		LOG_INF("  Temperature: %.1f C", init_params.t0);
 		LOG_INF("  Charger status: 0x%02x", (unsigned int)chg_status);
-
-		/* Convert current: Zephyr uses negative=discharging, Nordic lib uses negative=charging */
-		init_params.i0 = -init_params.i0;
 
 		/* Get charge current limits */
 		sensor_channel_get(charger_dev, SENSOR_CHAN_GAUGE_DESIRED_CHARGING_CURRENT, &value);
