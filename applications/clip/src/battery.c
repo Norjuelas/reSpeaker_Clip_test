@@ -56,7 +56,7 @@ static int64_t fg_ref_time;
 static bool fg_initialized;
 
 /* SoC smoothing state */
-static float smoothed_soc = 100.0f;
+static float smoothed_soc = 0.0f;  /* Will be initialized on first read */
 static bool soc_initialized = false;
 
 /* 60-second periodic battery level polling */

@@ -595,7 +595,7 @@ static void draw_ble_icon(uint8_t *buf, int x, int y, bool connected)
 	}
 }
 
-/* Full-screen 88x48 low battery icon (MSB First Vertical, 88 cols x 6 bytes/col) */
+/* Full-screen 88x48 low battery icon (Vertical MSB First, 88 cols x 6 bytes/col) */
 #define LOWBAT_WIDTH  88
 #define LOWBAT_HEIGHT 48
 #define LOWBAT_BYTES_PER_COL 6
@@ -650,12 +650,28 @@ static const uint8_t icon_low_battery_full[LOWBAT_SIZE] = {
 
 static void draw_low_battery_fullscreen(uint8_t *buf)
 {
-	for (int row = 0; row < LOWBAT_HEIGHT; row++) {
-		for (int col = 0; col < LOWBAT_WIDTH; col++) {
-			uint8_t byte_idx = col * LOWBAT_BYTES_PER_COL + (row / 8);
-			uint8_t bit_idx = 7 - (row % 8);
-			if (icon_low_battery_full[byte_idx] & (1 << bit_idx)) {
-				set_pixel_direct(buf, col, row);
+	/* Vertical MSB First format: 88 cols × 6 bytes/col
+	 * Data is organized by columns (vertical)
+	 * Each column has 6 bytes for 48 rows (6 × 8 = 48)
+	 * Within each byte: bit 7 (MSB) = first row of that byte group
+	 *                   bit 6 = second row, ..., bit 0 (LSB) = eighth row
+	 */
+	for (int col = 0; col < LOWBAT_WIDTH; col++) {
+		for (int byte_in_col = 0; byte_in_col < LOWBAT_BYTES_PER_COL; byte_in_col++) {
+			uint8_t src_byte_idx = col * LOWBAT_BYTES_PER_COL + byte_in_col;
+			if (src_byte_idx >= LOWBAT_SIZE) break;
+
+			uint8_t src_byte = icon_low_battery_full[src_byte_idx];
+
+			/* Process each bit in this byte (8 rows), MSB first */
+			for (int bit = 0; bit < 8; bit++) {
+				int row = byte_in_col * 8 + bit;
+				if (row >= LOWBAT_HEIGHT) break;
+
+				/* MSB first: bit 7 is first row in this byte group */
+				if (src_byte & (1 << (7 - bit))) {
+					set_pixel_direct(buf, col, row);
+				}
 			}
 		}
 	}
@@ -665,8 +681,8 @@ static void render_status_bar(uint8_t *buf)
 {
 	clear_screen(buf);
 
-	/* Low battery full-screen warning (not charging and < 15%) */
-	if (!g_status.battery_charging && g_status.battery_percent < 15) {
+	/* Low battery full-screen warning (not charging and < 10%) */
+	if (!g_status.battery_charging && g_status.battery_percent < 10) {
 		draw_low_battery_fullscreen(buf);
 		return;
 	}
@@ -717,12 +733,6 @@ static void render_status_bar(uint8_t *buf)
 		const uint8_t *youxian_bitmap = icon_get_bitmap(ICON_YOUXIAN_TRANSFER, NULL, NULL);
 		if (youxian_bitmap) {
 			icon_draw_bitmap(buf, 64, 12, youxian_bitmap, ICON_WIDTH, ICON_HEIGHT);
-		}
-	} else if (g_status.battery_percent < 15) {
-		/* Show low battery warning icon */
-		const uint8_t *low_bat_bitmap = icon_get_bitmap(ICON_LOW_BATTERY_DISPLAY, NULL, NULL);
-		if (low_bat_bitmap) {
-			icon_draw_bitmap(buf, 64, 12, low_bat_bitmap, ICON_WIDTH, ICON_HEIGHT);
 		}
 	} else {
 		/* Show arrow icon by default */

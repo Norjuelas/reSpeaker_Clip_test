@@ -30,6 +30,7 @@
 #include "transport_udp.h"
 #include "clip_event.h"
 #include "battery.h"
+#include "haptic.h"
 
 LOG_MODULE_REGISTER(main, CONFIG_CLIP_LOG_LEVEL);
 
@@ -168,6 +169,12 @@ int clip_init(void)
     err = battery_init();
     if (err) {
         LOG_WRN("Battery init failed: %d", err);
+    }
+
+    /* Initialize haptic motor */
+    err = haptic_init();
+    if (err) {
+        LOG_WRN("Haptic init failed: %d", err);
     }
 
     /* Initialize transport layer */
