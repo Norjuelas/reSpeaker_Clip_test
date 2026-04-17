@@ -69,10 +69,22 @@ static int prev_bond_count;
 /* Work queue for advertising restart */
 static struct k_work adv_work;
 
-/* Advertising parameters (100-150ms interval) */
-static const struct bt_le_adv_param adv_param =
+/* Fast advertising: for initial pairing discovery (100-150ms) */
+static const struct bt_le_adv_param adv_param_fast =
     BT_LE_ADV_PARAM_INIT(BT_LE_ADV_OPT_CONN, BT_GAP_ADV_FAST_INT_MIN_2,
                          BT_GAP_ADV_FAST_INT_MAX_2, NULL);
+
+/* Slow advertising: for reconnection after bonding (1000-2000ms) */
+static const struct bt_le_adv_param adv_param_slow =
+    BT_LE_ADV_PARAM_INIT(BT_LE_ADV_OPT_CONN,
+                         BT_GAP_ADV_SLOW_INT_MIN,
+                         BT_GAP_ADV_SLOW_INT_MAX, NULL);
+
+#define ADV_FAST_TIMEOUT_MS 30000   /* Switch to slow advertising after 30s */
+#define BLE_INACTIVITY_TIMEOUT_MS (5 * 60 * 1000)  /* 5 minutes */
+
+static struct k_work_delayable adv_timeout_work;
+static struct k_work_delayable inactivity_work;
 
 /* Work for security timeout */
 static struct k_work_delayable security_timeout_work;
@@ -273,16 +285,55 @@ static void generate_device_name(void)
     LOG_INF("Device name: %s", ble_ctx.device_name);
 }
 
+/* Advertising fast→slow timeout handler */
+static void adv_timeout_handler(struct k_work *work)
+{
+	/* Skip if already connected (no advertising active) */
+	if (ble_is_connected()) {
+		return;
+	}
+
+	/* Unbonded devices stay fast for discoverability */
+	if (!ble_is_bonded()) {
+		k_work_reschedule(&adv_timeout_work, K_MSEC(ADV_FAST_TIMEOUT_MS));
+		return;
+	}
+
+	LOG_INF("Switching to slow advertising");
+	bt_le_adv_stop();
+	int err = bt_le_adv_start(&adv_param_slow, ad, ARRAY_SIZE(ad),
+				  sd, ARRAY_SIZE(sd));
+	if (err && err != -EALREADY) {
+		LOG_ERR("Slow advertising start failed: %d", err);
+	}
+}
+
+/* BLE inactivity timeout handler - disconnect after 5 minutes idle */
+static void inactivity_timeout_handler(struct k_work *work)
+{
+	if (ble_ctx.conn) {
+		LOG_INF("BLE inactivity timeout, disconnecting");
+		bt_conn_disconnect(ble_ctx.conn,
+				   BT_HCI_ERR_REMOTE_USER_TERM_CONN);
+	}
+}
+
 /* Advertising restart handler */
 static void adv_work_handler(struct k_work *work)
 {
-    int err;
+	int err;
+	const struct bt_le_adv_param *param = ble_is_bonded()
+		? &adv_param_fast : &adv_param_fast;
 
-    err = bt_le_adv_start(&adv_param, ad, ARRAY_SIZE(ad),
-                          sd, ARRAY_SIZE(sd));
-    if (err && err != -EALREADY) {
-        LOG_ERR("Advertising restart failed: %d", err);
-    }
+	err = bt_le_adv_start(param, ad, ARRAY_SIZE(ad),
+			      sd, ARRAY_SIZE(sd));
+	if (err && err != -EALREADY) {
+		LOG_ERR("Advertising restart failed: %d", err);
+	} else {
+		/* Schedule switch to slow advertising after timeout */
+		k_work_reschedule(&adv_timeout_work,
+				  K_MSEC(ADV_FAST_TIMEOUT_MS));
+	}
 }
 
 /* Bond count callback for checking existing bonds */
@@ -342,6 +393,10 @@ static void connected(struct bt_conn *conn, uint8_t err)
 
     /* Delay MTU exchange until after security is established */
     k_work_schedule(&mtu_work, K_MSEC(1000));
+
+    /* Start BLE inactivity timeout */
+    k_work_reschedule(&inactivity_work,
+		      K_MSEC(BLE_INACTIVITY_TIMEOUT_MS));
 }
 
 static void disconnected(struct bt_conn *conn, uint8_t reason)
@@ -358,6 +413,8 @@ static void disconnected(struct bt_conn *conn, uint8_t reason)
 
         /* Cancel security timeout */
         k_work_cancel_delayable(&security_timeout_work);
+        k_work_cancel_delayable(&inactivity_work);
+        k_work_cancel_delayable(&adv_timeout_work);
 
         LOG_INF("BLE disconnected: %s (reason=0x%02x)", addr, reason);
 
@@ -525,6 +582,9 @@ static ssize_t cmd_recv_write(struct bt_conn *conn,
         return BT_GATT_ERR(BT_ATT_ERR_INSUFFICIENT_RESOURCES);
     }
 
+    /* Refresh BLE inactivity timeout on activity */
+    ble_activity_refresh();
+
     return len;
 }
 
@@ -565,6 +625,8 @@ int ble_init(void)
     k_work_init_delayable(&security_request_work, security_request_handler);
     k_work_init_delayable(&mtu_work, mtu_work_handler);
     k_work_init(&transfer_cancel_work, transfer_cancel_work_handler);
+    k_work_init_delayable(&adv_timeout_work, adv_timeout_handler);
+    k_work_init_delayable(&inactivity_work, inactivity_timeout_handler);
 
     /* Register connection callbacks */
     bt_conn_cb_register(&conn_callbacks);
@@ -588,14 +650,17 @@ int ble_init(void)
         display_post_event(UI_EVENT_PAIRING_SHOW);
     }
 
-    /* Start advertising */
-    err = bt_le_adv_start(&adv_param, ad, ARRAY_SIZE(ad),
+    /* Start advertising - always fast initially */
+    err = bt_le_adv_start(&adv_param_fast, ad, ARRAY_SIZE(ad),
                           sd, ARRAY_SIZE(sd));
     if (err) {
         if (err != -EALREADY) {
             LOG_ERR("Advertising start failed: %d", err);
         }
     }
+
+    /* Schedule switch to slow advertising (stays fast if unbonded) */
+    k_work_schedule(&adv_timeout_work, K_MSEC(ADV_FAST_TIMEOUT_MS));
 
     LOG_INF("BLE ready, device: %s", ble_ctx.device_name);
 
@@ -828,4 +893,31 @@ int ble_send_audio_vis(const uint8_t *data, uint16_t len)
     }
 
     return 0;
+}
+
+void ble_adv_restart_fast(void)
+{
+    if (ble_is_connected()) {
+	return;
+    }
+
+    bt_le_adv_stop();
+    int err = bt_le_adv_start(&adv_param_fast, ad, ARRAY_SIZE(ad),
+			      sd, ARRAY_SIZE(sd));
+    if (err && err != -EALREADY) {
+	LOG_ERR("Fast advertising restart failed: %d", err);
+    } else {
+	LOG_INF("Fast advertising restarted (button trigger)");
+    }
+
+    /* Re-schedule switch to slow advertising */
+    k_work_reschedule(&adv_timeout_work, K_MSEC(ADV_FAST_TIMEOUT_MS));
+}
+
+void ble_activity_refresh(void)
+{
+    if (ble_ctx.conn) {
+	k_work_reschedule(&inactivity_work,
+			  K_MSEC(BLE_INACTIVITY_TIMEOUT_MS));
+    }
 }

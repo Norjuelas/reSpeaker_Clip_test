@@ -23,6 +23,7 @@
 #include "audio.h"
 #include "haptic.h"
 #include "display.h"
+#include "ble.h"
 #include "wifi.h"
 
 LOG_MODULE_REGISTER(clip_event, CONFIG_CLIP_LOG_LEVEL);
@@ -518,6 +519,7 @@ static enum clip_event_result execute_transition(enum clip_event event,
 
     case CLIP_EVENT_STATUS_SHOW:
     {
+        ble_adv_restart_fast();
         display_post_event(UI_EVENT_STATUS_SHOW);
         return CLIP_EVENT_OK;
     }

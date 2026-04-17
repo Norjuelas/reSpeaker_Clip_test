@@ -158,6 +158,22 @@ uint16_t ble_get_mtu(struct bt_conn *conn);
  */
 const char *ble_get_device_name(void);
 
+/**
+ * @brief Restart BLE advertising with fast interval
+ *
+ * Called on button press to make device quickly discoverable.
+ * No-op if already connected.
+ */
+void ble_adv_restart_fast(void);
+
+/**
+ * @brief Refresh BLE inactivity timeout
+ *
+ * Resets the 5-minute inactivity disconnect timer.
+ * Called on AT command reception.
+ */
+void ble_activity_refresh(void);
+
 /* Zero-copy response buffer size */
 #define BLE_RESPONSE_BUFFER_SIZE 1024
 
