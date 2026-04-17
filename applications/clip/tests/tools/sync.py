@@ -283,8 +283,23 @@ Examples:
 
                     if merged_path.exists() and merged_path.stat().st_size > 0:
                         # Use audio format from result (fetched before session deletion)
-                        channels = result.get("channels", 1)
-                        sample_rate = result.get("sample_rate", 16000)
+                        # Fallback to local session.json if device returned 0 (race condition)
+                        channels = result.get("channels") or 1
+                        sample_rate = result.get("sample_rate") or 16000
+
+                        # Try local session.json as authoritative source
+                        local_json = session_dir / "session.json"
+                        if local_json.exists():
+                            try:
+                                import json
+                                with open(local_json) as f:
+                                    meta = json.load(f)
+                                if channels <= 0 or channels is None:
+                                    channels = meta.get("channels", 1)
+                                if sample_rate <= 0 or sample_rate is None:
+                                    sample_rate = meta.get("sample_rate", 16000)
+                            except Exception:
+                                pass
 
                         ch_str = "stereo" if channels == 2 else "mono"
                         ogg_path = session_dir / f"{session.id}.ogg"
@@ -599,8 +614,23 @@ Examples:
         # Convert to OGG Opus format
         if merged_path and merged_path.exists() and merged_path.stat().st_size > 0:
             # Use audio format from result (fetched before session deletion)
-            channels = result.get("channels", 1)
-            sample_rate = result.get("sample_rate", 16000)
+            # Fallback to local session.json if device returned 0 (race condition)
+            channels = result.get("channels") or 1
+            sample_rate = result.get("sample_rate") or 16000
+
+            # Try local session.json as authoritative source
+            local_json = merged_path.parent / "session.json"
+            if local_json.exists():
+                try:
+                    import json
+                    with open(local_json) as f:
+                        meta = json.load(f)
+                    if channels <= 0 or channels is None:
+                        channels = meta.get("channels", 1)
+                    if sample_rate <= 0 or sample_rate is None:
+                        sample_rate = meta.get("sample_rate", 16000)
+                except Exception:
+                    pass
 
             ch_str = "stereo" if channels == 2 else "mono"
             print(f"\nConverting to OGG Opus ({ch_str}, {sample_rate//1000}kHz)...")

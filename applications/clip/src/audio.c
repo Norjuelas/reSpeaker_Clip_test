@@ -1089,7 +1089,7 @@ static int mic_power_on(void)
             LOG_WRN("Mic regulator enable failed: %d", ret);
             return ret;
         }
-        k_msleep(10); /* Delay for power stabilization */
+        k_msleep(20); /* Delay for power stabilization */
     }
     return 0;
 }

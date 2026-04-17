@@ -554,15 +554,33 @@ async def record_and_sync(
         channels = 2 if mode in ["normal", "stereo"] else 1
         sample_rate = 16000
         audio_mode = mode
+
+        # Try reading from local session.json first (authoritative, avoids race
+        # with device's update_session_json truncating the file)
+        local_session_json = output_path / "session.json"
+        if local_session_json.exists():
+            try:
+                import json
+                with open(local_session_json) as f:
+                    local_meta = json.load(f)
+                channels = local_meta.get("channels", channels)
+                sample_rate = local_meta.get("sample_rate", sample_rate)
+            except Exception:
+                pass
+
         try:
             if device.is_connected:
                 session_info = await commands.get_session_info(session_id)
                 if session_info:
-                    channels = session_info.channels
-                    sample_rate = session_info.sample_rate
-                    audio_mode = session_info.mode
+                    # Only override if device returns valid (non-zero) values
+                    if session_info.channels > 0:
+                        channels = session_info.channels
+                    if session_info.sample_rate > 0:
+                        sample_rate = session_info.sample_rate
+                    if session_info.mode:
+                        audio_mode = session_info.mode
         except Exception:
-            pass  # Use defaults from mode
+            pass  # Use defaults from mode/local session.json
 
         # Delete session from device (same for both attach and normal mode)
         if delete and device.is_connected and session_id:
