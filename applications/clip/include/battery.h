@@ -18,4 +18,12 @@
  */
 int battery_init(void);
 
+/**
+ * @brief Poll battery status immediately
+ *
+ * Reads sensors, updates fuel gauge SoC, and refreshes display/BLE.
+ * Call this when the user triggers a status bar display to get fresh readings.
+ */
+void battery_poll(void);
+
 #endif /* CLIP_BATTERY_H */

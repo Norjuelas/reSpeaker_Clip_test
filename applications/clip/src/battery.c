@@ -62,6 +62,14 @@ static bool soc_initialized = false;
 /* 60-second periodic battery level polling */
 static struct k_work_delayable battery_level_work;
 
+static void read_and_update(void);
+
+void battery_poll(void)
+{
+	read_and_update();
+	LOG_INF("Battery poll: %u%%, charging=%d", last_percent, last_charging);
+}
+
 static int read_sensors(float *voltage, float *current, float *temp, int32_t *chg_status)
 {
 	struct sensor_value val;
@@ -244,7 +252,7 @@ static void read_and_update(void)
 		/* Low battery warning */
 		if (!charging) {
 			if (percent <= 15 && !low_battery_warned) {
-				display_post_error("Low Battery");
+				display_post_event(UI_EVENT_LOW_BATTERY);
 				haptic_play_pattern(HAPTIC_SHORT);
 				low_battery_warned = true;
 			}

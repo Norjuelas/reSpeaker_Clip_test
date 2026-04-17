@@ -20,6 +20,7 @@
 #include "config.h"
 #include "transfer.h"
 #include "transport.h"
+#include "battery.h"
 
 LOG_MODULE_REGISTER(display, CONFIG_CLIP_LOG_LEVEL);
 
@@ -681,12 +682,6 @@ static void render_status_bar(uint8_t *buf)
 {
 	clear_screen(buf);
 
-	/* Low battery full-screen warning (not charging and < 10%) */
-	if (!g_status.battery_charging && g_status.battery_percent < 10) {
-		draw_low_battery_fullscreen(buf);
-		return;
-	}
-
 	/* Battery icon vertically centered: (4, 12) */
 	draw_battery_by_level(buf, 4, 12, g_status.battery_percent, g_status.battery_charging);
 
@@ -1110,6 +1105,7 @@ static void handle_event(enum ui_event event)
 		break;
 
 	case UI_EVENT_STATUS_SHOW:
+		battery_poll();
 		set_ui_state(UI_STATE_STATUS_BAR);
 		k_work_schedule(&display_timeout_work, K_MSEC(DISPLAY_STATUS_TIMEOUT_MS));
 		break;
@@ -1154,7 +1150,8 @@ static void handle_event(enum ui_event event)
 
 	case UI_EVENT_TIMEOUT:
 		if (g_ui_state == UI_STATE_STATUS_BAR ||
-		    g_ui_state == UI_STATE_USB_CONNECTED) {
+		    g_ui_state == UI_STATE_USB_CONNECTED ||
+		    g_ui_state == UI_STATE_LOW_BATTERY) {
 			if (g_ota_active) {
 				set_ui_state(UI_STATE_OTA_PROGRESS);
 			} else if (g_error_active) {
@@ -1187,6 +1184,12 @@ static void handle_event(enum ui_event event)
 		g_error_active = true;
 		set_ui_state(UI_STATE_ERROR);
 		k_work_schedule(&display_timeout_work, K_MSEC(5000));
+		break;
+
+	case UI_EVENT_LOW_BATTERY:
+		battery_poll();
+		set_ui_state(UI_STATE_LOW_BATTERY);
+		k_work_schedule(&display_timeout_work, K_MSEC(3000));
 		break;
 
 	default:
@@ -1286,7 +1289,7 @@ static void render_current_state(void)
 	case UI_STATE_USB_CONNECTED: /* USB connected */
 	{
 		clear_screen(display_buffer);
-		const uint8_t *usb_icon = icon_get_bitmap(ICON_WIRED_CHARGING, NULL, NULL);
+		const uint8_t *usb_icon = icon_get_bitmap(ICON_WIRED_TRANSFER, NULL, NULL);
 		if (usb_icon) {
 			int x = (OLED_WIDTH - ICON_WIDTH) / 2;
 			int y = (OLED_HEIGHT - ICON_HEIGHT) / 2;
@@ -1373,6 +1376,14 @@ static void render_current_state(void)
 		/* Error message */
 		int msg_x = (OLED_WIDTH - (int)strlen(g_error_msg) * 6 + 1) / 2;
 		draw_string_6x12(display_buffer, g_error_msg, msg_x, y + 12);
+		flush_display();
+		break;
+	}
+
+	case UI_STATE_LOW_BATTERY: /* Low battery warning */
+	{
+		clear_screen(display_buffer);
+		draw_low_battery_fullscreen(display_buffer);
 		flush_display();
 		break;
 	}

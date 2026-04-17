@@ -38,6 +38,7 @@ enum ui_state {
 	UI_STATE_OTA,                  /**< OTA update in progress */
 	UI_STATE_OTA_PROGRESS,         /**< OTA with progress bar */
 	UI_STATE_ERROR,                /**< Error message display */
+	UI_STATE_LOW_BATTERY,          /**< Low battery warning */
 };
 
 /* =============================================================================
@@ -62,6 +63,7 @@ enum ui_event {
 	UI_EVENT_OTA_DONE,             /**< OTA update completed */
 	UI_EVENT_TIMEOUT,              /**< State timeout */
 	UI_EVENT_ERROR_SHOW,           /**< Show error message */
+	UI_EVENT_LOW_BATTERY,          /**< Low battery warning */
 };
 
 /* =============================================================================
