@@ -42,10 +42,10 @@ typedef enum {
 	ICON_DISCONNECTED,       /**< Generic disconnected icon */
 	ICON_PHONE,              /**< Phone icon */
 	ICON_WIRED_CHARGING,     /**< Wired charging icon (power plug) */
-	ICON_JIANTOU,            /**< Arrow icon */
+	ICON_ARROW,              /**< Arrow icon */
 	ICON_WIFI_CLIENT,        /**< WiFi client connected icon */
 	ICON_WIFI_UDP,           /**< WiFi UDP transfer icon */
-	ICON_YOUXIAN_TRANSFER,   /**< Wired transfer icon */
+	ICON_WIRED_TRANSFER,     /**< Wired transfer icon */
 	ICON_LOW_BATTERY_DISPLAY, /**< Low battery display icon */
 	ICON_DISCONNECT_NOT_TRANSFORM, /**< Disconnect not transfer icon */
 	ICON_OTA,                 /**< OTA upgrade icon */

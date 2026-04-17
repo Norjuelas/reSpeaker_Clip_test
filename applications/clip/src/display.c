@@ -717,7 +717,7 @@ static void render_status_bar(uint8_t *buf)
 			draw_ble_icon(buf, 64, 12, true);
 		} else {
 			/* Show arrow icon by default */
-			const uint8_t *arrow_bitmap = icon_get_bitmap(ICON_JIANTOU, NULL, NULL);
+			const uint8_t *arrow_bitmap = icon_get_bitmap(ICON_ARROW, NULL, NULL);
 			if (arrow_bitmap) {
 				icon_draw_bitmap(buf, 64, 12, arrow_bitmap, ICON_WIDTH, ICON_HEIGHT);
 			}
@@ -730,13 +730,13 @@ static void render_status_bar(uint8_t *buf)
 		}
 	} else if (g_status.battery_charging) {
 		/* Show wired charging icon when USB power cable plugged in */
-		const uint8_t *youxian_bitmap = icon_get_bitmap(ICON_YOUXIAN_TRANSFER, NULL, NULL);
-		if (youxian_bitmap) {
-			icon_draw_bitmap(buf, 64, 12, youxian_bitmap, ICON_WIDTH, ICON_HEIGHT);
+		const uint8_t *wired_bitmap = icon_get_bitmap(ICON_WIRED_TRANSFER, NULL, NULL);
+		if (wired_bitmap) {
+			icon_draw_bitmap(buf, 64, 12, wired_bitmap, ICON_WIDTH, ICON_HEIGHT);
 		}
 	} else {
 		/* Show arrow icon by default */
-		const uint8_t *arrow_bitmap = icon_get_bitmap(ICON_JIANTOU, NULL, NULL);
+		const uint8_t *arrow_bitmap = icon_get_bitmap(ICON_ARROW, NULL, NULL);
 		if (arrow_bitmap) {
 			icon_draw_bitmap(buf, 64, 12, arrow_bitmap, ICON_WIDTH, ICON_HEIGHT);
 		}
@@ -1197,12 +1197,12 @@ static void handle_event(enum ui_event event)
 static void render_current_state(void)
 {
 	switch (g_ui_state) {
-	case UI_STATE_OFF://关屏
+	case UI_STATE_OFF: /* Screen off */
 		clear_screen(display_buffer);
 		flush_display();
 		break;
 
-	case UI_STATE_STATUS_BAR://状态栏
+	case UI_STATE_STATUS_BAR: /* Status bar */
 		render_status_bar(display_buffer);
 		flush_display();
 		/* Check 3s timeout - transition to OFF or PAIRING_GUIDE */
@@ -1215,7 +1215,7 @@ static void render_current_state(void)
 		}
 		break;
 
-	case UI_STATE_REC_WAVE://录制动画 波形
+	case UI_STATE_REC_WAVE: /* Recording wave animation */
 		fast_anim_step();
 		render_recording_wave(display_buffer);
 		flush_display();
@@ -1225,7 +1225,7 @@ static void render_current_state(void)
 		}
 		break;
 
-	case UI_STATE_REC_DOT://录制动画 圆点
+	case UI_STATE_REC_DOT: /* Recording dot animation */
 		if (!g_dot_animation_played) {
 			/* Play dot animation (8 frames) */
 			for (int f = 0; f < DOT_CIRCLE_ANIM_FRAMES; f++) {
@@ -1242,7 +1242,7 @@ static void render_current_state(void)
 		}
 		break;
 
-	case UI_STATE_MARKING://标记动画
+	case UI_STATE_MARKING: /* Bookmark animation */
 		if (g_mark_frame == 0) {
 			/* Play mark animation synchronously (10 frames @ 6ms = 60ms) */
 			for (int f = 0; f < MARK_ANIM_FRAMES; f++) {
@@ -1267,35 +1267,36 @@ static void render_current_state(void)
 		/* Don't render again - animation is complete and state has changed */
 		break;
 
-	case UI_STATE_PAUSED://暂停
+	case UI_STATE_PAUSED: /* Paused */
 		clear_screen(display_buffer);
 		render_pause_icon(display_buffer);
 		flush_display();
 		break;
 
-	case UI_STATE_POWER_OFF://关机
+	case UI_STATE_POWER_OFF: /* Power off */
 		render_power_off(display_buffer);
 		flush_display();
 		break;
 
-	case UI_STATE_PAIRING_GUIDE://配对引导
+	case UI_STATE_PAIRING_GUIDE: /* Pairing guide */
 		render_pairing_guide(display_buffer);
 		flush_display();
 		break;
 
-	case UI_STATE_USB_CONNECTED://USB连接
+	case UI_STATE_USB_CONNECTED: /* USB connected */
 	{
 		clear_screen(display_buffer);
-		/* Centered text */
-		int y1 = (OLED_HEIGHT - 28) / 2;
-		int y2 = y1 + 12 + 4;
-		draw_string_6x12(display_buffer, "USB", 30, y1);
-		draw_string_6x12(display_buffer, "Connected", 14, y2);
+		const uint8_t *usb_icon = icon_get_bitmap(ICON_WIRED_CHARGING, NULL, NULL);
+		if (usb_icon) {
+			int x = (OLED_WIDTH - ICON_WIDTH) / 2;
+			int y = (OLED_HEIGHT - ICON_HEIGHT) / 2;
+			icon_draw_bitmap(display_buffer, x, y, usb_icon, ICON_WIDTH, ICON_HEIGHT);
+		}
 		flush_display();
 		break;
 	}
 
-	case UI_STATE_OTA://OTA升级
+	case UI_STATE_OTA: /* OTA update */
 	{
 		clear_screen(display_buffer);
 
@@ -1312,7 +1313,7 @@ static void render_current_state(void)
 		break;
 	}
 
-	case UI_STATE_OTA_PROGRESS://OTA升级进度
+	case UI_STATE_OTA_PROGRESS: /* OTA progress */
 	{
 		clear_screen(display_buffer);
 
@@ -1330,7 +1331,7 @@ static void render_current_state(void)
 		int bar_x = 10;
 		int bar_y = 26;
 		int bar_w = OLED_WIDTH - 20;
-		int bar_h = 2;//进度条高度 改动
+		int bar_h = 2; /* progress bar height */
 
 		/* Outline */
 		for (int x = bar_x; x < bar_x + bar_w; x++) {
@@ -1363,7 +1364,7 @@ static void render_current_state(void)
 		break;
 	}
 
-	case UI_STATE_ERROR://错误显示
+	case UI_STATE_ERROR: /* Error display */
 	{
 		clear_screen(display_buffer);
 		/* Error icon (exclamation mark) */
