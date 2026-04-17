@@ -287,22 +287,22 @@ int audio_stop_recording(void)
     k_mutex_lock(&audio_state_mutex, K_FOREVER);
 
     if (!recording_active) {
+        /* Recording not yet active, but start may be pending (semaphore given
+         * but audio thread hasn't processed it yet). Set stop_requested so
+         * the audio thread skips the pending start.
+         */
+        stop_requested = true;
         k_mutex_unlock(&audio_state_mutex);
         return 0;
     }
 
-    /* Set stop request flag - audio thread will handle cleanup */
+    /* Set stop request flag - audio thread will handle cleanup.
+     * Pause polling loop checks stop_requested, so no semaphore needed.
+     */
     stop_requested = true;
 
-    /* If paused, wake up the audio thread so it can process stop request immediately */
-    if (is_paused) {
-        k_mutex_unlock(&audio_state_mutex);
-        k_sem_give(&audio_start_sem);
-        LOG_INF("Recording stop requested (was paused, woke audio thread)");
-    } else {
-        k_mutex_unlock(&audio_state_mutex);
-        LOG_INF("Recording stop requested");
-    }
+    k_mutex_unlock(&audio_state_mutex);
+    LOG_INF("Recording stop requested");
 
     /* Wait for audio thread to finish cleanup */
     k_sem_take(&stop_done_sem, K_MSEC(2000));
@@ -336,12 +336,9 @@ int audio_resume_recording(void)
         return 0;
     }
 
-    /* Clear paused state - audio thread will resume */
+    /* Clear paused state - audio thread's polling loop will detect this */
     is_paused = false;
     k_mutex_unlock(&audio_state_mutex);
-
-    /* Wake up audio thread by giving semaphore */
-    k_sem_give(&audio_start_sem);
 
     LOG_INF("Recording resume requested");
     return 0;
@@ -626,7 +623,7 @@ void audio_recording_thread(void *p1, void *p2, void *p3)
                     }
                 }
 
-                /* Stop DMIC */
+                /* Stop DMIC and mic power to save power */
                 dmic_trigger(dmic_dev, DMIC_TRIGGER_STOP);
                 mic_power_off();
 
@@ -654,7 +651,7 @@ void audio_recording_thread(void *p1, void *p2, void *p3)
 
                 file_start_frame_count = recording_frame_count;
 
-                /* Power on microphone and restart DMIC */
+                /* Power on mic and restart DMIC */
                 mic_power_on();
                 ret = dmic_trigger(dmic_dev, DMIC_TRIGGER_START);
                 if (ret < 0) {
@@ -662,7 +659,7 @@ void audio_recording_thread(void *p1, void *p2, void *p3)
                     break;
                 }
 
-                /* Discard initial frames to eliminate mic power-up pop */
+                /* Discard initial frames for DMIC settling */
                 dmic_flush_initial();
 
                 LOG_INF("Recording resumed: new file #%u", current_file_index);
@@ -687,6 +684,7 @@ void audio_recording_thread(void *p1, void *p2, void *p3)
                         if (ret < 0) {
                             LOG_ERR("DMIC recovery failed: %d", ret);
                         } else {
+                            dmic_flush_initial();
                             LOG_INF("DMIC recovered");
                         }
                     }
@@ -1089,7 +1087,6 @@ static int mic_power_on(void)
             LOG_WRN("Mic regulator enable failed: %d", ret);
             return ret;
         }
-        k_msleep(20); /* Delay for power stabilization */
     }
     return 0;
 }
