@@ -384,7 +384,6 @@ int wifi_off(void)
 		}
 	}
 
-	LOG_INF("WiFi AP stopped");
 	return 0;
 }
 

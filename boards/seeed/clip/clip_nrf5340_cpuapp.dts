@@ -27,7 +27,6 @@
 		compatible = "regulator-fixed";
 		regulator-name = "mic_vdd";
 		enable-gpios = <&gpio1 14 GPIO_ACTIVE_HIGH>;
-		regulator-boot-on;
 		status = "okay";
 	};
 
@@ -43,8 +42,8 @@
 	rfsw_reg: regulator-rfsw {
 		compatible = "regulator-fixed";
 		regulator-name = "rfsw_vdd";
-		enable-gpios = <&gpio0 29 GPIO_ACTIVE_HIGH>;
 		regulator-boot-on;
+		enable-gpios = <&gpio0 29 GPIO_ACTIVE_HIGH>;
 		status = "okay";
 	};
 

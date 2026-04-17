@@ -108,6 +108,7 @@ struct fast_anim_bar {
 /* Display device */
 static const struct device *display_dev = NULL;
 
+
 /* Display buffer */
 static uint8_t display_buffer[OLED_BUF_SIZE];
 

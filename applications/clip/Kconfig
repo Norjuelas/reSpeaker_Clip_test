@@ -111,6 +111,14 @@ config CLIP_AUDIO_ENABLED
 	bool "Enable audio recording"
 	default y
 
+config CLIP_AUDIO_DMIC_FLUSH_FRAMES
+	int "Number of DMIC frames to discard on start/resume"
+	range 0 20
+	default 4
+	help
+	  Number of 20ms DMIC frames to discard after mic power-on
+	  to eliminate pop/click from power-up transients.
+
 # =============================================================================
 # Storage Configuration
 # =============================================================================

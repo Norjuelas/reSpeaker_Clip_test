@@ -8,6 +8,7 @@
 #include <zephyr/device.h>
 #include <zephyr/audio/dmic.h>
 #include <zephyr/drivers/gpio.h>
+#include <zephyr/drivers/regulator.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/sys/byteorder.h>
 #include <string.h>
@@ -37,7 +38,8 @@ K_MEM_SLAB_DEFINE_STATIC(audio_mem_slab, AUDIO_BLOCK_SIZE, 16, 4);
 
 /* DMIC device */
 static const struct device *const dmic_dev = DEVICE_DT_GET(DT_ALIAS(dmic0));
-static const struct gpio_dt_spec mic_en = GPIO_DT_SPEC_GET_OR(DT_NODELABEL(mic_reg), gpios, {0});
+static const struct device *mic_regulator =
+	DEVICE_DT_GET(DT_NODELABEL(mic_reg));
 
 /* PCM stream configuration for DMIC */
 static struct pcm_stream_cfg audio_stream = {
@@ -158,6 +160,7 @@ static int mic_power_off(void);
 static int audio_start_recording_internal(enum audio_mode mode);
 static int audio_stop_recording_internal(void);
 static void calculate_energy_level(int16_t *pcm_data, int frame_size);
+static void dmic_flush_initial(void);
 
 /* Static Opus packet buffer (shared across encoding operations) */
 static uint8_t opus_packet[AUDIO_MAX_PACKET_SIZE];
@@ -243,9 +246,6 @@ int audio_start_recording(enum audio_mode mode)
         LOG_WRN("Recording already active");
         return -EBUSY;
     }
-
-    LOG_INF("Recording starting, boosting CPU");
-    clip_cpu_boost_acquire();
 
     /* Store mode for audio thread */
     current_mode = mode;
@@ -464,10 +464,18 @@ static int audio_start_recording_internal(enum audio_mode mode)
         LOG_DBG("Recording to: %s", current_storage_file.filename);
     }
 
+    /* Boost CPU to 128MHz for encoding, before mic power-on.
+     * The 10ms mic stabilization delay also serves as CPU frequency
+     * settling time.
+     */
+    LOG_INF("Boosting CPU for recording");
+    clip_cpu_boost_acquire();
+
     /* Power on microphone with delay for stabilization */
     ret = mic_power_on();
     if (ret < 0) {
         LOG_ERR("Failed to power on microphone: %d", ret);
+        clip_cpu_boost_release();
         return ret;
     }
 
@@ -476,6 +484,7 @@ static int audio_start_recording_internal(enum audio_mode mode)
     if (ret < 0) {
         LOG_ERR("Failed to init Opus encoder: %d", ret);
         mic_power_off();
+        clip_cpu_boost_release();
         return ret;
     }
 
@@ -502,8 +511,12 @@ static int audio_start_recording_internal(enum audio_mode mode)
     if (ret < 0) {
         LOG_ERR("Failed to start DMIC: %d", ret);
         mic_power_off();
+        clip_cpu_boost_release();
         return ret;
     }
+
+    /* Discard initial frames to eliminate mic power-up pop */
+    dmic_flush_initial();
 
     recording_active = true;
     is_paused = false;
@@ -649,6 +662,9 @@ void audio_recording_thread(void *p1, void *p2, void *p3)
                     break;
                 }
 
+                /* Discard initial frames to eliminate mic power-up pop */
+                dmic_flush_initial();
+
                 LOG_INF("Recording resumed: new file #%u", current_file_index);
                 continue;
             }
@@ -755,11 +771,13 @@ void audio_recording_thread(void *p1, void *p2, void *p3)
                         avg_dsp, stats.frames_encoded);
             }
 
-            /* Calculate energy level from PCM data
-             * Skip when not needed: REC_DOT (static display) without BLE subscriber
+            /* Calculate energy level for visualization.
+             * Skip when BLE vis not subscribed AND display is in REC_DOT
+             * (no display animation needs the data). Always calculate when
+             * BLE client is subscribed or display shows REC_WAVE.
              */
-            if (display_get_state() == UI_STATE_REC_WAVE ||
-                ble_is_audio_vis_subscribed()) {
+            if (ble_is_audio_vis_subscribed() ||
+                display_get_state() == UI_STATE_REC_WAVE) {
                 calculate_energy_level(pcm_data, AUDIO_OPUS_FRAME_SIZE);
             }
 
@@ -1065,9 +1083,12 @@ static int16_t *process_pcm_frame(int16_t *stereo_input, int frame_size)
 
 static int mic_power_on(void)
 {
-    if (mic_en.port) {
-        gpio_pin_configure_dt(&mic_en, GPIO_OUTPUT);
-        gpio_pin_set_dt(&mic_en, 1);
+    if (mic_regulator) {
+        int ret = regulator_enable(mic_regulator);
+        if (ret) {
+            LOG_WRN("Mic regulator enable failed: %d", ret);
+            return ret;
+        }
         k_msleep(10); /* Delay for power stabilization */
     }
     return 0;
@@ -1075,11 +1096,29 @@ static int mic_power_on(void)
 
 static int mic_power_off(void)
 {
-    if (mic_en.port) {
-        gpio_pin_configure_dt(&mic_en, GPIO_OUTPUT);
-        gpio_pin_set_dt(&mic_en, 0);
+    if (mic_regulator) {
+        int ret = regulator_disable(mic_regulator);
+        if (ret) {
+            LOG_WRN("Mic regulator disable failed: %d", ret);
+            return ret;
+        }
     }
     return 0;
+}
+
+/* Flush initial DMIC frames to discard mic power-up transients */
+#define DMIC_FLUSH_FRAMES CONFIG_CLIP_AUDIO_DMIC_FLUSH_FRAMES
+
+static void dmic_flush_initial(void)
+{
+    void *buf;
+    uint32_t sz;
+
+    for (int i = 0; i < DMIC_FLUSH_FRAMES; i++) {
+        if (dmic_read(dmic_dev, 0, &buf, &sz, AUDIO_FRAME_MS * 2) == 0) {
+            k_mem_slab_free(&audio_mem_slab, buf);
+        }
+    }
 }
 
 /* ========================================
@@ -1177,6 +1216,10 @@ static void calculate_energy_level(int16_t *pcm_data, int frame_size)
      * Byte format: [val0:val1] [val2:val3] [val4:val5] [val6:val7]
      *              [val8:val9] [val10:val11] [val12:0x0] */
     static int64_t last_vis_send = 0;
+    static int vis_count = 0;
+    static int vis_ok = 0;
+    static int vis_enotconn = 0;
+    static int vis_err_other = 0;
     int64_t now = k_uptime_get();
     if (now - last_vis_send >= 200) {
         uint8_t history_copy[13];
@@ -1207,8 +1250,26 @@ static void calculate_energy_level(int16_t *pcm_data, int frame_size)
         packed[6] = history_copy[12] & 0x0F;  /* Last value in low nibble */
 
         extern int ble_send_audio_vis(const uint8_t *data, uint16_t len);
-        ble_send_audio_vis(packed, 7);
+        int vis_err = ble_send_audio_vis(packed, 7);
+        vis_count++;
+        if (vis_err == 0) {
+            vis_ok++;
+        } else if (vis_err == -ENOTCONN) {
+            vis_enotconn++;
+        } else {
+            vis_err_other++;
+        }
         last_vis_send = now;
+
+        /* Periodic diagnostic report every ~5 seconds (25 sends) */
+        if (vis_count % 25 == 0) {
+            LOG_INF("AudioVis[%d]: ok=%d enotconn=%d err=%d sub=%d lvl=%d",
+                    vis_count, vis_ok, vis_enotconn, vis_err_other,
+                    ble_is_audio_vis_subscribed(), new_level);
+            vis_ok = 0;
+            vis_enotconn = 0;
+            vis_err_other = 0;
+        }
     }
 }
 
