@@ -20,7 +20,6 @@
 #include "display.h"
 #include "ble.h"
 #include "transfer.h"
-#include "haptic.h"
 
 LOG_MODULE_REGISTER(battery, CONFIG_CLIP_LOG_LEVEL);
 
@@ -253,7 +252,6 @@ static void read_and_update(void)
 		if (!charging) {
 			if (percent <= 15 && !low_battery_warned) {
 				display_post_event(UI_EVENT_LOW_BATTERY);
-				haptic_play_pattern(HAPTIC_SHORT);
 				low_battery_warned = true;
 			}
 		}
