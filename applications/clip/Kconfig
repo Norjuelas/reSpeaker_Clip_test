@@ -23,7 +23,7 @@ source "subsys/logging/Kconfig.template.log_config"
 
 config CLIP_NORMAL_BITRATE
 	int "Normal mode Opus bitrate (bps)"
-	default 16000
+	default 24000
 
 config CLIP_NORMAL_COMPLEXITY
 	int "Normal mode Opus complexity (0-10)"
@@ -37,7 +37,7 @@ config CLIP_ENHANCED_BITRATE
 config CLIP_ENHANCED_COMPLEXITY
 	int "Enhanced mode Opus complexity (0-10)"
 	range 0 10
-	default 1
+	default 0
 
 config CLIP_DEFAULT_NOISE
 	int "Default noise suppression level (dB)"

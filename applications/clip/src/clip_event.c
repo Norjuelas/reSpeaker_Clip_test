@@ -385,9 +385,7 @@ static enum clip_event_result execute_transition(enum clip_event event,
     switch (event) {
     case CLIP_EVENT_START:
     {
-        enum audio_mode mode = (c->config.mode == MODE_NORMAL)
-                              ? AUDIO_MODE_STEREO
-                              : AUDIO_MODE_MERGE;
+        enum audio_mode mode = AUDIO_MODE_MERGE;  /* Both modes use merge (L+R → mono) */
 
         err = audio_start_recording(mode);
         if (err) {

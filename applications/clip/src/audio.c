@@ -176,7 +176,7 @@ int audio_init(void)
 
     /* Initialize audio parameters from loaded config */
     struct clip_context *c = clip_get_context();
-    current_mode = (c->config.mode == MODE_NORMAL) ? AUDIO_MODE_STEREO : AUDIO_MODE_MERGE;
+    current_mode = AUDIO_MODE_MERGE;  /* Both modes use merge (L+R → mono) */
 
     /* Set channels */
     if (current_mode == AUDIO_MODE_STEREO) {
@@ -486,8 +486,8 @@ static int audio_start_recording_internal(enum audio_mode mode)
     }
 
 #ifdef CONFIG_SPEEXDSP
-    /* Initialize/Reinitialize SpeexDSP based on mode */
-    if (current_mode == AUDIO_MODE_MERGE && c->config.noise_suppress > 0) {
+    /* Initialize/Reinitialize SpeexDSP - enhanced mode only */
+    if (c->config.mode == MODE_ENHANCED && c->config.noise_suppress > 0) {
         speex_enabled = true;
         ret = init_speex_preprocessor();
         if (ret < 0) {
@@ -918,7 +918,7 @@ static int init_opus_encoder(void)
 
     /* Create Opus encoder */
     opus_encoder = opus_encoder_create(AUDIO_SAMPLE_RATE, opus_channels,
-                       OPUS_APPLICATION_AUDIO, &err);
+                       OPUS_APPLICATION_VOIP, &err);
     if (!opus_encoder) {
         LOG_ERR("Failed to create Opus encoder: %d", err);
         return err;
