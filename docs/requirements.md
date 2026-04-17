@@ -221,7 +221,7 @@ ReSpeaker Clip is a portable Bluetooth recording device that provides high-quali
 
 **FR-3.3.4**: UDP protocol shall use binary frame format with sequence numbers, CRC32 verification, and heartbeat
 
-**FR-3.3.5**: Frame types: FILE_START (0x11), FILE_DATA (0x12), FILE_END (0x13), TRANSFER_DONE (0x14), ACK (0x80)
+**FR-3.3.5**: Frame types: DATA (0x01), FILE_ACK (0x03), FILE_START (0x10), FILE_END (0x11), TRANSFER_DONE (0x12), AT_RESP (0x20), HEARTBEAT (0x30)
 
 **FR-3.3.6**: WiFi shall be started manually (not auto-start) to save power when not in use
 
@@ -343,7 +343,9 @@ ReSpeaker Clip is a portable Bluetooth recording device that provides high-quali
 
 **FR-4.2.10**: Display brightness shall be configurable via AT+BRIGHTNESS (0-255, stored in NVS)
 
-**FR-4.2.11**: Display shall update every 50ms for animation (DISPLAY_ANIMATION_PERIOD)
+**FR-4.2.11**: Display shall show fullscreen low battery warning when battery level falls below 10%
+
+**FR-4.2.12**: Display shall update every 50ms for animation (DISPLAY_ANIMATION_PERIOD)
 
 #### 3.4.3 Haptic Feedback
 
@@ -361,9 +363,9 @@ ReSpeaker Clip is a portable Bluetooth recording device that provides high-quali
 
 #### 3.5.1 Battery Monitoring
 
-**FR-5.1.1**: The system shall monitor battery via NPM1300 PMIC fuel gauge
+**FR-5.1.1**: The system shall monitor battery via NPM1300 PMIC with nRF Fuel Gauge for accurate State of Charge estimation
 
-**FR-5.1.2**: The system shall calculate battery percentage
+**FR-5.1.2**: The system shall calculate battery percentage with SoC smoothing to avoid sudden jumps
 
 **FR-5.1.3**: The system shall report battery level in AT+GSTAT response
 
@@ -653,7 +655,7 @@ Binary format (little-endian):
 
 **DR-6.1**: Binary frame protocol with sequence numbers and CRC32 verification
 
-**DR-6.2**: Frame types: FILE_START (0x11), FILE_DATA (0x12), FILE_END (0x13), TRANSFER_DONE (0x14), ACK (0x80)
+**DR-6.2**: Frame types: DATA (0x01), FILE_ACK (0x03), FILE_START (0x10), FILE_END (0x11), TRANSFER_DONE (0x12), AT_RESP (0x20), HEARTBEAT (0x30)
 
 **DR-6.3**: Max UDP data per frame: 1024 bytes (CONFIG_CLIP_UDP_MAX_DATA_SIZE)
 
@@ -701,13 +703,15 @@ Both modes produce approximately the same storage consumption (~14.4 MB/hour).
 
 **UI-3.3**: Paused screen: static paused indicator
 
-**UI-3.4**: Status bar: battery level, connection status, mode
+**UI-3.4**: Status bar: battery level (24x24 icons with 0/25/50/75/100% + charging), connection status (BLE/WiFi/client), mode, OTA
 
 **UI-3.5**: Power-off confirmation screen
 
 **UI-3.6**: USB connected screen
 
 **UI-3.7**: OTA update progress screen
+
+**UI-3.8**: Low battery fullscreen warning (<10%)
 
 ### 9.3 Audio Visualization
 

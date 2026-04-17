@@ -424,9 +424,9 @@ Bitrate and complexity are Kconfig per-mode constants, not runtime configurable:
 **Transfer Thread** (priority 5, stack 16384): Triggered by `transfer_start()` via semaphore. Reads files from SD card in chunks (`CONFIG_CLIP_TRANSFER_CHUNK_SIZE=4096`) and sends via the active transport.
 
 **Features:**
-- File-level retransmit (up to `TRANSFER_MAX_FILE_RETRIES=5` retries)
+- File-level retransmit (up to `TRANSFER_MAX_FILE_RETRIES=10` retries)
 - Per-file CRC32 verification
-- Pause/resume/cancel
+- Pause/resume/cancel (thread-safe via volatile flag, handled in transfer thread)
 - Continuous mode (transfer while recording)
 - Progress tracking (bytes, files, percent)
 - Resume from specific file (reconnect scenario)
@@ -510,7 +510,15 @@ enum transfer_state {
 
 **Pairing**: BLE SMP with bonding, 1 max paired device, encrypted connection.
 
-### 3.12 Button Handler (button.c)
+### 3.12 Battery Monitor (battery.c)
+
+**Purpose**: Battery monitoring via NPM1300 PMIC with nRF Fuel Gauge.
+
+**Fuel Gauge**: Uses `CONFIG_NRF_FUEL_GAUGE=y` with `CONFIG_NRF_FUEL_GAUGE_VARIANT_SECONDARY_CELL=y` for accurate State of Charge (SoC) estimation. SoC is smoothed over time to avoid sudden jumps.
+
+**Reporting**: Battery level (0-100%), charging status reported via AT+GSTAT and displayed on OLED status bar.
+
+### 3.13 Button Handler (button.c)
 
 **Purpose**: Translate button hardware events into device events.
 
@@ -529,7 +537,7 @@ enum transfer_state {
 
 **Power-Off Sequence**: Two-step shutdown. Hold button shows power-off confirmation screen. Release triggers PMIC ship mode via `regulator_parent_ship_mode()`.
 
-### 3.13 Display Controller (display.c)
+### 3.14 Display Controller (display.c)
 
 **Purpose**: Event-driven CH1115 OLED display with UI state machine.
 
@@ -538,6 +546,8 @@ enum transfer_state {
 - Resolution: 88x48 pixels
 - Interface: I2C
 - Address: 0x3c
+- Icons: 24x24 pixel XBM format
+- Font: 8x16 pixel
 
 **UI States:**
 ```c
@@ -552,6 +562,7 @@ enum ui_state {
     UI_STATE_POWER_OFF,        // Power-off confirmation
     UI_STATE_USB_CONNECTED,    // USB plugged in
     UI_STATE_OTA,              // OTA in progress
+    UI_STATE_LOW_BATTERY,      // Low battery (<10%) fullscreen
 };
 ```
 
@@ -560,10 +571,18 @@ enum ui_state {
 - Enhanced mode: wave animation using real-time audio energy levels (13-bar histogram from BLE audio vis data)
 - Bookmark: flash animation
 - Status: auto-timeout after 3 seconds
+- Low battery: fullscreen warning when battery < 10%
+
+**Status Bar Icons** (24x24 XBM):
+- Battery level (0/25/50/75/100% + charging)
+- BLE connected
+- WiFi AP active + client connected
+- Recording mode (normal/enhanced)
+- OTA in progress
 
 **Brightness**: Configurable via `CONFIG_KEY_BRIGHTNESS` (0-255).
 
-### 3.14 Haptic Motor (haptic.c)
+### 3.15 Haptic Motor (haptic.c)
 
 **Purpose**: Haptic feedback via PMIC GPIO.
 
@@ -815,7 +834,7 @@ Managed independently by the transfer subsystem. Does not affect device state di
 
 **Recording with issues**: DMIC timeouts trigger auto-recovery. SD write errors close the current file but recording continues. Opus encode errors drop individual frames.
 
-**Transfer with issues**: File-level retransmit up to 5 retries. Transfer aborts after exhausting retries for a single file.
+**Transfer with issues**: File-level retransmit up to 10 retries. Transfer aborts after exhausting retries for a single file.
 
 ## 8. Configuration Reference
 

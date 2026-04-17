@@ -169,9 +169,11 @@ Client                              Server
 - **Fire-and-forget**: DATA frames are sent without waiting for per-frame ACK
 - **Per-frame CRC32**: Each DATA frame includes CRC of its payload for corruption detection
 - **Full-file CRC32**: Server accumulates CRC32 across all DATA frames for a file
+- **CRC on confirmed send only**: If `sendto()` fails, the frame's data is NOT included in the accumulated CRC, so the file CRC reflects only data actually received by the client
 - **FILE_END + wait**: After sending all DATA, server sends FILE_END with accumulated CRC32 and waits for FILE_ACK
-- **File-level retransmit**: On NACK or timeout, server retransmits the entire file (up to 3 retries)
+- **File-level retransmit**: On NACK or timeout, server retransmits the entire file (up to 10 retries)
 - **No frame buffering**: Transient send errors are skipped; per-file CRC catches data loss
+- **Thread-safe cancel**: AT+CANCEL sets a volatile flag checked by the transfer thread; cancel handling (close file, send TRANSFER_DONE, cleanup) runs entirely in the transfer thread to avoid races with the AT command thread
 
 ### Client Side
 
@@ -184,7 +186,7 @@ Client                              Server
 
 - Server retries FILE_END up to 3 times (2-second timeout each)
 - On NACK, server retransmits the entire file from FILE_START
-- Max 5 file-level retransmissions before abort (configurable: `UDP_MAX_RETRIES`)
+- Max 10 file-level retransmissions before abort (configurable: `TRANSFER_MAX_FILE_RETRIES`)
 - No per-frame retransmission
 
 ---

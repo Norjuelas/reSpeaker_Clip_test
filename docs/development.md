@@ -1,6 +1,6 @@
 # reSpeaker Clip - Development Log
 
-## Current State (2026-03-28)
+## Current State (2026-04-17)
 
 ### Implemented Features
 
@@ -20,15 +20,19 @@
 | Transport Abstraction | BLE + UDP backends via transport.h |
 | WiFi AP Mode | SSID: ClipAP_XXXX, Password: 12345678, IP: 192.168.4.1, Port: 8089 |
 | NVS Configuration | 5 settings persist: mode, noise, autodel, dereverb, brightness |
-| Battery Monitoring | NPM1300 PMIC via I2C |
+| Battery Monitoring | NPM1300 PMIC + nRF Fuel Gauge (SoC smoothing) |
 | Button Handler | Custom input driver: long-press record, short-press bookmark, single-click status |
-| OLED Display | CH1115 driver (88x48, I2C), status bar, recording time, battery, mode |
+| OLED Display | CH1115 driver (88x48, I2C), 24x24 icons, 8x16 font, status bar, recording time, battery/charging, low battery fullscreen |
 | Haptic Motor | PMIC GPIO2 control (optional, Kconfig) |
 | CPU Boost | 128MHz/64MHz reference-counted system |
 | Event System | k_msgq + k_sem driven main loop |
 | Factory Reset | Config reset + SD card format + reboot |
 | Power Off | PMIC ship mode via AT+POWEROFF |
 | Time Sync | Unix timestamp via AT+TIME, persisted to NVS |
+| Firmware Update (DFU) | MCUmgr SMP OTA DFU via BLE, dual-image, OTA progress display |
+| WiFi Client Detection | WiFi AP client connected icon in status bar |
+| Session Sorting | AT+LIST sessions sorted newest-first via shared cache |
+| Transfer Cancel | Thread-safe cancel via volatile flag (no race with transfer thread) |
 
 ### AT Commands (26)
 
@@ -74,8 +78,8 @@
 
 ### Memory Usage
 
-- FLASH: ~320 KB
-- RAM: ~242 KB
+- FLASH: ~79 KB (secure app image)
+- RAM: ~302 KB (total system)
 
 ### Recording Modes
 
@@ -107,11 +111,28 @@ minicom -D /dev/ttyACM0 -b 115200
 |---------|----------|-------|
 | Low Power Mode | Medium | Sleep when idle |
 | Auto-Purge Execution | Medium | Background task to delete old transferred sessions |
-| Firmware Update (DFU) | Low | BLE OTA |
 
 ---
 
 ## Change History
+
+### 2026-04-17 - UI Overhaul and Bug Fixes (v2.0.5)
+
+- UI overhaul: 24x24 icons, 8x16 font, battery fix, charging display
+- Low battery (<10%) full-screen display
+- Disable idle BT/WiFi icons, add OTA icon, instant transfer display refresh
+- Fuel gauge: nRF Fuel Gauge integration, SoC smoothing, charging status
+- OTA progress display
+- WiFi client connected icon
+- Fix FILE_ACK NACK: skip CRC update on UDP send failure
+- Fix AT+CANCEL race: cancel handled in transfer thread via volatile flag
+- Fix AT+LIST sorting: sessions sorted newest-first with shared cache
+- Fix DOWNLOAD response: add bytes field (use %u not %llu)
+- Fix Ctrl+C in Python tools: gracefully merge downloaded files on interrupt
+- Fix unexpected disconnect: merge files on disconnect/timeout
+- Transfer file retry limit increased from 5 to 10
+
+### 2026-03-28 - Documentation and Code Cleanup
 
 ### 2026-03-28 - Documentation and Code Cleanup
 

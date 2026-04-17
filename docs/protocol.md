@@ -495,6 +495,8 @@ List all sessions with pagination, get session details, or list files with pagin
 AT+LIST
 ```
 
+**Note:** Sessions are sorted newest-first (descending by session ID, which is a timestamp). A shared cache is used for efficient pagination — DELETE and PURGE operations invalidate the cache.
+
 **Request (Paginated Sessions):**
 ```
 AT+LIST?2&10
@@ -1458,8 +1460,8 @@ App                              Device
 File transfer runs in the background. AT commands can be sent during transfer:
 
 **Supported during transfer:**
-- `AT+GSTAT` — Query status (returns "TRANSMITTING" state)
-- `AT+CANCEL` — Cancel transfer
+- `AT+GSTAT` — Query status (returns "TRANSMITTING" state with `state`, `session`, `total`, `bytes` fields)
+- `AT+CANCEL` — Cancel transfer (thread-safe: handled in transfer thread)
 - `AT+PAUSE` — Pause transfer
 - `AT+RESUME` — Resume paused transfer
 
