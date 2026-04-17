@@ -1272,9 +1272,13 @@ static int update_session_json(const char *session_id, uint32_t duration_sec,
     }
 
     /* Write updated JSON with all fields, set recording to false
-     * Keep synced count unchanged - only transfer should update it */
+     * Keep synced count unchanged - only transfer should update it.
+     * Use FS_O_CREATE | FS_O_WRITE without FS_O_TRUNC to avoid race:
+     * concurrent readers may see an empty file if truncate happens before write.
+     * The new content is written at offset 0, overwriting the old data.
+     */
     fs_file_t_init(&file);
-    rc = fs_open(&file, json_path, FS_O_WRITE | FS_O_TRUNC);
+    rc = fs_open(&file, json_path, FS_O_CREATE | FS_O_WRITE);
     if (rc != 0)
     {
         LOG_ERR("Failed to open session.json for update: %d", rc);
