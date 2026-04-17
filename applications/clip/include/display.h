@@ -94,6 +94,12 @@ struct display_status {
 int display_init(void);
 
 /**
+ * @brief Get current UI state
+ * @return Current UI display state
+ */
+enum ui_state display_get_state(void);
+
+/**
  * @brief Check if display is ready
  * @return true if display device is ready
  */

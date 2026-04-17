@@ -28,6 +28,7 @@
 #include "storage.h"
 #include "transfer.h"
 #include "ble.h"
+#include "display.h"
 
 LOG_MODULE_REGISTER(audio, CONFIG_CLIP_LOG_LEVEL);
 
@@ -754,8 +755,13 @@ void audio_recording_thread(void *p1, void *p2, void *p3)
                         avg_dsp, stats.frames_encoded);
             }
 
-            /* Calculate energy level from PCM data */
-            calculate_energy_level(pcm_data, AUDIO_OPUS_FRAME_SIZE);
+            /* Calculate energy level from PCM data
+             * Skip when not needed: REC_DOT (static display) without BLE subscriber
+             */
+            if (display_get_state() == UI_STATE_REC_WAVE ||
+                ble_is_audio_vis_subscribed()) {
+                calculate_energy_level(pcm_data, AUDIO_OPUS_FRAME_SIZE);
+            }
 
             /* Write encoded data to storage (with 2-byte length header) */
             if (current_storage_file.is_open) {

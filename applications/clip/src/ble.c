@@ -734,6 +734,11 @@ bool ble_is_bonded(void)
     return bond_count > 0;
 }
 
+bool ble_is_audio_vis_subscribed(void)
+{
+    return ble_ctx.audio_vis_notify_enabled;
+}
+
 static void get_bond_addr_cb(const struct bt_bond_info *info, void *user_data)
 {
     char *buf = (char *)user_data;

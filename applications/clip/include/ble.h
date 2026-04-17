@@ -114,6 +114,13 @@ bool ble_is_file_data_notify_enabled(void);
 bool ble_is_bonded(void);
 
 /**
+ * @brief Check if audio visualization notifications are subscribed
+ *
+ * @return true if a BLE client has subscribed to audio_vis characteristic
+ */
+bool ble_is_audio_vis_subscribed(void);
+
+/**
  * @brief Get address of first bonded device
  *
  * @param addr_buf Buffer to hold address string (min 18 bytes)

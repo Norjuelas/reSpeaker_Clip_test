@@ -114,6 +114,11 @@ static uint8_t display_buffer[OLED_BUF_SIZE];
 /* Current UI state */
 static enum ui_state g_ui_state = UI_STATE_OFF;
 
+enum ui_state display_get_state(void)
+{
+	return g_ui_state;
+}
+
 /* Recording animation state */
 static rec_anim_type_t g_current_anim_type = REC_ANIM_NORMAL;
 static struct fast_anim_bar g_fast_bars[FAST_ANIM_BAR_COUNT];
