@@ -30,6 +30,7 @@ struct gpio_button_data {
 	int64_t last_release_time;
 	bool waiting_for_release;
 	bool long_press_triggered; /* Flag to prevent duplicate long press events */
+	bool level0_auto_fired;   /* Level 0 auto-triggered while held */
 
 #if defined(CONFIG_INPUT_GPIO_BUTTON_OWN_THREAD)
 	K_KERNEL_STACK_MEMBER(thread_stack, CONFIG_INPUT_GPIO_BUTTON_THREAD_STACK_SIZE);
@@ -105,11 +106,25 @@ static void gpio_button_thread_cb(const struct device *dev)
 				uint32_t press_duration = now - data->press_time;
 				uint32_t max_long_press_idx = cfg->long_press_count - 1;
 
+				/* Auto-trigger level 0 (BUTTON_LONG_PRESS) when first
+				 * threshold reached — fires while button is still held,
+				 * so the app can vibrate for early feedback.
+				 */
+				if (!data->level0_auto_fired &&
+				    cfg->long_press_count > 1 &&
+				    press_duration >= cfg->long_press_ms[0]) {
+					data->level0_auto_fired = true;
+					if (data->event_cb[0]) {
+						data->event_cb[0](dev, 0);
+					}
+				}
+
 				// Check if reached the maximum long press threshold
 				if (press_duration >= cfg->long_press_ms[max_long_press_idx]) {
 					// Auto callback when reaching the longest press time
 					if (data->event_cb[max_long_press_idx]) {
 						data->long_press_triggered = true;
+						data->level0_auto_fired = false;
 						data->press_count = 0;
 						data->waiting_for_release = false;
 						data->event_cb[max_long_press_idx](
@@ -144,9 +159,22 @@ static void gpio_button_thread_cb(const struct device *dev)
 				data->last_release_time = data->release_time;
 				uint32_t press_duration = data->release_time - data->press_time;
 
-				// Skip processing if long press was already triggered
+				// Skip processing if max-level long press was triggered
 				if (data->long_press_triggered) {
 					data->long_press_triggered = false;
+					break;
+				}
+
+				/* If level 0 was auto-fired, emit BUTTON_RELEASE
+				 * so the app can execute the deferred action.
+				 */
+				if (data->level0_auto_fired) {
+					data->level0_auto_fired = false;
+					data->press_count = 0;
+					if (data->event_cb[BUTTON_RELEASE]) {
+						data->event_cb[BUTTON_RELEASE](
+							dev, BUTTON_RELEASE);
+					}
 					break;
 				}
 
@@ -242,6 +270,7 @@ static int gpio_button_init(const struct device *dev)
 	data->dev = dev;
 	data->cfg = cfg;
 	data->long_press_triggered = false;
+	data->level0_auto_fired = false;
 
 	/* Log button configuration */
 	LOG_DBG("Button initialized: debounce=%dms, double_click=%dms, long_press_levels=%d",

@@ -12,6 +12,7 @@
 
 #include "button.h"
 #include "clip_event.h"
+#include "haptic.h"
 
 LOG_MODULE_REGISTER(button, CONFIG_CLIP_LOG_LEVEL);
 
@@ -41,25 +42,34 @@ static void button_event_callback(const struct device *dev, enum button_action a
         break;
 
     case BUTTON_LONG_PRESS:
-        if (state == CLIP_STATE_RECORDING) {
-            clip_post_event(CLIP_EVENT_STOP);
-        } else if (state == CLIP_STATE_IDLE || state == CLIP_STATE_ERROR) {
-            clip_post_event(CLIP_EVENT_START);
-        }
-        break;
+	LOG_INF("LONG_PRESS (held >1s, still holding), state=%d", state);
+	/* Auto-triggered while still holding — vibrate to confirm threshold.
+	 * Actual start/stop is deferred to BUTTON_RELEASE.
+	 */
+	if (state == CLIP_STATE_RECORDING ||
+	    state == CLIP_STATE_IDLE || state == CLIP_STATE_ERROR) {
+		haptic_play_pattern(HAPTIC_SHORT);
+	}
+	break;
 
     case BUTTON_LONG_PRESS_LEVEL_1:
     case BUTTON_LONG_PRESS_LEVEL_2:
     case BUTTON_LONG_PRESS_LEVEL_3:
-        clip_post_event(CLIP_EVENT_POWER_OFF_SHOW);
-        atomic_set(&poweroff_screen_active, 1);
-        break;
+	LOG_INF("LONG_PRESS_LEVEL (power off screen), action=%d state=%d", action, state);
+	clip_post_event(CLIP_EVENT_POWER_OFF_SHOW);
+	atomic_set(&poweroff_screen_active, 1);
+	break;
 
     case BUTTON_RELEASE:
-        if (atomic_cas(&poweroff_screen_active, 1, 0)) {
-            clip_post_event(CLIP_EVENT_POWER_OFF_EXEC);
-        }
-        break;
+	LOG_INF("RELEASE, state=%d, poweroff=%d", state, atomic_get(&poweroff_screen_active));
+	if (atomic_cas(&poweroff_screen_active, 1, 0)) {
+	    clip_post_event(CLIP_EVENT_POWER_OFF_EXEC);
+	} else if (state == CLIP_STATE_RECORDING) {
+	    clip_post_event(CLIP_EVENT_STOP);
+	} else if (state == CLIP_STATE_IDLE || state == CLIP_STATE_ERROR) {
+	    clip_post_event(CLIP_EVENT_START);
+	}
+	break;
 
     case BUTTON_DOUBLE_CLICK:
         break;
