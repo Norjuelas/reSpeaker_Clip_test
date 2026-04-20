@@ -15,6 +15,7 @@
 #include <stdio.h>
 #include <math.h>
 #include <nrfx_pdm.h>
+#include <cmsis_core.h>
 
 #include <opus.h>
 #include <opus_types.h>
@@ -109,8 +110,17 @@ static K_MUTEX_DEFINE(audio_energy_mutex);
 
 /* Statistics */
 static struct audio_stats stats = {0};
-static int64_t encode_time_total = 0;
-static int64_t dsp_time_total = 0;
+static uint64_t encode_time_total_us = 0;
+static uint64_t dsp_time_total_us = 0;
+
+/* CPU cycle counter helpers (DWT->CYCCNT at 128 MHz) */
+#define CPU_FREQ_HZ 128000000
+static inline uint32_t cyc_to_us(uint32_t cycles)
+{
+	return (uint32_t)((uint64_t)cycles * 1000000ULL / CPU_FREQ_HZ);
+}
+static inline uint32_t cyc_start(void) { return DWT->CYCCNT; }
+static inline uint32_t cyc_end(uint32_t start) { return DWT->CYCCNT - start; }
 
 /* Data callback */
 static audio_data_callback_t data_callback = NULL;
@@ -383,7 +393,7 @@ int audio_get_stats(struct audio_stats *stats_out)
 
     /* Calculate average if recording stopped */
     if (!recording_active && stats.frames_encoded > 0) {
-        stats.encode_time_avg_ms = encode_time_total / stats.frames_encoded;
+        stats.encode_time_avg_us = (uint32_t)(encode_time_total_us / stats.frames_encoded);
     }
 
     memcpy(stats_out, &stats, sizeof(stats));
@@ -431,11 +441,15 @@ static int audio_start_recording_internal(enum audio_mode mode)
     int ret;
     struct clip_context *c = clip_get_context();
 
+    /* Ensure DWT cycle counter is enabled for timing measurement */
+    DWT->CYCCNT = 0;
+    DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
+
     /* Reset statistics */
     memset(&stats, 0, sizeof(stats));
-    stats.encode_time_min_ms = INT64_MAX;
-    encode_time_total = 0;
-    dsp_time_total = 0;
+    stats.encode_time_min_us = UINT32_MAX;
+    encode_time_total_us = 0;
+    dsp_time_total_us = 0;
 
     /* Reset file index */
     current_file_index = 1;
@@ -556,7 +570,7 @@ static int audio_stop_recording_internal(void)
 
     /* Calculate average encode time */
     if (stats.frames_encoded > 0) {
-        stats.encode_time_avg_ms = encode_time_total / stats.frames_encoded;
+        stats.encode_time_avg_us = (uint32_t)(encode_time_total_us / stats.frames_encoded);
     }
 
     /* Close storage session */
@@ -708,9 +722,10 @@ void audio_recording_thread(void *p1, void *p2, void *p3)
             }
 
             /* Process PCM data according to mode (DSP: merge, denoise, dereverb) */
-            int64_t dsp_start = k_uptime_get();
+            uint32_t dsp_cyc = cyc_start();
             int16_t *pcm_data = process_pcm_frame((int16_t *)buffer, AUDIO_OPUS_FRAME_SIZE);
-            dsp_time_total += k_uptime_get() - dsp_start;
+            uint32_t dsp_us = cyc_to_us(cyc_end(dsp_cyc));
+            dsp_time_total_us += dsp_us;
 
             /* Check encoder state */
             if (!opus_encoder) {
@@ -720,8 +735,8 @@ void audio_recording_thread(void *p1, void *p2, void *p3)
                 continue;
             }
 
-            /* Measure encode time */
-            int64_t encode_start = k_uptime_get();
+            /* Measure encode time with DWT cycle counter */
+            uint32_t enc_cyc = cyc_start();
 
             /* Encode audio */
             opus_int32 encoded_bytes = opus_encode(
@@ -742,8 +757,8 @@ void audio_recording_thread(void *p1, void *p2, void *p3)
                 continue;
             }
 
-            /* Calculate encode time */
-            int64_t encode_time = k_uptime_get() - encode_start;
+            /* Calculate encode time in microseconds */
+            uint32_t encode_us = cyc_to_us(cyc_end(enc_cyc));
 
             /* Update statistics */
             stats.frames_encoded++;
@@ -752,20 +767,20 @@ void audio_recording_thread(void *p1, void *p2, void *p3)
             recording_frame_count++;
 
             /* Update encode time statistics */
-            encode_time_total += encode_time;
-            if (encode_time < stats.encode_time_min_ms || stats.encode_time_min_ms == 0) {
-                stats.encode_time_min_ms = encode_time;
+            encode_time_total_us += encode_us;
+            if (encode_us < stats.encode_time_min_us) {
+                stats.encode_time_min_us = encode_us;
             }
-            if (encode_time > stats.encode_time_max_ms) {
-                stats.encode_time_max_ms = encode_time;
+            if (encode_us > stats.encode_time_max_us) {
+                stats.encode_time_max_us = encode_us;
             }
 
-            /* Print encode time every 10 seconds (500 frames at 20ms/frame) */
-            if (stats.frames_encoded % 500 == 0) {
-                int64_t avg_enc = encode_time_total / stats.frames_encoded;
-                int64_t avg_dsp = dsp_time_total / stats.frames_encoded;
-                LOG_INF("Encode: avg=%lld ms, min=%lld, max=%lld | DSP: avg=%lld ms (%u frames)",
-                        avg_enc, stats.encode_time_min_ms, stats.encode_time_max_ms,
+            /* Print encode stats every 1 second (50 frames at 20ms/frame) */
+            if (stats.frames_encoded % 50 == 0) {
+                uint32_t avg_enc = (uint32_t)(encode_time_total_us / stats.frames_encoded);
+                uint32_t avg_dsp = (uint32_t)(dsp_time_total_us / stats.frames_encoded);
+                LOG_INF("Encode: avg=%u us, min=%u, max=%u | DSP: avg=%u us (%u frames)",
+                        avg_enc, stats.encode_time_min_us, stats.encode_time_max_us,
                         avg_dsp, stats.frames_encoded);
             }
 

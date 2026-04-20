@@ -42,9 +42,9 @@ struct audio_stats {
     uint32_t total_bytes;
     uint32_t dropped_frames;
     uint64_t recording_time_ms;
-    int64_t encode_time_min_ms;
-    int64_t encode_time_max_ms;
-    int64_t encode_time_avg_ms;
+    uint32_t encode_time_min_us;
+    uint32_t encode_time_max_us;
+    uint32_t encode_time_avg_us;
 };
 
 /**

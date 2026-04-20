@@ -198,3 +198,10 @@ zephyr_compile_options_ifdef(CONFIG_OPUS_CODEC
     -Wno-double-promotion
     -Wno-unused-variable
 )
+
+# Disable LTO for opus to prevent code mixing with other modules.
+# This keeps opus functions contiguous in flash, improving I-cache efficiency.
+zephyr_library_compile_options_ifdef(CONFIG_OPUS_CODEC
+    -fno-lto
+    -Os
+)
