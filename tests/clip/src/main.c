@@ -8,7 +8,6 @@
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/sys/printk.h>
-#include <nrfx_clock.h>
 #include "wifi.h"
 #include "ble.h"
 #include "button.h"
@@ -24,11 +23,6 @@ LOG_MODULE_REGISTER(Lesson3_Exercise2, LOG_LEVEL_INF);
 int main(void)
 {
 	int ret;
-
-	/* Configure HF clock divider for optimal WiFi/BLE performance */
-#ifdef CLOCK_FEATURE_HFCLK_DIVIDE_PRESENT
-	nrfx_clock_divider_set(NRF_CLOCK_DOMAIN_HFCLK, NRF_CLOCK_HFCLK_DIV_1);
-#endif
 
 	printk("Starting %s with CPU frequency: %d MHz\n", CONFIG_BOARD, SystemCoreClock / 1000000);
 
@@ -95,7 +89,7 @@ int main(void)
 	}
 
 	printk("System ready\n");
-	printk("WiFi: Use 'wifi on' and 'wifi connect <SSID> [password]' to connect\n");
+	printk("WiFi: Use 'wifi on' to start AP, 'wifi status' to check\n");
 	printk("BLE: Advertising as '%s'\n", CONFIG_BT_DEVICE_NAME);
 	printk("SD card: Use 'sd mount' to mount, 'fs ls /SD:' to list files\n");
 	printk("Flash: Use 'flash' commands for SPI flash operations\n");

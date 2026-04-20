@@ -40,131 +40,68 @@ ble scan             # Scan for BLE devices
 - Device advertises as "Clip_Test"
 - BLE scan shows nearby devices
 
-### 2. WiFi Test
+### 2. WiFi AP Test
 
-**Purpose**: Test nRF7002 WiFi module connectivity and throughput
+**Purpose**: Test nRF7002 WiFi module in AP (hotspot) mode
 
-**Device Configuration**:
-- MAC Address: 14:5A:FC:5E:37:9C (fixed in prj.conf)
-- Supports: 2.4GHz + 5GHz dual-band (802.11 b/g/n/ac)
+**AP Configuration**:
+- SSID: `ClipTest_XXXX` (auto-generated from chip ID)
+- Password: `12345678`
+- Band: 5GHz, Channel 36
+- IP: 192.168.4.1
+- DHCP pool: 192.168.4.2+
 
-**Basic Commands**:
+**Commands**:
 ```bash
-wifi on              # Enable WiFi module
-wifi scan            # Scan for networks (shows SSID, RSSI, Channel, BAND)
-wifi scan 0          # Scan all bands (default)
+wifi on              # Start AP
+wifi off             # Stop AP
+wifi status          # Show AP status
+wifi scan            # Scan for networks (debug)
 wifi scan 1          # Scan 2.4GHz only
 wifi scan 2          # Scan 5GHz only
-wifi connect <SSID> [password]  # Connect to network
-wifi status          # Show status and IP address
-wifi disconnect      # Disconnect from network
 ```
 
-**Expected Results**:
-- WiFi powers on successfully (no error messages)
-- Scan finds available networks with RSSI values
-- Connection establishes with valid credentials
-- DHCP assigns IP address (usually 192.168.x.x)
+**Quick Test**:
+1. Run `wifi on`, note the SSID from serial output
+2. Connect phone/PC to `ClipTest_XXXX`, password `12345678`
+3. Device should get 192.168.4.x address via DHCP
+4. Run `wifi status` to confirm AP is running
 
 ---
 
-#### WiFi Throughput Testing (with iperf2)
+#### WiFi Throughput Testing (zperf / iperf2)
 
-**Overview**: Device uses `iperf` command which is **iperf2 compatible** for UDP throughput testing.
+**Overview**: Device uses zperf for UDP throughput testing, compatible with iperf2.
 
 **Test Type**: UDP upload from device to PC (device sends, PC receives)
 
 **Default Parameters**:
-- Server IP: 192.168.1.100
+- Server IP: 192.168.4.10
 - Port: 5001
 - Duration: 10 seconds
 - Rate: 100 Mbps (100000 kbps)
 
 **Test Procedure**:
 
-**Step 1: Find device IP address**
+**Step 1: Start iperf2 server on PC (connected to ClipTest AP)**
 ```bash
-# On device
-wifi status
-# Example output: IP: 192.168.1.100
-```
-
-**Step 2: Start iperf2 server on PC**
-```bash
-# On PC - Start iperf2 server (UDP mode)
-iperf -s -u -p 5001
-
-# Or with verbose output
 iperf -s -u -p 5001 -i 1
-
-# Note: Most systems have 'iperf' which is iperf2
-# Windows: Download iperf.exe from https://iperf.fr
 ```
 
-**Step 3: Run iperf test on device**
+**Step 2: Run iperf test on device**
 ```bash
-# On device - Run UDP throughput test
-iperf                       # Use defaults (192.168.1.100, 10s, 100Mbps)
-iperf 192.168.1.100         # Specify PC IP
-iperf 192.168.1.100 30      # 30 second test
-iperf 192.168.1.100 10 50000 # 10 second test at 50 Mbps
+iperf                       # Use defaults (192.168.4.10, 10s, 100Mbps)
+iperf 192.168.4.10          # Specify PC IP
+iperf 192.168.4.10 30       # 30 second test
+iperf 192.168.4.10 10 50000 # 10 second test at 50 Mbps
 ```
-
-**Expected Device Output**:
-```
-Test completed!
-  Packets sent: 7300
-  Packets lost: 25
-  Packets received: 7275
-  Bytes sent: 10220000
-  Time: 10000 ms
-  Throughput: 8100 kbps (8.100 Mbps)
-```
-
-**Expected PC Output**:
-```
-------------------------------------------------------------
-Server listening on UDP port 5001
-Receiving 1470 byte datagrams
-UDP buffer size: 208 KByte (default)
-------------------------------------------------------------
-[  5] local 192.168.1.100 port 5001 connected with 192.168.1.100 port 49153
-[ ID] Interval       Transfer     Bitrate
-[  5]   0.00-10.00  sec  10.2 MBytes  8.10 Mbits/sec
-[  5]  -  -  -  -  -  -  -  -  -  -  -  -
-[  5]   0.00-10.00  sec  1 datagram  0.00 bits/sec
-------------------------------------------------------------
-```
-
-**Expected Throughput**:
-- UDP Upload: 5-15 Mbps (typical for 2.4GHz WiFi)
-- Packet loss: <1% in good conditions
 
 **Command Parameters**:
 | Parameter | Description | Range | Default |
 |-----------|-------------|-------|---------|
-| server_ip | PC IP address | Any valid IP | 192.168.1.100 |
+| server_ip | PC IP address | Any valid IP | 192.168.4.10 |
 | duration_sec | Test duration | 1-3600 seconds | 10 |
 | rate_kbps | Send rate | 100-1000000 kbps | 100000 |
-
-**Troubleshooting WiFi Issues**:
-
-| Problem | Solution |
-|---------|----------|
-| No networks found | Check antenna connection, verify router is powered on |
-| Only 2.4G networks, no 5G | Verify router has 5GHz enabled, check signal strength, try `wifi scan 2` |
-| Connection fails | Verify SSID/password, check router security type |
-| No IP address | Check DHCP on router, try static IP |
-| Low throughput | Check interference, distance from router, reduce rate |
-| "WiFi not connected" | Run `wifi connect` first |
-| High packet loss | Reduce rate (try 50000 or lower), check WiFi signal |
-
-**Note on 5GHz Support**:
-The nRF7002 supports both 2.4GHz and 5GHz bands. If you only see 2.4G networks in scan results:
-1. Verify your router has 5GHz enabled (many "dual-band" routers have separate 2.4G and 5G SSIDs)
-2. Try `wifi scan 2` to scan 5GHz networks only
-3. Check distance - 5GHz has shorter range than 2.4GHz
-4. Some 5GHz channels may not be available in your region
 
 
 ---
@@ -269,7 +206,9 @@ motor test           # Run motor test
 
 **Commands**:
 ```bash
-imu init             # Initialize IMU and configure
+imu on               # Power on IMU (GPIO0.2=HIGH)
+imu off              # Power off IMU (GPIO0.2=LOW)
+imu init             # Full init (power on + I2C + configure)
 imu read             # Read sensor data
 imu monitor [n]      # Monitor n iterations (default 10)
 imu scan             # Scan I2C bus

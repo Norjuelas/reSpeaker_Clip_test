@@ -667,8 +667,54 @@ static int cmd_imu_scan(const struct shell *sh, size_t argc, char **argv)
 	return 0;
 }
 
+/* Shell command: imu on */
+static int cmd_imu_on(const struct shell *sh, size_t argc, char **argv)
+{
+	ARG_UNUSED(argc);
+	ARG_UNUSED(argv);
+
+	if (imu_powered) {
+		shell_print(sh, "IMU already powered on");
+		return 0;
+	}
+
+	int ret = imu_power_on();
+
+	if (ret == 0) {
+		shell_print(sh, "IMU powered on (GPIO0.%d=HIGH)", IMU_PWR_GPIO);
+	} else {
+		shell_print(sh, "Error: Failed to power on IMU (%d)", ret);
+	}
+
+	return ret;
+}
+
+/* Shell command: imu off */
+static int cmd_imu_off(const struct shell *sh, size_t argc, char **argv)
+{
+	ARG_UNUSED(argc);
+	ARG_UNUSED(argv);
+
+	if (!imu_powered) {
+		shell_print(sh, "IMU already powered off");
+		return 0;
+	}
+
+	int ret = imu_power_off();
+
+	if (ret == 0) {
+		shell_print(sh, "IMU powered off (GPIO0.%d=LOW)", IMU_PWR_GPIO);
+	} else {
+		shell_print(sh, "Error: Failed to power off IMU (%d)", ret);
+	}
+
+	return ret;
+}
+
 /* Shell command table */
 SHELL_STATIC_SUBCMD_SET_CREATE(sub_imu,
+	SHELL_CMD(on, NULL, "Power on IMU", cmd_imu_on),
+	SHELL_CMD(off, NULL, "Power off IMU", cmd_imu_off),
 	SHELL_CMD(init, NULL, "Initialize IMU (power on and configure)", cmd_imu_init),
 	SHELL_CMD(scan, NULL, "Scan I2C bus for devices", cmd_imu_scan),
 	SHELL_CMD(read, NULL, "Read sensor data", cmd_imu_read),

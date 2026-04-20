@@ -10,7 +10,10 @@
 #include <zephyr/kernel.h>
 
 /**
- * @brief Initialize WiFi and wait for connection
+ * @brief Initialize WiFi AP mode
+ *
+ * Generates SSID from chip ID and registers event callbacks.
+ * Use 'wifi on' shell command to actually start the AP.
  *
  * @return 0 on success, negative errno on failure
  */
@@ -24,8 +27,8 @@ int wifi_init_and_connect(void);
 int wifi_start_throughput_test(void);
 
 /**
- * @brief Run WiFi initialization and throughput test
- * This function combines init, connect and test in one call.
+ * @brief Run WiFi initialization
+ * This function initializes WiFi AP mode.
  *
  * @return 0 on success, negative errno on failure
  */
