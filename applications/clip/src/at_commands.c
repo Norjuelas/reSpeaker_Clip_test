@@ -217,8 +217,10 @@ static int cmd_time_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
             return create_json_response(false, "Missing timestamp", NULL, response, len);
         }
 
-        int64_t timestamp;
-        if (extract_int(ctx->args, (int *)&timestamp) != 0) {
+        /* Parse 64-bit timestamp directly (extract_int only handles 32-bit) */
+        char *end;
+        int64_t timestamp = strtoll(ctx->args, &end, 10);
+        if (end == ctx->args || *end != '\0') {
             return create_json_response(false, "Invalid timestamp", NULL, response, len);
         }
 
