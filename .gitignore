@@ -49,4 +49,8 @@ Thumbs.db
 applications/clip/tools/clip-cli.py
 applications/clip/tests/tests/test_edge_cases.py
 
-*PLAN.mdClipTest_FW/
+# Binary archives (firmware packages - use git tags instead)
+*.zip
+
+# Distribution folders
+ClipTest_FW/
