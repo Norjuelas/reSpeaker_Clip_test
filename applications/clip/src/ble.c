@@ -101,13 +101,13 @@ static void security_request_handler(struct k_work *work)
     if (ble_ctx.conn) {
         char addr[BT_ADDR_LE_STR_LEN];
         bt_addr_le_to_str(bt_conn_get_dst(ble_ctx.conn), addr, sizeof(addr));
-        LOG_INF("Requesting security level 2 for %s...", addr);
+        LOG_INF("sec req: %s", addr);
 
         int sec_err = bt_conn_set_security(ble_ctx.conn, BT_SECURITY_L2);
         if (sec_err) {
             LOG_ERR("Security request failed: %d", sec_err);
         } else {
-            LOG_INF("Security request sent, waiting for security_changed...");
+            LOG_INF("sec req sent");
             /* Start 10 second timeout for security establishment */
             k_work_schedule(&security_timeout_work, K_SECONDS(10));
         }
@@ -175,7 +175,7 @@ static bool le_param_req(struct bt_conn *conn, struct bt_le_conn_param *param)
 {
     /* Require minimum timeout of 200 (2 seconds) for stability */
     if (param->timeout < 200) {
-        LOG_WRN("Rejecting params: timeout %u too short, requesting 200",
+        LOG_WRN("Rejecting params: timeout %u",
                 param->timeout);
         param->timeout = 200;
         param->interval_min = 30;
@@ -195,7 +195,7 @@ static void security_timeout_handler(struct k_work *work)
     if (ble_ctx.conn) {
         char addr[BT_ADDR_LE_STR_LEN];
         bt_addr_le_to_str(bt_conn_get_dst(ble_ctx.conn), addr, sizeof(addr));
-        LOG_WRN("Security timeout (addr=%s) - disconnecting", addr);
+        LOG_WRN("sec timeout: %s", addr);
         bt_conn_disconnect(ble_ctx.conn, BT_HCI_ERR_AUTH_FAIL);
     }
 }
@@ -299,7 +299,7 @@ static void adv_timeout_handler(struct k_work *work)
 		return;
 	}
 
-	LOG_INF("Switching to slow advertising");
+	LOG_INF("slow adv");
 	bt_le_adv_stop();
 	int err = bt_le_adv_start(&adv_param_slow, ad, ARRAY_SIZE(ad),
 				  sd, ARRAY_SIZE(sd));
@@ -312,7 +312,7 @@ static void adv_timeout_handler(struct k_work *work)
 static void inactivity_timeout_handler(struct k_work *work)
 {
 	if (ble_ctx.conn) {
-		LOG_INF("BLE inactivity timeout, disconnecting");
+		LOG_INF("BLE inactivity, disconnecting");
 		bt_conn_disconnect(ble_ctx.conn,
 				   BT_HCI_ERR_REMOTE_USER_TERM_CONN);
 	}
@@ -362,7 +362,7 @@ static void connected(struct bt_conn *conn, uint8_t err)
     if (ble_ctx.notify_enabled) {
         /* CCC already enabled - set transport as ready */
         transport_ble_update_connection(conn, true);
-        LOG_INF("BLE transport: ready (CCC pre-enabled)");
+        LOG_INF("BLE transport ready (CCC pre-enabled)");
     } else {
         /* CCC not yet written - set transport but not ready */
         transport_ble_update_connection(conn, false);
@@ -375,12 +375,12 @@ static void connected(struct bt_conn *conn, uint8_t err)
     prev_bond_count = bond_count;
 
     if (bond_count > 0) {
-        LOG_INF("BLE connected: %s (bonded device, re-encrypting)", addr);
+        LOG_INF("conn: %s (bonded)", addr);
         /* Already bonded: notify display immediately (no pairing_complete
          * callback will fire for re-encryption of an existing bond). */
         display_post_event(UI_EVENT_BONDED);
     } else {
-        LOG_INF("BLE connected: %s (no bond - waiting for pairing)", addr);
+        LOG_INF("conn: %s (new)", addr);
     }
 
     /* Immediately require encryption. If no bond exists, this triggers
@@ -416,7 +416,7 @@ static void disconnected(struct bt_conn *conn, uint8_t reason)
         k_work_cancel_delayable(&inactivity_work);
         k_work_cancel_delayable(&adv_timeout_work);
 
-        LOG_INF("BLE disconnected: %s (reason=0x%02x)", addr, reason);
+        LOG_INF("disc: %s r=0x%02x", addr, reason);
 
         /* Clear transport layer */
         transport_ble_update_connection(NULL, false);
@@ -445,7 +445,7 @@ static void security_changed(struct bt_conn *conn, bt_security_t level,
     /* Cancel security timeout */
     k_work_cancel_delayable(&security_timeout_work);
 
-    LOG_INF("Security changed: %s level=%d err=%d", addr, level, err);
+    LOG_INF("sec: %s lv=%d err=%d", addr, level, err);
 
     if (err == BT_SECURITY_ERR_PIN_OR_KEY_MISSING) {
         /* Remote has a stale bond key that we no longer have locally.
@@ -453,7 +453,7 @@ static void security_changed(struct bt_conn *conn, bt_security_t level,
          * calling it would erase any *other* valid local bonds.
          * Just disconnect; the phone will re-pair on the next connection.
          */
-        LOG_WRN("Stale bond from remote (addr=%s), disconnecting to re-pair", addr);
+        LOG_WRN("stale bond: %s", addr);
         bt_conn_disconnect(conn, BT_HCI_ERR_PIN_OR_KEY_MISSING);
         return;
     }
@@ -464,7 +464,7 @@ static void security_changed(struct bt_conn *conn, bt_security_t level,
          * - We try to re-encrypt using the old key, but the phone rejects it
          * Solution: Delete our stale bond and allow re-pairing
          */
-        LOG_WRN("Re-encryption failed (addr=%s), clearing stale bond", addr);
+        LOG_WRN("re-enc fail: %s", addr);
         int unpair_err = bt_unpair(BT_ID_DEFAULT, bt_conn_get_dst(conn));
         if (unpair_err) {
             LOG_WRN("bt_unpair failed: %d", unpair_err);
@@ -474,20 +474,20 @@ static void security_changed(struct bt_conn *conn, bt_security_t level,
     }
 
     if (err) {
-        LOG_WRN("Security failed: %s level=%d err=%d - disconnecting",
+        LOG_WRN("sec fail: %s lv=%d err=%d",
                 addr, level, err);
         bt_conn_disconnect(conn, BT_HCI_ERR_AUTH_FAIL);
         return;
     }
 
     if (level < BT_SECURITY_L2) {
-        LOG_WRN("Security level too low: %s level=%d - disconnecting",
+        LOG_WRN("sec low: %s lv=%d",
                 addr, level);
         bt_conn_disconnect(conn, BT_HCI_ERR_AUTH_FAIL);
         return;
     }
 
-    LOG_INF("Security established: %s level=%d", addr, level);
+    LOG_INF("sec ok: %s lv=%d", addr, level);
 }
 
 /* Auto-confirm Just Works pairing */
@@ -509,22 +509,22 @@ static void pairing_complete(struct bt_conn *conn, bool bonded)
     char addr[BT_ADDR_LE_STR_LEN];
 
     bt_addr_le_to_str(bt_conn_get_dst(conn), addr, sizeof(addr));
-    LOG_INF("Pairing complete: %s bonded=%d", addr, bonded);
+    LOG_INF("paired: %s b=%d", addr, bonded);
 
     if (bonded) {
-        LOG_INF("Saving bonding keys to settings...");
+        LOG_INF("saving bond keys");
         int err = settings_save();
         if (err) {
             LOG_WRN("settings_save after pairing failed: %d", err);
         } else {
-            LOG_INF("Bonding keys saved");
+            LOG_INF("keys saved");
         }
 
         /* Check if this is a new device (bond count increased) */
         int new_bond_count = 0;
         bt_foreach_bond(BT_ID_DEFAULT, count_bond_cb, &new_bond_count);
         if (new_bond_count != prev_bond_count) {
-            LOG_INF("New device paired, regenerating WiFi password");
+            LOG_INF("new device, regen WiFi pw");
             config_generate_wifi_password();
         }
 
@@ -537,7 +537,7 @@ static void pairing_failed(struct bt_conn *conn, enum bt_security_err reason)
     char addr[BT_ADDR_LE_STR_LEN];
 
     bt_addr_le_to_str(bt_conn_get_dst(conn), addr, sizeof(addr));
-    LOG_WRN("Pairing failed: %s reason=%d - disconnecting", addr, reason);
+    LOG_WRN("pair fail: %s r=%d", addr, reason);
     bt_conn_disconnect(conn, BT_HCI_ERR_AUTH_FAIL);
 }
 
@@ -733,11 +733,11 @@ int ble_send_file_data(const uint8_t *data, uint16_t len)
     static int64_t last_log_time = 0;
 
     if (!ble_ctx.conn) {
-        LOG_ERR("BLE send file data: no connection");
+        LOG_ERR("BLE file: no conn");
         return -ENOTCONN;
     }
     if (!ble_ctx.file_data_notify_enabled) {
-        LOG_ERR("BLE send file data: file data notify not enabled");
+        LOG_ERR("BLE file: notify off");
         return -ENOTCONN;
     }
 
@@ -916,7 +916,7 @@ void ble_adv_restart_fast(void)
     if (err && err != -EALREADY) {
 	LOG_ERR("Fast advertising restart failed: %d", err);
     } else {
-	LOG_INF("Fast advertising restarted (button trigger)");
+	LOG_INF("fast adv (button)");
     }
 
     /* Re-schedule switch to slow advertising */

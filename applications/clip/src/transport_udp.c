@@ -419,7 +419,7 @@ int transport_udp_init(void)
     /* File state */
     current_file_crc = 0;
 
-    LOG_INF("UDP transport initialized (fire-and-forget, per-file CRC)");
+    LOG_INF("UDP transport init (per-file CRC)");
     return 0;
 }
 

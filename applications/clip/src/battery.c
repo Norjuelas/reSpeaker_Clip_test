@@ -365,15 +365,7 @@ int battery_init(void)
 		return -ENODEV;
 	}
 
-	LOG_INF("==============================================");
-	LOG_INF("  HSZ 362123 Battery Model Initialization");
-	LOG_INF("==============================================");
-	LOG_INF("Battery: HSZ 362123");
-	LOG_INF("Capacity: 170mAh (0.629Wh)");
-	LOG_INF("Voltage: 3.7V (nominal)");
-	LOG_INF("");
-	LOG_INF("nRF Fuel Gauge version: %s", nrf_fuel_gauge_version);
-	LOG_INF("");
+	LOG_INF("Battery: HSZ 362123, fuel gauge %s", nrf_fuel_gauge_version);
 
 	/* Read initial sensor values */
 	ret = read_sensors(&init_params.v0, &init_params.i0, &init_params.t0, &chg_status);
@@ -382,11 +374,9 @@ int battery_init(void)
 		/* Continue with basic battery monitoring */
 	} else {
 		/* Print initial readings */
-		LOG_INF("Initial sensor readings:");
-		LOG_INF("  Voltage: %.3f V (%d mV)", init_params.v0, (int)(init_params.v0 * 1000));
-		LOG_INF("  Current: %.3f A (%d mA)", init_params.i0, (int)(init_params.i0 * 1000));
-		LOG_INF("  Temperature: %.1f C", init_params.t0);
-		LOG_INF("  Charger status: 0x%02x", (unsigned int)chg_status);
+		LOG_INF("init: V=%.3f I=%.3f T=%.1f chg=0x%02x",
+			init_params.v0, init_params.i0, init_params.t0,
+			(unsigned int)chg_status);
 
 		/* Get charge current limits */
 		sensor_channel_get(charger_dev, SENSOR_CHAN_GAUGE_DESIRED_CHARGING_CURRENT, &value);
@@ -445,7 +435,7 @@ int battery_init(void)
 	/* Initialize delayed update work for VBUS detection */
 	k_work_init_delayable(&battery_delayed_update_work, battery_delayed_update_handler);
 
-	LOG_INF("Battery monitor initialized (level poll: 60s, fuel gauge: %s)",
+	LOG_INF("Battery init (poll=60s, fg=%s)",
 		fg_initialized ? "enabled" : "disabled");
 
 	return 0;

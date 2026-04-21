@@ -94,7 +94,7 @@ int transfer_init(void)
         return -ENOMEM;
     }
     k_thread_name_set(&transfer_thread_data, "transfer");
-    LOG_INF("Transfer thread created, waiting for ready flag...");
+    LOG_INF("xfer thread waiting");
 
     /* Wait a bit for thread to initialize */
     k_sleep(K_MSEC(100));
@@ -117,7 +117,7 @@ int transfer_start(const char *session_id, const char *filename, struct transpor
 
     /* Save the transport for this transfer session */
     current_transport = tp;
-    LOG_INF("Transfer using transport type %d", tp->type);
+    LOG_INF("xfer tp=%d", tp->type);
 
     clip_cpu_boost_acquire();
     /* Check if transfer is already active */
@@ -135,7 +135,7 @@ int transfer_start(const char *session_id, const char *filename, struct transpor
         }
 
         if (++retry_count > 20) {
-            LOG_WRN("Transfer cleanup timeout - forcing cleanup");
+            LOG_WRN("xfer cleanup timeout");
             transfer_cleanup();
             break;
         }
@@ -196,7 +196,7 @@ int transfer_start(const char *session_id, const char *filename, struct transpor
         current_transfer.total_files = 1;
         current_transfer.total_bytes = entry.size;
         current_transfer.continuous = false;  /* Single file - not continuous */
-        LOG_INF("Transfer: %s (%u KB)", filename, (uint32_t)entry.size/1024);
+        LOG_INF("xfer: %s (%u KB)", filename, (uint32_t)entry.size/1024);
     } else {
         /* Transfer entire session */
         struct storage_session_info session_info;
@@ -216,7 +216,7 @@ int transfer_start(const char *session_id, const char *filename, struct transpor
         current_transfer.continuous = (recording_session != NULL &&
                                        strcmp(recording_session, session_id) == 0);
 
-        LOG_INF("Transfer: %s (%u files, %s)",
+        LOG_INF("xfer: %s (%u files, %s)",
                 session_id, current_transfer.total_files,
                 current_transfer.continuous ? "continuous" : "normal");
     }
@@ -247,7 +247,7 @@ int transfer_resume_from(const char *session_id, const char *start_file, struct 
         }
 
         if (++retry_count > 50) {
-            LOG_WRN("Transfer cleanup timeout");
+            LOG_WRN("xfer cleanup timeout");
             transfer_cleanup();
             break;
         }
@@ -291,7 +291,7 @@ int transfer_resume_from(const char *session_id, const char *start_file, struct 
 
     /* Save the transport for this transfer session */
     current_transport = tp;
-    LOG_INF("Transfer using transport type %d", tp->type);
+    LOG_INF("xfer tp=%d", tp->type);
 
     clip_cpu_boost_acquire();
 
@@ -348,7 +348,7 @@ int transfer_cancel(void)
         return -EINVAL;
     }
 
-    LOG_INF("Transfer canceled");
+    LOG_INF("xfer canceled");
     transfer_cancel_requested = true;
     transfer_pause_requested = false;
 
@@ -566,7 +566,7 @@ process_next_file:
 
         /* Check transport connection */
         if (!transport_is_connected()) {
-            LOG_INF("Transport disconnected, stopping transfer");
+            LOG_INF("tp disconnected, stopping xfer");
             current_transfer.state = TRANSFER_STATE_IDLE;
             transfer_cleanup();
             transfer_thread_waiting = true;
@@ -584,7 +584,7 @@ process_next_file:
             if (ret != 0) {
                 if (ret == -ENOENT) {
                     /* No more files */
-                    LOG_INF("Transfer completed: %u files", current_transfer.synced_files);
+                    LOG_INF("xfer done: %u files", current_transfer.synced_files);
                     current_transfer.state = TRANSFER_STATE_COMPLETED;
                     send_transfer_complete_once(current_transfer.session_id,
                                                  (int)current_transfer.synced_files);
@@ -600,10 +600,10 @@ process_next_file:
                 } else {
                     /* Non-ENOENT error */
                     consecutive_file_errors++;
-                    LOG_ERR("Transfer error: %d (consecutive errors: %d)", ret, consecutive_file_errors);
+                    LOG_ERR("xfer err: %d (consec: %d)", ret, consecutive_file_errors);
 
                     if (consecutive_file_errors > 10) {
-                        LOG_ERR("Too many consecutive file errors, aborting transfer");
+                        LOG_ERR("too many file errors, abort");
                         current_transfer.state = TRANSFER_STATE_ERROR;
                         send_transfer_complete_once(current_transfer.session_id,
                                                      (int)current_transfer.synced_files);
@@ -642,7 +642,7 @@ process_next_file:
                     if (elapsed_ms > 0) {
                         rate_kbps = (uint32_t)((current_transfer.bytes_transferred * 8) / elapsed_ms);
                     }
-                    LOG_INF("Sent: %s (%u KB, %u kbps)",
+                    LOG_INF("sent: %s (%u KB, %u kbps)",
                             current_transfer.current_file,
                             (uint32_t)(current_transfer.bytes_transferred/1024),
                             rate_kbps);
@@ -662,7 +662,7 @@ process_next_file:
                                transfer_thread_running &&
                                current_transfer.state == TRANSFER_STATE_TRANSMITTING) {
                             file_retry++;
-                            LOG_WRN("File NACK, retransmitting (%d/%d)", file_retry, TRANSFER_MAX_FILE_RETRIES);
+                            LOG_WRN("file NACK, retry (%d/%d)", file_retry, TRANSFER_MAX_FILE_RETRIES);
 
                             /* Backoff: let WiFi channel settle before retransmit */
                             k_msleep(50 * file_retry);
@@ -704,7 +704,7 @@ process_next_file:
                         }
 
                         if (!file_ok) {
-                            LOG_ERR("File retransmit failed after %d retries", file_retry);
+                            LOG_ERR("retransmit fail after %d retries", file_retry);
                             fs_close(&transfer_file);
                             transfer_file_open = false;
                             current_transfer.state = TRANSFER_STATE_ERROR;
@@ -714,7 +714,7 @@ process_next_file:
                             break;
                         }
 
-                        LOG_INF("File retransmit OK on attempt %d", file_retry + 1);
+                        LOG_INF("retransmit OK attempt %d", file_retry + 1);
                     } else if (file_ret < 0) {
                         /* -ETIMEDOUT or other error */
                         LOG_ERR("FILE_END failed: %d", file_ret);
@@ -738,7 +738,7 @@ process_next_file:
                     break;
                 } else if (ret == -ENOTCONN || ret == -EIO) {
                     /* Connection error, cancel transfer */
-                    LOG_INF("Connection error during send: %d", ret);
+                    LOG_INF("conn err in send: %d", ret);
                     /* Close file if open */
                     if (transfer_file_open) {
                         fs_close(&transfer_file);
@@ -752,7 +752,7 @@ process_next_file:
                     break;
                 } else {
                     /* Any other error (e.g. -ETIMEDOUT): close file and exit transfer */
-                    LOG_ERR("Transfer send error: %d, aborting", ret);
+                    LOG_ERR("send err: %d, abort", ret);
                     if (transfer_file_open) {
                         fs_close(&transfer_file);
                         transfer_file_open = false;
@@ -829,19 +829,19 @@ static int transfer_next_file(void)
                         current_transfer.current_file[0] = '\0';
                         return -EAGAIN;
                     }
-                    LOG_INF("Recording stopped, ending transfer");
+                    LOG_INF("rec stopped, ending xfer");
                     return -ENOENT;
                 }
 
                 /* Check if still connected */
                 if (!transport_is_connected()) {
-                    LOG_INF("Transport disconnected");
+                    LOG_INF("tp disconnected");
                     return -ENOTCONN;
                 }
 
                 /* Check if transfer was canceled */
                 if (current_transfer.state != TRANSFER_STATE_TRANSMITTING) {
-                    LOG_INF("Transfer canceled");
+                    LOG_INF("xfer canceled");
                     return -ECANCELED;
                 }
 
@@ -896,7 +896,7 @@ wait_for_write:
             /* Check if we've passed the expected file count */
             if (current_transfer.total_files > 0 &&
                 file_num > current_transfer.total_files) {
-                LOG_INF("All files transferred");
+                LOG_INF("all files sent");
                 return -ENOENT;
             }
 
@@ -957,7 +957,7 @@ open_file:
     current_transfer.bytes_transferred = 0;  /* Reset for accurate rate calculation */
     file_transfer_start_ms = k_uptime_get();
 
-    LOG_INF("Sending: %s (%u KB)", current_transfer.current_file, (uint32_t)entry.size/1024);
+    LOG_INF("sending: %s (%u KB)", current_transfer.current_file, (uint32_t)entry.size/1024);
     send_file_ready_event(current_transfer.session_id, current_transfer.current_file, entry.size);
 
     return 0;
@@ -1082,7 +1082,7 @@ static void send_transfer_complete_once(const char *session_id, int file_count)
         current_transport->ops->send_transfer_done(session_id, file_count);
     }
 
-    LOG_INF("Transfer complete: session=%s, files=%d", session_id, file_count);
+    LOG_INF("xfer done: %s files=%d", session_id, file_count);
     transfer_complete_sent = true;
 }
 

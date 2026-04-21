@@ -199,9 +199,9 @@ zephyr_compile_options_ifdef(CONFIG_OPUS_CODEC
     -Wno-unused-variable
 )
 
-# Disable LTO for opus to prevent code mixing with other modules.
-# This keeps opus functions contiguous in flash, improving I-cache efficiency.
+# Enable LTO for Opus to allow dead code elimination across modules.
+# Previously -fno-lto was used for I-cache efficiency, but flash space
+# is more critical than I-cache locality at this point.
 zephyr_library_compile_options_ifdef(CONFIG_OPUS_CODEC
-    -fno-lto
     -Os
 )

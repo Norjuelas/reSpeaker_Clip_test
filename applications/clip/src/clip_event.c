@@ -144,7 +144,7 @@ static enum mgmt_cb_return mcumgr_dfu_cb(uint32_t event, enum mgmt_cb_return pre
                                           void *data, size_t data_size)
 {
     if (event == MGMT_EVT_OP_IMG_MGMT_DFU_STARTED) {
-        LOG_INF("MCUmgr: DFU upload started");
+        LOG_INF("OTA started");
         g_ota_total_size = 0;
         g_ota_chunk_count = 0;
         ota_in_progress = true;
@@ -171,7 +171,7 @@ static enum mgmt_cb_return mcumgr_dfu_cb(uint32_t event, enum mgmt_cb_return pre
                 unsigned long long action_size = check->action->size;
                 if (action_size > 0) {
                     g_ota_total_size = (size_t)action_size;
-                    LOG_INF("OTA total size from action: %zu bytes", g_ota_total_size);
+                    LOG_INF("OTA size: %zu", g_ota_total_size);
                 }
             }
 
@@ -185,7 +185,7 @@ static enum mgmt_cb_return mcumgr_dfu_cb(uint32_t event, enum mgmt_cb_return pre
                 /* Use req->size if total size not yet set */
                 if (g_ota_total_size == 0 && req_size > 0 && req_size != SIZE_MAX) {
                     g_ota_total_size = req_size;
-                    LOG_INF("OTA total size from req: %zu bytes", g_ota_total_size);
+                    LOG_INF("OTA size(req): %zu", g_ota_total_size);
                 }
 
                 if (g_ota_total_size > 0 && offset <= g_ota_total_size) {
@@ -206,10 +206,10 @@ static enum mgmt_cb_return mcumgr_dfu_cb(uint32_t event, enum mgmt_cb_return pre
                         pct, g_ota_chunk_count);
             }
         } else {
-            LOG_WRN("DFU CHUNK: invalid data pointer or size");
+            LOG_WRN("DFU: invalid data ptr");
         }
     } else if (event == MGMT_EVT_OP_IMG_MGMT_DFU_PENDING) {
-        LOG_INF("MCUmgr: DFU upload complete, pending reboot (chunks: %u)",
+        LOG_INF("OTA done, pending reboot (%u chunks)",
                 g_ota_chunk_count);
         g_ota_total_size = 0;
         g_ota_chunk_count = 0;

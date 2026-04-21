@@ -66,7 +66,7 @@ int storage_init(void)
     int rc;
     struct fs_dirent entry;
 
-    LOG_INF("Initializing SD card storage");
+    LOG_INF("SD init");
 
     /* Initialize SD card */
     rc = disk_access_init("SD");
@@ -196,7 +196,7 @@ int storage_close_session(const char *session_id, uint32_t duration_sec,
 
     uint64_t session_bytes = total_bytes - session_bytes_base;
 
-    LOG_INF("Closing session: %s (chunks=%u, bytes=%llu, duration=%u sec)",
+    LOG_INF("session close: %s chunks=%u dur=%us",
             session_id, chunk_count, session_bytes, duration_sec);
 
     /* Update session.json with final values */
@@ -317,7 +317,7 @@ int storage_create_file(struct storage_file *file, const char *session_id, uint3
 
     /* Open file */
     fs_file_t_init(&file->internal_file);
-    LOG_INF("Opening file: %s...", filepath);
+    LOG_INF("open: %s", filepath);
     rc = fs_open(&file->internal_file, filepath, FS_O_CREATE | FS_O_WRITE);
     if (rc != 0)
     {
@@ -332,7 +332,7 @@ int storage_create_file(struct storage_file *file, const char *session_id, uint3
     /* Mark this file as being written for transfer coordination */
     storage_set_writing_file(session_id, filename);
 
-    LOG_INF("File opened: %s (chunk %u)", filepath, chunk_index);
+    LOG_INF("file: %s (chunk %u)", filepath, chunk_index);
     return 0;
 }
 

@@ -229,7 +229,7 @@ int audio_init(void)
     }
     k_thread_name_set(&audio_thread_data, "audio_rec");
 
-    LOG_INF("Audio thread created: priority=%d, stack=%u",
+    LOG_INF("audio: pri=%d stk=%u",
         CONFIG_CLIP_AUDIO_THREAD_PRIORITY,
         CONFIG_CLIP_AUDIO_STACK_SIZE);
 
@@ -536,7 +536,7 @@ static int audio_start_recording_internal(enum audio_mode mode)
     /* Calculate actual bitrate for logging */
     uint32_t actual_bitrate = (current_mode == AUDIO_MODE_STEREO) ?
         CONFIG_CLIP_NORMAL_BITRATE * 2 : CONFIG_CLIP_ENHANCED_BITRATE;
-    LOG_INF("Recording started: %s mode, %u kbps, session=%s",
+    LOG_INF("rec: %s %ukbps %s",
         (current_mode == AUDIO_MODE_STEREO) ? "stereo" : "mono",
         actual_bitrate/1000, current_session_id);
     return 0;
@@ -780,7 +780,7 @@ void audio_recording_thread(void *p1, void *p2, void *p3)
             if (stats.frames_encoded % 500 == 0) {
                 uint32_t avg_enc = (uint32_t)(encode_time_total_us / stats.frames_encoded);
                 uint32_t avg_dsp = (uint32_t)(dsp_time_total_us / stats.frames_encoded);
-                LOG_INF("Encode: avg=%u us, min=%u, max=%u | DSP: avg=%u us (%u frames)",
+                LOG_INF("enc: avg=%u min=%u max=%u dsp=%u (%u)",
                         avg_enc, stats.encode_time_min_us, stats.encode_time_max_us,
                         avg_dsp, stats.frames_encoded);
             }
@@ -852,7 +852,7 @@ create_new_segment:
                         LOG_WRN("Failed to close segment file: %d", ret);
                     }
 
-                    LOG_INF("Segment: file #%u (%u frames, %u bytes, %us)",
+                    LOG_INF("seg #%u: %u frm %uB %us",
                             current_file_index, segment_frames, segment_bytes,
                             segment_duration_sec);
                 }
@@ -880,7 +880,7 @@ create_new_segment:
         /* Signal that stop is complete */
         k_sem_give(&stop_done_sem);
 
-        LOG_INF("Recording stopped: %u frames, %llu sec, %u KB",
+        LOG_INF("rec done: %u frm %us %uKB",
             stats.frames_encoded,
             stats.recording_time_ms / 1000,
             stats.total_bytes / 1024);
@@ -972,7 +972,7 @@ static int init_opus_encoder(void)
     encoder_params.channels = opus_channels;
     encoder_params.initialized = true;
 
-    LOG_INF("Opus encoder ready: %d ch, %u kbps, complexity=%u, %s",
+    LOG_INF("opus: %dch %ukbps c=%u %s",
         opus_channels, actual_bitrate / 1000, effective_complexity,
         (current_mode == AUDIO_MODE_STEREO) ? "stereo" : "mono");
 
@@ -1056,7 +1056,7 @@ static int init_speex_preprocessor(void)
 
     dsp_params.initialized = true;
 
-    LOG_INF("SpeexDSP ready: noise=%d dB, dereverb=%d, agc=1, max_gain=%d",
+    LOG_INF("dsp: noise=%ddB drv=%d agc=%ddB",
             CONFIG_CLIP_DEFAULT_NOISE,
             IS_ENABLED(CONFIG_CLIP_DEFAULT_DEREVERB) ? 1 : 0,
             CONFIG_CLIP_AGC_MAX_GAIN);
@@ -1238,10 +1238,6 @@ static void calculate_energy_level(int16_t *pcm_data, int frame_size)
      * Byte format: [val0:val1] [val2:val3] [val4:val5] [val6:val7]
      *              [val8:val9] [val10:val11] [val12:0x0] */
     static int64_t last_vis_send = 0;
-    static int vis_count = 0;
-    static int vis_ok = 0;
-    static int vis_enotconn = 0;
-    static int vis_err_other = 0;
     int64_t now = k_uptime_get();
     if (now - last_vis_send >= 200) {
         uint8_t history_copy[13];
@@ -1272,26 +1268,8 @@ static void calculate_energy_level(int16_t *pcm_data, int frame_size)
         packed[6] = history_copy[12] & 0x0F;  /* Last value in low nibble */
 
         extern int ble_send_audio_vis(const uint8_t *data, uint16_t len);
-        int vis_err = ble_send_audio_vis(packed, 7);
-        vis_count++;
-        if (vis_err == 0) {
-            vis_ok++;
-        } else if (vis_err == -ENOTCONN) {
-            vis_enotconn++;
-        } else {
-            vis_err_other++;
-        }
+        ble_send_audio_vis(packed, 7);
         last_vis_send = now;
-
-        /* Periodic diagnostic report every ~5 seconds (25 sends) */
-        if (vis_count % 25 == 0) {
-            LOG_INF("AudioVis[%d]: ok=%d enotconn=%d err=%d sub=%d lvl=%d",
-                    vis_count, vis_ok, vis_enotconn, vis_err_other,
-                    ble_is_audio_vis_subscribed(), new_level);
-            vis_ok = 0;
-            vis_enotconn = 0;
-            vis_err_other = 0;
-        }
     }
 }
 
