@@ -16,6 +16,7 @@
 #include <ff.h>
 #include <nrfx_pdm.h>
 #include <nrfx_clock.h>
+#include <cmsis_core.h>
 #include <string.h>
 #include <stdio.h>
 
@@ -472,6 +473,12 @@ static int init_speex_ppor(void)
 	int dereverb_decay = SPEEXDSP_DEREVERB_DECAY;
 	speex_preprocess_ctl(speex_pp, SPEEX_PREPROCESS_SET_DEREVERB_DECAY, &dereverb_decay);
 #endif
+	/* Enable AGC (only available in floating-point mode) */
+	int agc = 1;
+	speex_preprocess_ctl(speex_pp, SPEEX_PREPROCESS_SET_AGC, &agc);
+	float agc_level = 8000.0f;
+	speex_preprocess_ctl(speex_pp, SPEEX_PREPROCESS_SET_AGC_LEVEL, &agc_level);
+
 
 	LOG_INF("SpeexDSP: noise_suppress=%d dB, dereverb=%d",
 		denoise, SPEEXDSP_DEREVERB_ENABLE);
@@ -604,6 +611,15 @@ static void update_filename_timestamp(char *filename, size_t len)
 			mode_names[current_mode]);
 }
 
+/* CPU cycle counter helpers (DWT->CYCCNT at 128 MHz) */
+#define CPU_FREQ_HZ 128000000
+static inline uint32_t cyc_to_us(uint32_t cycles)
+{
+	return (uint32_t)((uint64_t)cycles * 1000000ULL / CPU_FREQ_HZ);
+}
+static inline uint32_t cyc_start(void) { return DWT->CYCCNT; }
+static inline uint32_t cyc_end(uint32_t start) { return DWT->CYCCNT - start; }
+
 int main(void)
 {
 
@@ -616,16 +632,21 @@ int main(void)
 	uint32_t size;
 	int frame_count = 0;
 
+	/* Enable DWT cycle counter for precise timing */
+	CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+	DWT->CYCCNT = 0;
+	DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
+
+
 	/* Encoding time statistics */
-	int64_t encode_time_min = INT64_MAX;
-	int64_t encode_time_max = 0;
-	int64_t encode_time_total = 0;
-	int64_t encode_time_start;
+	uint32_t encode_time_min_us = UINT32_MAX;
+	uint32_t encode_time_max_us = 0;
+	uint64_t encode_time_total_us = 0;
 
 	/* DSP processing time statistics (process_pcm_frame + SpeexDSP) */
-	int64_t dsp_time_min = INT64_MAX;
-	int64_t dsp_time_max = 0;
-	int64_t dsp_time_total = 0;
+	uint32_t dsp_time_min_us = UINT32_MAX;
+	uint32_t dsp_time_max_us = 0;
+	uint64_t dsp_time_total_us = 0;
 
 	LOG_INF("ReSpeaker Lav Opus Streaming Encoder");
 
@@ -737,13 +758,13 @@ int main(void)
 					streaming_active = true;
 					frame_count = 0;
 					/* Reset encode time statistics */
-					encode_time_min = INT64_MAX;
-					encode_time_max = 0;
-					encode_time_total = 0;
+					encode_time_min_us = UINT32_MAX;
+					encode_time_max_us = 0;
+					encode_time_total_us = 0;
 					/* Reset DSP time statistics */
-					dsp_time_min = INT64_MAX;
-					dsp_time_max = 0;
-					dsp_time_total = 0;
+					dsp_time_min_us = UINT32_MAX;
+					dsp_time_max_us = 0;
+					dsp_time_total_us = 0;
 					fprintf(stderr, "\r[START]\n");
 				} else if (cmd == '1') {
 					set_audio_mode(MODE_MONO);
@@ -833,7 +854,7 @@ int main(void)
 			}
 
 			/* Measure DSP processing time (process_pcm_frame + SpeexDSP) */
-			encode_time_start = k_uptime_get();
+			uint32_t dsp_cyc = cyc_start();
 
 			/* Process PCM data according to mode (mono/merge/stereo) */
 			int16_t *pcm_data = process_pcm_frame((int16_t *)buffer, OPUS_FRAME_SIZE);
@@ -869,20 +890,13 @@ int main(void)
 			}
 #endif
 
-			/* Save DSP processing time before Opus encode */
-			int64_t dsp_time = k_uptime_get() - encode_time_start;
-
-			/* Update DSP time statistics */
-			if (dsp_time < dsp_time_min) {
-				dsp_time_min = dsp_time;
-			}
-			if (dsp_time > dsp_time_max) {
-				dsp_time_max = dsp_time;
-			}
-			dsp_time_total += dsp_time;
+			uint32_t dsp_us = cyc_to_us(cyc_end(dsp_cyc));
+			dsp_time_total_us += dsp_us;
+			if (dsp_us < dsp_time_min_us) dsp_time_min_us = dsp_us;
+			if (dsp_us > dsp_time_max_us) dsp_time_max_us = dsp_us;
 
 			/* Measure Opus encoding time */
-			encode_time_start = k_uptime_get();
+			uint32_t enc_cyc = cyc_start();
 
 			/* Encode the processed audio block */
 			opus_int32 encoded_bytes = opus_encode(
@@ -893,15 +907,10 @@ int main(void)
 				MAX_PACKET_SIZE
 			);
 
-			/* Update encoding time statistics */
-			int64_t encode_time = k_uptime_get() - encode_time_start;
-			if (encode_time < encode_time_min) {
-				encode_time_min = encode_time;
-			}
-			if (encode_time > encode_time_max) {
-				encode_time_max = encode_time;
-			}
-			encode_time_total += encode_time;
+			uint32_t encode_us = cyc_to_us(cyc_end(enc_cyc));
+			encode_time_total_us += encode_us;
+			if (encode_us < encode_time_min_us) encode_time_min_us = encode_us;
+			if (encode_us > encode_time_max_us) encode_time_max_us = encode_us;
 
 			/* Free the buffer back to slab */
 			k_mem_slab_free(&mem_slab, buffer);
@@ -968,12 +977,12 @@ int main(void)
 
 		fprintf(stderr, "Session ended. Frames: %d\n", frame_count);
 		if (frame_count > 0) {
-			fprintf(stderr, "Opus encode time: min=%lld ms, max=%lld ms, avg=%lld ms\n",
-				encode_time_min, encode_time_max,
-				encode_time_total / frame_count);
-			fprintf(stderr, "DSP process time: min=%lld ms, max=%lld ms, avg=%lld ms\n",
-				dsp_time_min, dsp_time_max,
-				dsp_time_total / frame_count);
+			fprintf(stderr, "Opus encode time: min=%u us, max=%u us, avg=%u us\n",
+				encode_time_min_us, encode_time_max_us,
+				(uint32_t)(encode_time_total_us / frame_count));
+			fprintf(stderr, "DSP process time: min=%u us, max=%u us, avg=%u us\n",
+				dsp_time_min_us, dsp_time_max_us,
+				(uint32_t)(dsp_time_total_us / frame_count));
 		}
 
 		/* Print BLE statistics if enabled */
