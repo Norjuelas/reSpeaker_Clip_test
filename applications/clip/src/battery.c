@@ -61,6 +61,9 @@ static bool soc_initialized = false;
 /* 60-second periodic battery level polling */
 static struct k_work_delayable battery_level_work;
 
+/* Delayed update after VBUS detection (charger needs time to start) */
+static struct k_work_delayable battery_delayed_update_work;
+
 static void read_and_update(void);
 
 void battery_poll(void)
@@ -311,6 +314,8 @@ static void pmic_event_callback(const struct device *dev, struct gpio_callback *
 	if (pins & BIT(NPM13XX_EVENT_VBUS_DETECTED)) {
 		LOG_INF("PMIC event: VBUS detected");
 		clip_post_event(CLIP_EVENT_USB_CONNECTED);
+		/* Re-read after charger has started (takes ~2-3s) */
+		k_work_schedule(&battery_delayed_update_work, K_SECONDS(3));
 	}
 	if (pins & BIT(NPM13XX_EVENT_VBUS_REMOVED)) {
 		LOG_INF("PMIC event: VBUS removed");
@@ -323,6 +328,12 @@ static void pmic_event_callback(const struct device *dev, struct gpio_callback *
 	}
 
 	/* Read and update battery status on any event */
+	read_and_update();
+}
+
+/* Delayed re-read after VBUS detection to catch charger start */
+static void battery_delayed_update_handler(struct k_work *work)
+{
 	read_and_update();
 }
 
@@ -430,6 +441,9 @@ int battery_init(void)
 	/* Start periodic battery level polling */
 	k_work_init_delayable(&battery_level_work, battery_level_handler);
 	k_work_schedule(&battery_level_work, K_SECONDS(60));
+
+	/* Initialize delayed update work for VBUS detection */
+	k_work_init_delayable(&battery_delayed_update_work, battery_delayed_update_handler);
 
 	LOG_INF("Battery monitor initialized (level poll: 60s, fuel gauge: %s)",
 		fg_initialized ? "enabled" : "disabled");

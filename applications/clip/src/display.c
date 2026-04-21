@@ -1112,8 +1112,10 @@ static void handle_event(enum ui_event event)
 
 	case UI_EVENT_STATUS_SHOW:
 		battery_poll();
-		set_ui_state(UI_STATE_STATUS_BAR);
-		k_work_schedule(&display_timeout_work, K_MSEC(DISPLAY_STATUS_TIMEOUT_MS));
+		if (!g_recording) {
+			set_ui_state(UI_STATE_STATUS_BAR);
+			k_work_schedule(&display_timeout_work, K_MSEC(DISPLAY_STATUS_TIMEOUT_MS));
+		}
 		break;
 
 	case UI_EVENT_BONDED:
@@ -1138,8 +1140,10 @@ static void handle_event(enum ui_event event)
 
 	case UI_EVENT_USB_CONNECTED:
 		g_status.battery_charging = true;
-		set_ui_state(UI_STATE_USB_CONNECTED);
-		k_work_schedule(&display_timeout_work, K_MSEC(DISPLAY_STATUS_TIMEOUT_MS));
+		if (!g_recording) {
+			set_ui_state(UI_STATE_USB_CONNECTED);
+			k_work_schedule(&display_timeout_work, K_MSEC(DISPLAY_STATUS_TIMEOUT_MS));
+		}
 		break;
 
 	case UI_EVENT_OTA_START:
@@ -1181,21 +1185,34 @@ static void handle_event(enum ui_event event)
 			set_ui_state(UI_STATE_REC_DOT);
 		} else if (g_ui_state == UI_STATE_ERROR) {
 			g_error_active = false;
-			set_ui_state(UI_STATE_OFF);
+			if (g_recording) {
+				set_ui_state(UI_STATE_REC_DOT);
+			} else {
+				set_ui_state(UI_STATE_OFF);
+			}
 		}
 		break;
 
 	case UI_EVENT_ERROR_SHOW:
-		k_work_cancel_delayable(&display_timeout_work);
-		g_error_active = true;
-		set_ui_state(UI_STATE_ERROR);
-		k_work_schedule(&display_timeout_work, K_MSEC(5000));
+		if (g_recording) {
+			k_work_cancel_delayable(&display_timeout_work);
+			g_error_active = true;
+			set_ui_state(UI_STATE_ERROR);
+			k_work_schedule(&display_timeout_work, K_MSEC(3000));
+		} else {
+			k_work_cancel_delayable(&display_timeout_work);
+			g_error_active = true;
+			set_ui_state(UI_STATE_ERROR);
+			k_work_schedule(&display_timeout_work, K_MSEC(5000));
+		}
 		break;
 
 	case UI_EVENT_LOW_BATTERY:
 		battery_poll();
-		set_ui_state(UI_STATE_LOW_BATTERY);
-		k_work_schedule(&display_timeout_work, K_MSEC(3000));
+		if (!g_recording) {
+			set_ui_state(UI_STATE_LOW_BATTERY);
+			k_work_schedule(&display_timeout_work, K_MSEC(3000));
+		}
 		break;
 
 	default:

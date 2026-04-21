@@ -396,7 +396,6 @@ static enum clip_event_result execute_transition(enum clip_event event,
             display_post_error("Rec Fail");
             return CLIP_EVENT_ERROR;
         }
-        haptic_play_pattern(HAPTIC_SHORT);
         display_post_event(UI_EVENT_REC_START);
         display_set_recording(true, c->config.mode == MODE_ENHANCED);
         return CLIP_EVENT_OK;
@@ -413,7 +412,6 @@ static enum clip_event_result execute_transition(enum clip_event event,
             LOG_ERR("audio_stop_recording failed: %d", err);
             return CLIP_EVENT_ERROR;
         }
-        haptic_play_pattern(HAPTIC_SHORT);
         display_post_event(UI_EVENT_REC_STOP);
         display_set_recording(false, false);
         return CLIP_EVENT_OK;

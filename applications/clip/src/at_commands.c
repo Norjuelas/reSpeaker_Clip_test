@@ -25,6 +25,7 @@
 #include "ble.h"
 #include "wifi.h"
 #include "display.h"
+#include "haptic.h"
 
 LOG_MODULE_REGISTER(at_commands, CONFIG_CLIP_LOG_LEVEL);
 
@@ -753,6 +754,8 @@ static int cmd_start_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
                                    NULL, response, len);
     }
 
+    haptic_play_pattern(HAPTIC_SHORT);
+
     const char *session_id = audio_get_session_id();
     char data[64];
     if (session_id) {
@@ -785,6 +788,8 @@ static int cmd_stop_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
             return create_json_response(false, "Not recording", NULL, response, len);
         }
     }
+
+    haptic_play_pattern(HAPTIC_SHORT);
 
     struct audio_stats audio_stats;
     if (audio_get_stats(&audio_stats) != 0) {
