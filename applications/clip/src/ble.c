@@ -687,6 +687,9 @@ int ble_send(const uint8_t *data, uint16_t len)
         return -ENOTCONN;
     }
 
+    /* Refresh inactivity timeout on outgoing data */
+    ble_activity_refresh();
+
     /* MTU - 3 bytes ATT header = max notify payload */
     max_len = bt_gatt_get_mtu(ble_ctx.conn) - 3;
 
@@ -737,6 +740,9 @@ int ble_send_file_data(const uint8_t *data, uint16_t len)
         LOG_ERR("BLE send file data: file data notify not enabled");
         return -ENOTCONN;
     }
+
+    /* Refresh inactivity timeout on outgoing file data */
+    ble_activity_refresh();
 
     /* Log progress every 100KB */
     total_sent += len;
@@ -878,6 +884,9 @@ int ble_send_audio_vis(const uint8_t *data, uint16_t len)
     if (!ble_ctx.audio_vis_notify_enabled) {
         return -ENOTCONN;
     }
+
+    /* Refresh inactivity timeout on outgoing audio vis data */
+    ble_activity_refresh();
 
     /* MTU - 3 bytes ATT header = max notify payload */
     max_len = bt_gatt_get_mtu(ble_ctx.conn) - 3;
