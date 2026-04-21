@@ -680,6 +680,10 @@ static int cmd_purgeable_handler(struct at_cmd_ctx *ctx, char *response, size_t 
     return create_json_response(true, NULL, data, response, len);
 }
 
+/* Shared sorted session cache for LIST commands */
+static struct storage_session_info cached_sessions[100];
+static int cached_count = -1;  /* -1 = not populated */
+
 /* FORMAT Command Handler - Format SD card (delete all sessions) */
 static int cmd_format_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
 {
@@ -695,6 +699,8 @@ static int cmd_format_handler(struct at_cmd_ctx *ctx, char *response, size_t len
     if (err) {
         return create_json_response(false, "Format failed", NULL, response, len);
     }
+
+    cached_count = -1;  /* Invalidate cache */
 
     return create_json_response(true, NULL, NULL, response, len);
 }
@@ -799,6 +805,8 @@ static int cmd_stop_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
             audio_stats.frames_encoded,
             audio_stats.total_bytes);
 
+    cached_count = -1;  /* Invalidate cache after new recording */
+
     return create_json_response(true, NULL, data, response, len);
 }
 
@@ -866,9 +874,6 @@ static int cmd_mark_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
 }
 
 /* LIST Command Handler - List sessions or chunks (matches clip protocol) */
-/* Shared sorted session cache for LIST commands */
-static struct storage_session_info cached_sessions[100];
-static int cached_count = -1;  /* -1 = not populated */
 
 static int cmd_list_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
 {
