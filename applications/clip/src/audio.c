@@ -748,6 +748,9 @@ void audio_recording_thread(void *p1, void *p2, void *p3)
                 AUDIO_MAX_PACKET_SIZE
             );
 
+            /* Calculate encode time in microseconds */
+            uint32_t encode_us = cyc_to_us(cyc_end(enc_cyc));
+
             /* Free buffer */
             k_mem_slab_free(&audio_mem_slab, buffer);
             buffer = NULL;
@@ -757,9 +760,6 @@ void audio_recording_thread(void *p1, void *p2, void *p3)
                 stats.dropped_frames++;
                 continue;
             }
-
-            /* Calculate encode time in microseconds */
-            uint32_t encode_us = cyc_to_us(cyc_end(enc_cyc));
 
             /* Update statistics */
             stats.frames_encoded++;
@@ -934,7 +934,7 @@ static int init_opus_encoder(void)
 
     /* Create Opus encoder */
     opus_encoder = opus_encoder_create(AUDIO_SAMPLE_RATE, opus_channels,
-                       OPUS_APPLICATION_RESTRICTED_LOWDELAY, &err);
+                       OPUS_APPLICATION_VOIP, &err);
     if (!opus_encoder) {
         LOG_ERR("Failed to create Opus encoder: %d", err);
         return err;
@@ -1026,32 +1026,40 @@ static int init_speex_preprocessor(void)
         return -ENOMEM;
     }
 
-    /* Set noise suppression from config (0-60 dB) */
-    int denoise = c->config.noise_suppress;
+    /* Noise suppression (Kconfig) */
+    int denoise = CONFIG_CLIP_DEFAULT_NOISE;
     speex_preprocess_ctl(speex_pp, SPEEX_PREPROCESS_SET_NOISE_SUPPRESS, &denoise);
 
-    /* Enable/disable dereverberation from config */
-    int dereverb = c->config.dereverb_enabled ? 1 : 0;
+    /* Dereverberation (Kconfig) */
+    int dereverb = IS_ENABLED(CONFIG_CLIP_DEFAULT_DEREVERB) ? 1 : 0;
     speex_preprocess_ctl(speex_pp, SPEEX_PREPROCESS_SET_DEREVERB, &dereverb);
 
-    /* Set dereverb level (fixed at 40 for now) */
     int dereverb_level = 40;
     speex_preprocess_ctl(speex_pp, SPEEX_PREPROCESS_SET_DEREVERB_LEVEL, &dereverb_level);
 
-    /* Set dereverb decay (fixed at 20 for now) */
     int dereverb_decay = 20;
     speex_preprocess_ctl(speex_pp, SPEEX_PREPROCESS_SET_DEREVERB_DECAY, &dereverb_decay);
 
-    /* AGC disabled */
+    /* AGC for far-field pickup (Kconfig) */
+    int agc = 1;
+    speex_preprocess_ctl(speex_pp, SPEEX_PREPROCESS_SET_AGC, &agc);
+    float agc_level = 8000.0f;
+    speex_preprocess_ctl(speex_pp, SPEEX_PREPROCESS_SET_AGC_LEVEL, &agc_level);
+    int agc_max_gain = CONFIG_CLIP_AGC_MAX_GAIN;
+    speex_preprocess_ctl(speex_pp, SPEEX_PREPROCESS_SET_AGC_MAX_GAIN, &agc_max_gain);
+    int agc_target = CONFIG_CLIP_AGC_TARGET;
+    speex_preprocess_ctl(speex_pp, SPEEX_PREPROCESS_SET_AGC_TARGET, &agc_target);
+    int agc_increment = CONFIG_CLIP_AGC_INCREMENT;
+    speex_preprocess_ctl(speex_pp, SPEEX_PREPROCESS_SET_AGC_INCREMENT, &agc_increment);
+    int agc_decrement = CONFIG_CLIP_AGC_DECREMENT;
+    speex_preprocess_ctl(speex_pp, SPEEX_PREPROCESS_SET_AGC_DECREMENT, &agc_decrement);
 
-    /* Update cached parameters */
-    dsp_params.noise_suppress = c->config.noise_suppress;
-    dsp_params.dereverb_enabled = c->config.dereverb_enabled;
     dsp_params.initialized = true;
 
-    LOG_INF("SpeexDSP ready: noise=%d dB, dereverb=%d",
-            c->config.noise_suppress,
-            c->config.dereverb_enabled);
+    LOG_INF("SpeexDSP ready: noise=%d dB, dereverb=%d, agc=1, max_gain=%d",
+            CONFIG_CLIP_DEFAULT_NOISE,
+            IS_ENABLED(CONFIG_CLIP_DEFAULT_DEREVERB) ? 1 : 0,
+            CONFIG_CLIP_AGC_MAX_GAIN);
 
     return 0;
 }

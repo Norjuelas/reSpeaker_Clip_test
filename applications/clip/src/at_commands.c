@@ -1663,23 +1663,6 @@ int at_commands_register(void)
     err = at_server_register_cmd(&mode_cmd);
     if (err) return err;
 
-    /* NOISE - Get/Set noise suppression */
-    static const struct at_command noise_cmd = {
-        .name = "NOISE",
-        .flags = AT_CMD_SET | AT_CMD_QUERY | AT_CMD_EXEC,
-        .handler = cmd_noise_handler,
-    };
-    err = at_server_register_cmd(&noise_cmd);
-    if (err) return err;
-
-    /* DEREVERB - Get/Set dereverberation */
-    static const struct at_command dereverb_cmd = {
-        .name = "DEREVERB",
-        .flags = AT_CMD_SET | AT_CMD_QUERY | AT_CMD_EXEC,
-        .handler = cmd_dereverb_handler,
-    };
-    err = at_server_register_cmd(&dereverb_cmd);
-    if (err) return err;
 
     /* AUTODEL - Get/Set auto-delete policy */
     static const struct at_command autodel_cmd = {
