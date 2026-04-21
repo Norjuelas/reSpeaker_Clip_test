@@ -496,6 +496,13 @@ static enum clip_event_result execute_transition(enum clip_event event,
 
     case CLIP_EVENT_POWER_OFF_EXEC:
     {
+        /* Stop recording if active, to save file before shutdown */
+        if (audio_is_recording()) {
+            LOG_INF("Stopping recording before power off");
+            audio_stop_recording();
+            k_sleep(K_MSEC(100));
+        }
+
         haptic_play_pattern(HAPTIC_DOUBLE);
         k_sleep(K_MSEC(400));
         display_post_event(UI_EVENT_TIMEOUT);
