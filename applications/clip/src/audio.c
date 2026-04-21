@@ -442,6 +442,7 @@ static int audio_start_recording_internal(enum audio_mode mode)
     struct clip_context *c = clip_get_context();
 
     /* Ensure DWT cycle counter is enabled for timing measurement */
+    CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
     DWT->CYCCNT = 0;
     DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
 
@@ -775,8 +776,8 @@ void audio_recording_thread(void *p1, void *p2, void *p3)
                 stats.encode_time_max_us = encode_us;
             }
 
-            /* Print encode stats every 1 second (50 frames at 20ms/frame) */
-            if (stats.frames_encoded % 50 == 0) {
+            /* Print encode stats every 10 seconds (500 frames at 20ms/frame) */
+            if (stats.frames_encoded % 500 == 0) {
                 uint32_t avg_enc = (uint32_t)(encode_time_total_us / stats.frames_encoded);
                 uint32_t avg_dsp = (uint32_t)(dsp_time_total_us / stats.frames_encoded);
                 LOG_INF("Encode: avg=%u us, min=%u, max=%u | DSP: avg=%u us (%u frames)",
@@ -933,7 +934,7 @@ static int init_opus_encoder(void)
 
     /* Create Opus encoder */
     opus_encoder = opus_encoder_create(AUDIO_SAMPLE_RATE, opus_channels,
-                       OPUS_APPLICATION_VOIP, &err);
+                       OPUS_APPLICATION_RESTRICTED_LOWDELAY, &err);
     if (!opus_encoder) {
         LOG_ERR("Failed to create Opus encoder: %d", err);
         return err;
@@ -963,6 +964,7 @@ static int init_opus_encoder(void)
     opus_encoder_ctl(opus_encoder, OPUS_SET_DTX(0));
     opus_encoder_ctl(opus_encoder, OPUS_SET_INBAND_FEC(0));
     opus_encoder_ctl(opus_encoder, OPUS_SET_PACKET_LOSS_PERC(0));
+    
 
     /* Update cached parameters */
     encoder_params.bitrate = actual_bitrate;
