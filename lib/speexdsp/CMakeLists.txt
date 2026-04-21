@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # SpeexDSP DSP library for Zephyr
-# Configured for fixed-point embedded operation
+# Uses floating-point mode with FPU acceleration (AGC enabled)
 
 zephyr_library_named(speexdsp)
 zephyr_library_property(ALLOW_EMPTY TRUE)
@@ -33,7 +33,6 @@ zephyr_library_sources_ifdef(CONFIG_SPEEXDSP
 # that are not compatible with Cortex-M33 (Thumb-2 only). The compiler will
 # automatically use DSP instructions (SMULBB, SMLABB, etc.) for generic C code.
 zephyr_compile_options_ifdef(CONFIG_SPEEXDSP
-    -DFIXED_POINT=1
     -DUSE_KISS_FFT=1
     -DEXPORT=
     -DRANDOM_PREFIX=speex
