@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Opus 1.5 codec library for Zephyr
-# Configured for fixed-point embedded operation
+# Configured for floating-point embedded operation
 
 zephyr_library_named(opus_codec)
 zephyr_library_property(ALLOW_EMPTY TRUE)
@@ -168,11 +168,11 @@ zephyr_library_sources_ifdef(CONFIG_OPUS_CODEC
     # ARM optimizations
     opus/celt/arm/arm_celt_map.c
     opus/celt/arm/armcpu.c
-    #opus/celt/arm/celt_pitch_xcorr_arm_gcc.s  
+    #opus/celt/arm/celt_pitch_xcorr_arm_gcc.s
     opus/silk/arm/arm_silk_map.c
 )
 
-# Private preprocessor defines for fixed-point Opus with ARM optimizations
+# Private preprocessor defines for floating-point Opus with ARM optimizations
 zephyr_compile_options_ifdef(CONFIG_OPUS_CODEC
     -DOPUS_BUILD
     -DCUSTOM_SUPPORT
