@@ -12,6 +12,7 @@
 #include "at_server.h"
 #include "transport.h"
 #include "transport_udp.h"
+#include "usb_cdc.h"
 
 LOG_MODULE_REGISTER(at_server, CONFIG_CLIP_LOG_LEVEL);
 
@@ -207,7 +208,9 @@ static void process_command(struct at_queue_item *item)
     #define SEND_RESPONSE() do { \
         at_ctx.response_buffer[sizeof(at_ctx.response_buffer) - 1] = '\0'; \
         size_t resp_len = strnlen(at_ctx.response_buffer, sizeof(at_ctx.response_buffer)); \
-        if (item->transport_type == TRANSPORT_TYPE_UDP) { \
+        if (item->transport_type == TRANSPORT_TYPE_USB) { \
+            usb_cdc_send_response((uint8_t *)at_ctx.response_buffer, resp_len); \
+        } else if (item->transport_type == TRANSPORT_TYPE_UDP) { \
             transport_udp_send_response((uint8_t *)at_ctx.response_buffer, resp_len); \
         } else { \
             transport_send_to(item->transport_type, (uint8_t *)at_ctx.response_buffer, resp_len); \
