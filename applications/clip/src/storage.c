@@ -226,7 +226,7 @@ int storage_close_session(const char *session_id, uint32_t duration_sec,
     uint64_t session_bytes = total_bytes - session_bytes_base;
 
     LOG_INF("session close: %s chunks=%u dur=%us",
-            session_id, chunk_count, session_bytes, duration_sec);
+            session_id, chunk_count, duration_sec);
 
     /* Update session.json with final values */
     update_session_json(session_id, duration_sec, chunk_count, session_bytes);
