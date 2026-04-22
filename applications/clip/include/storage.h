@@ -63,6 +63,15 @@ int storage_init(void);
 void storage_cleanup(void);
 
 /**
+ * @brief Remount SD card after MSC disable
+ *
+ * Re-initializes disk and mounts FATFS.
+ *
+ * @return 0 on success, negative error code on failure
+ */
+int storage_remount(void);
+
+/**
  * @brief Check if SD card is mounted
  *
  * @return true if mounted, false otherwise

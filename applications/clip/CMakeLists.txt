@@ -29,4 +29,5 @@ target_sources(app PRIVATE
     src/wifi_udp.c
     src/transport_udp.c
     src/battery.c
+    src/msc.c
 )

@@ -31,6 +31,7 @@
 #include "clip_event.h"
 #include "battery.h"
 #include "haptic.h"
+#include "msc.h"
 
 LOG_MODULE_REGISTER(main, CONFIG_CLIP_LOG_LEVEL);
 
@@ -224,6 +225,12 @@ int clip_init(void)
     if (err) {
         LOG_WRN("Storage init failed: %d", err);
         /* Continue anyway - storage is optional */
+    }
+
+    /* Initialize USB MSC (disabled, enabled on demand via AT+MSC=on) */
+    err = msc_init();
+    if (err) {
+        LOG_WRN("MSC init failed: %d", err);
     }
 
     /* Initialize transfer subsystem */

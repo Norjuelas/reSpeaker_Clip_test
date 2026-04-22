@@ -114,6 +114,35 @@ void storage_cleanup(void)
     }
 }
 
+int storage_remount(void)
+{
+    int rc;
+
+    if (sd_mounted) {
+        return 0;
+    }
+
+    /* Re-initialize SD card */
+    rc = disk_access_init("SD");
+    if (rc != 0) {
+        LOG_ERR("SD reinit failed: %d", rc);
+        return rc;
+    }
+
+    /* Remount FATFS */
+    rc = fs_mount(&mp);
+    if (rc != 0) {
+        LOG_ERR("SD remount failed: %d", rc);
+        return rc;
+    }
+
+    sd_mounted = true;
+    LOG_INF("SD remounted");
+
+    update_free_space();
+    return 0;
+}
+
 bool storage_is_mounted(void)
 {
     return sd_mounted;

@@ -107,6 +107,10 @@
 	status = "okay";
 };
 
+&usbd {
+	status = "okay";
+};
+
 &clock {
 	hfclkaudio-frequency = <12288000>;
 };
