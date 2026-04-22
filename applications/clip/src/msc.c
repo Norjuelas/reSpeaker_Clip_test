@@ -2,40 +2,35 @@
  * Copyright (c) 2025 Seeed Technology Co., Ltd.
  *
  * SPDX-License-Identifier: Apache-2.0
+ *
+ * MSC is always exposed via USB alongside CDC ACM.
+ * AT+MSC=on unmounts FATFS (exclusive host access, recording blocked).
+ * AT+MSC=off remounts FATFS (app access restored).
  */
 
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
-#include <zephyr/usb/usbd.h>
-#include <zephyr/usb/class/usbd_msc.h>
 
 #include "msc.h"
-#include "usb_cdc.h"
 #include "storage.h"
 #include "audio.h"
 #include "transfer.h"
 
 LOG_MODULE_REGISTER(msc, CONFIG_CLIP_LOG_LEVEL);
 
-/* Map SD card as LUN 0 */
-USBD_DEFINE_MSC_LUN(sd_lun, "SD", "Seeed", "Clip SD", "1.00");
-
 static bool msc_active;
 
 int msc_init(void)
 {
-	/* MSC class is registered on demand by msc_enable().
-	 * USB device is owned by usb_cdc module.
+	/* MSC LUN and USB class are registered in usb_cdc_init().
+	 * Drive appears automatically when USB is connected.
 	 */
-	LOG_INF("MSC ready (disabled)");
+	LOG_INF("MSC ready");
 	return 0;
 }
 
 int msc_enable(void)
 {
-	struct usbd_context *usbd = usb_cdc_get_usbd();
-	int err;
-
 	if (msc_active) {
 		return 0;
 	}
@@ -49,52 +44,25 @@ int msc_enable(void)
 		transfer_cancel();
 	}
 
-	/* Unmount FATFS so USB MSC has exclusive disk access */
+	/* Unmount FATFS so USB host has exclusive disk access */
 	storage_cleanup();
 
-	/* Disable USB, add MSC class, re-enable (brief disconnect) */
-	usbd_disable(usbd);
-
-	err = usbd_register_class(usbd, "msc_0", USBD_SPEED_FS, 1);
-	if (err) {
-		LOG_ERR("MSC class: %d", err);
-		usbd_enable(usbd);
-		storage_remount();
-		return err;
-	}
-
-	err = usbd_enable(usbd);
-	if (err) {
-		LOG_ERR("usbd enable: %d", err);
-		usbd_unregister_class(usbd, "msc_0", USBD_SPEED_FS, 1);
-		storage_remount();
-		return err;
-	}
-
 	msc_active = true;
-	LOG_INF("MSC enabled");
+	LOG_INF("MSC enabled (FATFS unmounted)");
 	return 0;
 }
 
 int msc_disable(void)
 {
-	struct usbd_context *usbd = usb_cdc_get_usbd();
-
 	if (!msc_active) {
 		return 0;
 	}
 
-	/* Disable USB, remove MSC class, re-enable */
-	usbd_disable(usbd);
-	usbd_unregister_class(usbd, "msc_0", USBD_SPEED_FS, 1);
-	usbd_enable(usbd);
-
-	msc_active = false;
-
 	/* Remount FATFS for application use */
 	storage_remount();
 
-	LOG_INF("MSC disabled");
+	msc_active = false;
+	LOG_INF("MSC disabled (FATFS remounted)");
 	return 0;
 }
 
