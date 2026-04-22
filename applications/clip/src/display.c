@@ -1494,6 +1494,7 @@ int display_init(void)
 
 	/* Initial state: show status bar as default.
 	 * BLE init will correct to pairing guide if not bonded.
+	 * Battery init runs before display init, so battery data is already valid.
 	 */
 	set_ui_state(UI_STATE_STATUS_BAR);
 	g_status_bar_start_ms = k_uptime_get();

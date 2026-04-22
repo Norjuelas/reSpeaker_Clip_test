@@ -152,6 +152,13 @@ int clip_init(void)
         /* Continue anyway - config is optional */
     }
 
+    /* Initialize battery monitoring before display so first render has real data */
+    err = battery_init();
+    if (err) {
+        LOG_WRN("Battery init failed: %d", err);
+        /* Continue anyway - battery is optional */
+    }
+
     /* Initialize display early (before slow BLE init) to light up screen */
     err = display_init();
     if (err) {
@@ -164,12 +171,6 @@ int clip_init(void)
     if (err) {
         LOG_ERR("BLE init failed: %d", err);
         return err;
-    }
-
-    /* Initialize battery monitoring (needs BLE for BAS service) */
-    err = battery_init();
-    if (err) {
-        LOG_WRN("Battery init failed: %d", err);
     }
 
     /* Initialize haptic motor */
