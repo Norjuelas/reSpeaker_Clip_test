@@ -26,6 +26,7 @@
 #include "wifi.h"
 #include "display.h"
 #include "haptic.h"
+#include "msc.h"
 
 LOG_MODULE_REGISTER(at_commands, CONFIG_CLIP_LOG_LEVEL);
 
@@ -736,6 +737,11 @@ static int cmd_start_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
         c->config.mode = rec_mode;
     } else {
         rec_mode = c->config.mode;
+    }
+
+    if (msc_is_enabled()) {
+        return create_json_response(false, "MSC active, disable first",
+                                   NULL, response, len);
     }
 
     struct clip_event_result_info info;
@@ -1616,6 +1622,64 @@ static int cmd_wifi_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
     }
 }
 
+static int cmd_msc_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
+{
+    /*
+     * AT+MSC=on  - Enable USB MSC (expose SD card as read-only drive)
+     * AT+MSC=off - Disable USB MSC
+     * AT+MSC?    - Query MSC status
+     */
+
+    if (ctx->type == AT_CMD_TYPE_SET || ctx->type == AT_CMD_TYPE_EXEC) {
+        if (!ctx->args || strlen(ctx->args) == 0) {
+            return create_json_response(false, "Missing argument (on/off)",
+                                        NULL, response, len);
+        }
+
+        char arg[8];
+        strncpy(arg, ctx->args, sizeof(arg) - 1);
+        arg[sizeof(arg) - 1] = '\0';
+        for (char *p = arg; *p; p++) {
+            if (*p >= 'A' && *p <= 'Z') {
+                *p = *p - 'A' + 'a';
+            }
+        }
+
+        if (strcmp(arg, "on") == 0 || strcmp(arg, "1") == 0) {
+            if (audio_is_recording()) {
+                return create_json_response(false, "Recording active, stop first",
+                                            NULL, response, len);
+            }
+
+            int ret = msc_enable();
+            if (ret != 0) {
+                return create_json_response(false, "Failed to enable MSC",
+                                            NULL, response, len);
+            }
+            return create_json_response(true, NULL, "{\"msc\":\"on\"}",
+                                        response, len);
+
+        } else if (strcmp(arg, "off") == 0 || strcmp(arg, "0") == 0) {
+            int ret = msc_disable();
+            if (ret != 0) {
+                return create_json_response(false, "Failed to disable MSC",
+                                            NULL, response, len);
+            }
+            return create_json_response(true, NULL, "{\"msc\":\"off\"}",
+                                        response, len);
+
+        } else {
+            return create_json_response(false, "Invalid argument (use on/off)",
+                                        NULL, response, len);
+        }
+    } else {
+        char data[64];
+        snprintf(data, sizeof(data), "{\"enabled\":%s}",
+                 msc_is_enabled() ? "true" : "false");
+        return create_json_response(true, NULL, data, response, len);
+    }
+}
+
 /* Register all AT commands */
 int at_commands_register(void)
 {
@@ -1856,6 +1920,15 @@ int at_commands_register(void)
         .handler = cmd_wifi_handler,
     };
     err = at_server_register_cmd(&wifi_cmd);
+    if (err) return err;
+
+    /* MSC - USB Mass Storage control */
+    static const struct at_command msc_cmd = {
+        .name = "MSC",
+        .flags = AT_CMD_SET | AT_CMD_QUERY,
+        .handler = cmd_msc_handler,
+    };
+    err = at_server_register_cmd(&msc_cmd);
     if (err) return err;
 
     LOG_INF("AT commands registered");

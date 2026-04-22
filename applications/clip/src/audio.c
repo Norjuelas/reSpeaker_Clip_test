@@ -31,6 +31,7 @@
 #include "transfer.h"
 #include "ble.h"
 #include "display.h"
+#include "msc.h"
 
 LOG_MODULE_REGISTER(audio, CONFIG_CLIP_LOG_LEVEL);
 
@@ -254,6 +255,12 @@ int audio_start_recording(enum audio_mode mode)
     if (recording_active) {
         k_mutex_unlock(&audio_state_mutex);
         LOG_WRN("Recording already active");
+        return -EBUSY;
+    }
+
+    if (msc_is_enabled()) {
+        k_mutex_unlock(&audio_state_mutex);
+        LOG_WRN("Cannot record while MSC active");
         return -EBUSY;
     }
 
