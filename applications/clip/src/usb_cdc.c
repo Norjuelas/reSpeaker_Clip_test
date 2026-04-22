@@ -11,7 +11,8 @@
 #include <zephyr/drivers/uart.h>
 
 #include "usb_cdc.h"
-#include "msc.h"
+#include "storage.h"
+#include "audio.h"
 #include "at_server.h"
 #include "transport.h"
 

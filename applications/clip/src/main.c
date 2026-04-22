@@ -31,7 +31,6 @@
 #include "clip_event.h"
 #include "battery.h"
 #include "haptic.h"
-#include "msc.h"
 #include "usb_cdc.h"
 
 LOG_MODULE_REGISTER(main, CONFIG_CLIP_LOG_LEVEL);
@@ -228,16 +227,10 @@ int clip_init(void)
         /* Continue anyway - storage is optional */
     }
 
-    /* Initialize USB CDC ACM (always-on serial port for AT commands) */
+    /* Initialize USB CDC ACM + MSC (serial port + SD card drive) */
     err = usb_cdc_init();
     if (err) {
-        LOG_WRN("USB CDC init failed: %d", err);
-    }
-
-    /* Initialize USB MSC (disabled, enabled on demand via AT+MSC=on) */
-    err = msc_init();
-    if (err) {
-        LOG_WRN("MSC init failed: %d", err);
+        LOG_WRN("USB init failed: %d", err);
     }
 
     /* Initialize transfer subsystem */
