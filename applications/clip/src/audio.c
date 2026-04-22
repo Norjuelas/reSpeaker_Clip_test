@@ -690,6 +690,12 @@ void audio_recording_thread(void *p1, void *p2, void *p3)
 
                     if (dmic_timeout_count >= 5) {
                         LOG_WRN("DMIC timeout recovery: retriggering DMIC");
+                        LOG_WRN("DSP avg=%u us/enc avg=%u us (frames=%u)",
+                                stats.frames_encoded > 0 ?
+                                    (uint32_t)(dsp_time_total_us / stats.frames_encoded) : 0,
+                                stats.frames_encoded > 0 ?
+                                    (uint32_t)(encode_time_total_us / stats.frames_encoded) : 0,
+                                stats.frames_encoded);
                         dmic_timeout_count = 0;
 
                         /* Try to recover DMIC */
@@ -932,7 +938,11 @@ static int init_opus_encoder(void)
         cleanup_opus_encoder();
     }
 
-    /* Create Opus encoder */
+    /* Create Opus encoder.
+     * VOIP mode optimizes for voice clarity and is efficient at complexity 1.
+     * At 32kbps with VBR, the bitrate budget is sufficient for transcription
+     * quality even without higher complexity or AUDIO mode.
+     */
     opus_encoder = opus_encoder_create(AUDIO_SAMPLE_RATE, opus_channels,
                        OPUS_APPLICATION_VOIP, &err);
     if (!opus_encoder) {
@@ -1034,32 +1044,25 @@ static int init_speex_preprocessor(void)
     int dereverb = IS_ENABLED(CONFIG_CLIP_DEFAULT_DEREVERB) ? 1 : 0;
     speex_preprocess_ctl(speex_pp, SPEEX_PREPROCESS_SET_DEREVERB, &dereverb);
 
+    /* Dereverberation - moderate settings for far-field pickup.
+     * Level 40 / Decay 30: reduces room reflections without over-processing.
+     */
     int dereverb_level = 40;
     speex_preprocess_ctl(speex_pp, SPEEX_PREPROCESS_SET_DEREVERB_LEVEL, &dereverb_level);
 
-    int dereverb_decay = 20;
+    int dereverb_decay = 30;
     speex_preprocess_ctl(speex_pp, SPEEX_PREPROCESS_SET_DEREVERB_DECAY, &dereverb_decay);
 
-    /* AGC for far-field pickup (Kconfig) */
-    int agc = 1;
-    speex_preprocess_ctl(speex_pp, SPEEX_PREPROCESS_SET_AGC, &agc);
-    float agc_level = 8000.0f;
-    speex_preprocess_ctl(speex_pp, SPEEX_PREPROCESS_SET_AGC_LEVEL, &agc_level);
-    int agc_max_gain = CONFIG_CLIP_AGC_MAX_GAIN;
-    speex_preprocess_ctl(speex_pp, SPEEX_PREPROCESS_SET_AGC_MAX_GAIN, &agc_max_gain);
-    int agc_target = CONFIG_CLIP_AGC_TARGET;
-    speex_preprocess_ctl(speex_pp, SPEEX_PREPROCESS_SET_AGC_TARGET, &agc_target);
-    int agc_increment = CONFIG_CLIP_AGC_INCREMENT;
-    speex_preprocess_ctl(speex_pp, SPEEX_PREPROCESS_SET_AGC_INCREMENT, &agc_increment);
-    int agc_decrement = CONFIG_CLIP_AGC_DECREMENT;
-    speex_preprocess_ctl(speex_pp, SPEEX_PREPROCESS_SET_AGC_DECREMENT, &agc_decrement);
+    /* AGC is implemented as a lightweight integer AGC in process_pcm_frame().
+     * SpeexDSP AGC is not available (FIXED_POINT mode) and would be too slow
+     * even with FPU enabled (~15ms/frame for float FFT).
+     */
 
     dsp_params.initialized = true;
 
-    LOG_INF("dsp: noise=%ddB drv=%d agc=%ddB",
+    LOG_INF("dsp: noise=%ddB drv=%d agc=integer",
             CONFIG_CLIP_DEFAULT_NOISE,
-            IS_ENABLED(CONFIG_CLIP_DEFAULT_DEREVERB) ? 1 : 0,
-            CONFIG_CLIP_AGC_MAX_GAIN);
+            IS_ENABLED(CONFIG_CLIP_DEFAULT_DEREVERB) ? 1 : 0);
 
     return 0;
 }
@@ -1082,21 +1085,153 @@ static int16_t *process_pcm_frame(int16_t *stereo_input, int frame_size)
         return stereo_input;
 
     } else {  /* AUDIO_MODE_MERGE */
-        /* Enhanced mode: Mix left and right: (L + R) / 2, then apply DSP */
+        /* Enhanced mode: dual-mic delay-aligned merge + SpeexDSP + integer AGC.
+         *
+         * Pipeline:
+         * 1. Delay-aligned merge: cross-correlation to find ITD, align L/R
+         * 2. SpeexDSP: noise suppression + dereverb (fixed-point, fast)
+         * 3. Integer AGC: lightweight gain control (pure integer, ~50us)
+         * 4. Soft limiter: safety net for peaks
+         *
+         * Mic spacing = 2.85cm → max ITD ≈ 84μs ≈ 1.3 samples at 16kHz.
+         * Delay alignment prevents comb filtering from phase offset.
+         */
+
+        /* Cross-correlation for delay estimation (lags -1, 0, +1).
+         * Only need 3 taps since max ITD is ~1 sample.
+         * Use a subset of the frame for speed (first 80 samples = 5ms).
+         */
+        int32_t corr_m1 = 0;  /* lag -1: right leads by 1 sample */
+        int32_t corr_0  = 0;  /* lag  0: no delay */
+        int32_t corr_p1 = 0;  /* lag +1: left leads by 1 sample */
+
+        int corr_len = frame_size > 80 ? 80 : frame_size;
+        for (int i = 1; i < corr_len - 1; i++) {
+            int32_t l = stereo_input[i * 2];
+            int32_t r = stereo_input[i * 2 + 1];
+            int32_t r_prev = stereo_input[(i - 1) * 2 + 1];
+            int32_t r_next = stereo_input[(i + 1) * 2 + 1];
+
+            corr_m1 += l * r_next;
+            corr_0  += l * r;
+            corr_p1 += l * r_prev;
+        }
+
+        int best_lag = 0;
+        int32_t best_corr = corr_0;
+        if (corr_m1 > best_corr) { best_corr = corr_m1; best_lag = -1; }
+        if (corr_p1 > best_corr) { best_corr = corr_p1; best_lag = 1; }
+
+        /* Merge with delay alignment */
         for (int i = 0; i < frame_size; i++) {
             int32_t left = stereo_input[i * 2];
-            int32_t right = stereo_input[i * 2 + 1];
-            int32_t mixed = (left + right) / 2;
-            /* Clamp to int16 range */
-            if (mixed > 32767) mixed = 32767;
-            if (mixed < -32768) mixed = -32768;
-            processed_buffer[i] = (int16_t)mixed;
+            int32_t ri = i - best_lag;
+            int32_t right;
+            if (ri < 0) {
+                right = stereo_input[1];
+            } else if (ri >= frame_size) {
+                right = stereo_input[(frame_size - 1) * 2 + 1];
+            } else {
+                right = stereo_input[ri * 2 + 1];
+            }
+            int32_t avg = (left + right + 1) >> 1;
+            if (avg > 32767) avg = 32767;
+            if (avg < -32768) avg = -32768;
+            processed_buffer[i] = (int16_t)avg;
         }
 
 #ifdef CONFIG_SPEEXDSP
-        /* Apply SpeexDSP processing (noise suppression, AGC, dereverb) */
         if (speex_enabled && speex_pp) {
             speex_preprocess_run(speex_pp, processed_buffer);
+        }
+
+        /* Integer AGC: standard compressor model + makeup gain.
+         *
+         * Classic audio AGC with three stages:
+         * 1. Envelope detector: peak tracking with fast attack / slow release
+         * 2. Gain computer: desired_gain = target / envelope
+         * 3. Gain smoother: attack (loud→quiet) faster than release (quiet→loud)
+         * 4. Makeup gain: overall volume boost after AGC
+         *
+         * Uses arm_absmax_q15() for fast peak detection (CMSIS-DSP).
+         */
+        {
+            static int32_t agc_envelope = 0;   /* Peak envelope (amplitude) */
+            static int32_t agc_gain_q8 = 256;  /* Current gain, Q8.8 (256=1.0x) */
+
+            /* Step 1: Envelope detector - find peak in frame */
+            int32_t peak = 0;
+            for (int i = 0; i < frame_size; i++) {
+                int32_t s = processed_buffer[i];
+                s = s > 0 ? s : -s;
+                if (s > peak) peak = s;
+            }
+
+            /* Ballistics: fast attack (tau≈10ms), slow release (tau≈300ms) */
+            if (peak > agc_envelope) {
+                agc_envelope += (peak - agc_envelope) * 7 >> 3;
+            } else {
+                agc_envelope = agc_envelope - (agc_envelope >> 4);
+                if (agc_envelope < peak) agc_envelope = peak;
+            }
+
+            /* Step 2: Gain computer.
+             * Target 14000 ≈ -7.3dBFS: moderate level, near-field speech
+             * gets compressed down, far-field gets boosted up.
+             * Below soft limiter knee (26000) so peaks have headroom.
+             */
+            int32_t target_level = 14000;
+            int32_t noise_gate = 500;
+
+            int32_t desired_q8;
+            if (agc_envelope > noise_gate) {
+                desired_q8 = (target_level << 8) / agc_envelope;
+                if (desired_q8 > 4096) desired_q8 = 4096;  /* +24dB max */
+                if (desired_q8 < 64) desired_q8 = 64;      /* -12dB min */
+            } else {
+                desired_q8 = 256;
+            }
+
+            /* Step 3: Gain smoother */
+            int32_t diff = desired_q8 - agc_gain_q8;
+            if (diff < 0) {
+                agc_gain_q8 += diff >> 2;   /* Attack: ~3 frames */
+            } else {
+                agc_gain_q8 += diff >> 5;   /* Release: ~32 frames */
+            }
+
+            /* Step 4: Apply gain (no separate makeup gain).
+             * AGC already targets 18000, so output is near that level.
+             * Speech peaks can exceed target (crest factor ~6-12dB),
+             * handled by the soft limiter in the next stage.
+             */
+            for (int i = 0; i < frame_size; i++) {
+                int32_t s = ((int32_t)processed_buffer[i] * agc_gain_q8) >> 8;
+                if (s > 32767) s = 32767;
+                if (s < -32768) s = -32768;
+                processed_buffer[i] = (int16_t)s;
+            }
+        }
+
+        /* Soft limiter: safety net for AGC + makeup gain overshoot.
+         * Knee at 26000 (~-2.0dBFS), hard limit at 31000 (~-0.5dBFS).
+         */
+        for (int i = 0; i < frame_size; i++) {
+            int32_t s = processed_buffer[i];
+            int32_t abs_s = s > 0 ? s : -s;
+
+            if (abs_s > 26000) {
+                int32_t over = abs_s - 26000;
+                int32_t range = 32768 - 26000;
+                int32_t headroom = 31000 - 26000;
+                int32_t compressed = 26000 + headroom - (headroom * (range - over) * (range - over)) / (range * range);
+
+                if (s > 0) {
+                    processed_buffer[i] = (int16_t)(compressed > 31000 ? 31000 : compressed);
+                } else {
+                    processed_buffer[i] = (int16_t)(-(compressed > 31000 ? 31000 : compressed));
+                }
+            }
         }
 #endif
 

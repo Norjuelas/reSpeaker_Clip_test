@@ -22,15 +22,6 @@ static const struct device *charger_dev = DEVICE_DT_GET(DT_NODELABEL(npm1300_cha
 static const struct device *pmic_gpio_dev = DEVICE_DT_GET(DT_NODELABEL(npm1300_gpio));
 static const struct device *pmic_regulators = DEVICE_DT_GET(DT_NODELABEL(npm1300_regulators));
 
-/* External regulators (controlled by GPIO) - manually configured */
-#define MIC_REG_GPIO  GPIO1_14  /* Microphone power enable */
-#define OLED_REG_GPIO GPIO1_8   /* OLED display power enable */
-#define RFSW_REG_GPIO GPIO0_29  /* WiFi RF switch power enable */
-
-/* GPIO device for external regulators */
-static const struct device *gpio0_dev = DEVICE_DT_GET(DT_NODELABEL(gpio0));
-static const struct device *gpio1_dev = DEVICE_DT_GET(DT_NODELABEL(gpio1));
-
 /* Charger status bitmasks (BCHGCHARGESTATUS register) */
 #define CHG_STATUS_COMPLETE_MASK BIT(1)
 #define CHG_STATUS_TRICKLE_MASK  BIT(2)
@@ -113,14 +104,6 @@ int pmic_init(void)
 		ret = -ENODEV;
 	} else {
 		LOG_INF("  npm1300_regulators: ready");
-	}
-
-	/* Check external regulators */
-	if (device_is_ready(gpio0_dev) && device_is_ready(gpio1_dev)) {
-		LOG_INF("  External regulators: accessible via GPIO");
-	} else {
-		LOG_WRN("  External regulators: GPIO not ready");
-		ret = -ENODEV;
 	}
 
 	if (ret == 0) {
@@ -302,64 +285,6 @@ static int cmd_pmic_monitor(const struct shell *sh, size_t argc, char **argv)
 	return 0;
 }
 
-/* Shell command: pmic regulator (control external regulators) */
-static int cmd_pmic_regulator(const struct shell *sh, size_t argc, char **argv)
-{
-	const char *reg_name;
-	int enable;
-	gpio_pin_t pin;
-	const struct device *gpio_dev;
-
-	if (argc < 3) {
-		shell_print(sh, "Usage: pmic regulator <mic|oled|rfsw> <on|off>");
-		shell_print(sh, "");
-		shell_print(sh, "Regulators:");
-		shell_print(sh, "  mic   - Microphone power (GPIO1.14)");
-		shell_print(sh, "  oled  - OLED display power (GPIO1.8)");
-		shell_print(sh, "  rfsw  - WiFi RF switch (GPIO0.29)");
-		return -EINVAL;
-	}
-
-	reg_name = argv[1];
-	enable = (strcmp(argv[2], "on") == 0 || strcmp(argv[2], "1") == 0) ? 1 : 0;
-
-	/* Determine which GPIO to control */
-	if (strcmp(reg_name, "mic") == 0) {
-		pin = 14;
-		gpio_dev = gpio1_dev;
-	} else if (strcmp(reg_name, "oled") == 0) {
-		pin = 8;
-		gpio_dev = gpio1_dev;
-	} else if (strcmp(reg_name, "rfsw") == 0) {
-		pin = 29;
-		gpio_dev = gpio0_dev;
-	} else {
-		shell_print(sh, "Error: Unknown regulator '%s'", reg_name);
-		return -EINVAL;
-	}
-
-	if (!device_is_ready(gpio_dev)) {
-		shell_print(sh, "Error: GPIO device not ready");
-		return -ENODEV;
-	}
-
-	/* Configure as output if needed (first time) */
-	int ret = gpio_pin_configure(gpio_dev, pin, GPIO_OUTPUT);
-	if (ret != 0 && ret != -EEXIST) {
-		shell_print(sh, "Error: Failed to configure GPIO (%d)", ret);
-		return ret;
-	}
-
-	ret = gpio_port_set_masked_raw(gpio_dev, BIT(pin), enable ? BIT(pin) : 0);
-	if (ret == 0) {
-		shell_print(sh, "%s regulator: %s", reg_name, enable ? "ON" : "OFF");
-	} else {
-		shell_print(sh, "Error: Failed to set regulator (%d)", ret);
-	}
-
-	return ret;
-}
-
 /* Shell command: pmic ship (enter ship mode / power off) */
 static int cmd_pmic_ship(const struct shell *sh, size_t argc, char **argv)
 {
@@ -383,7 +308,6 @@ static int cmd_pmic_ship(const struct shell *sh, size_t argc, char **argv)
 SHELL_STATIC_SUBCMD_SET_CREATE(sub_pmic,
 	SHELL_CMD(status, NULL, "Show battery and charger status", cmd_pmic_status),
 	SHELL_CMD_ARG(monitor, NULL, "Monitor battery status [iterations]", cmd_pmic_monitor, 0, 1),
-	SHELL_CMD_ARG(regulator, NULL, "Control external regulator", cmd_pmic_regulator, 2, 2),
 	SHELL_CMD(ship, NULL, "Enter ship mode (power off)", cmd_pmic_ship),
 	SHELL_SUBCMD_SET_END
 );

@@ -28,17 +28,13 @@ west flash --build-dir build-test && nrfutil device reset
 
 ### 1. BLE Test
 
-**Purpose**: Test Bluetooth Low Energy functionality
+**Purpose**: Test Bluetooth Low Energy functionality as peripheral device
 
-**Commands**:
-```bash
-ble                   # Show BLE status
-ble scan             # Scan for BLE devices
-```
+**Description**: BLE automatically starts advertising on boot. Connect with a BLE central device to test GATT services and throughput.
 
 **Expected Results**:
 - Device advertises as "Clip_Test"
-- BLE scan shows nearby devices
+- Supports GATT connections and notifications for throughput testing
 
 ### 2. WiFi AP Test
 
@@ -56,9 +52,6 @@ ble scan             # Scan for BLE devices
 wifi on              # Start AP
 wifi off             # Stop AP
 wifi status          # Show AP status
-wifi scan            # Scan for networks (debug)
-wifi scan 1          # Scan 2.4GHz only
-wifi scan 2          # Scan 5GHz only
 ```
 
 **Quick Test**:
@@ -113,8 +106,11 @@ iperf 192.168.4.10 10 50000 # 10 second test at 50 Mbps
 **Commands**:
 ```bash
 sd mount             # Mount SD card
+sd umount            # Unmount SD card
+sd format            # Format SD card as FAT32
+sd speed [size_kb]   # Speed test
+sd status            # Show SD card status
 fs ls /SD:           # List files
-sd eject             # Eject SD card
 ```
 
 **Expected Results**:
@@ -140,8 +136,7 @@ mic capture [time_sec]  # Capture audio (default 5 seconds)
 **Purpose**: Test user button functionality
 
 **Expected Results**:
-- Button presses are detected
-- Multi-press and long-press work correctly
+- Button presses are detected and logged
 
 ### 6. OLED Display Test
 
@@ -156,7 +151,6 @@ oled pattern         # Show test pattern
 oled circle          # Draw circle
 oled pixels          # Draw test pixels
 oled brightness <0-255>  # Set brightness
-oled help            # Show all commands
 ```
 
 **Expected Results**:
@@ -172,14 +166,12 @@ oled help            # Show all commands
 ```bash
 pmic status          # Show battery/charger status
 pmic monitor         # Continuously monitor status
-pmic regulator <mic|oled|rfsw> <on|off>  # Control regulators
 pmic ship            # Enter ship mode (power off)
 ```
 
 **Expected Results**:
 - Battery voltage and percentage display correctly
 - Charging status accurate
-- Regulator control works
 - Ship mode powers off device
 
 ### 8. Motor Test
@@ -261,9 +253,9 @@ imu selftest         # Run self-test
 
 **Solutions**:
 1. Check SSID and password are correct
-2. Ensure WiFi router is 2.4GHz (nRF7002 is 2.4GHz only)
+2. Ensure device supports 5GHz WiFi (nRF7002 AP is 5GHz only)
 3. Check antenna is connected
-4. Try `wifi on` then scan before connecting
+4. Try `wifi on` then check status
 
 ## Hardware Specifications
 
@@ -276,10 +268,10 @@ imu selftest         # Run self-test
 | IMU SCL | GPIO1.1 | I2C clock (software) |
 | IMU INT1 | GPIO0.3 | IMU interrupt |
 | IMU VDD_EN | GPIO0.2 | IMU power enable (NFC1) |
-| Motor Ctrl | GPIO1.6 | Vibration motor control |
-| Mic VDD_EN | GPIO1.14 | Microphone power enable |
-| OLED VDD_EN | GPIO1.8 | OLED power enable |
-| RFSW VDD_EN | GPIO0.29 | WiFi RF switch enable |
+| Motor Ctrl | GPIO1.6 | Vibration motor control (via PMIC GPIO) |
+| Mic VDD_EN | GPIO1.14 | Microphone power enable (GPIO-controlled) |
+| OLED VDD_EN | GPIO1.8 | OLED power enable (GPIO-controlled) |
+| RFSW VDD_EN | GPIO0.29 | WiFi RF switch enable (GPIO-controlled) |
 
 ### I2C Devices
 
@@ -293,11 +285,15 @@ imu selftest         # Run self-test
 
 - **USB**: 5V VBUS for charging and main power
 - **Battery**: Li-Po battery managed by NPM1300
-- **Regulators**:
+- **PMIC Regulators** (NPM1300):
   - BUCK1: MOTOR_3V3 (vibration motor)
   - BUCK2: VDD_3V3 (main system)
   - LDO1: VDDMIC_1V8 (microphone)
   - LDO2: VDD_SD (SD card)
+- **GPIO-controlled Regulators**:
+  - Mic VDD_EN: GPIO1.14 (microphone power enable)
+  - OLED VDD_EN: GPIO1.8 (OLED display power enable)
+  - RFSW VDD_EN: GPIO0.29 (WiFi RF switch enable)
 
 ## Memory Usage
 
@@ -319,6 +315,56 @@ RAM:        364 KB (79.4% of 448 KB)
 | PMIC | - | ✓ | ✓ | ✓ | ✓ |
 | Motor | ✓ | - | - | - | - |
 | IMU | ✓ | ✓ | ✓ | ✓ | ✓ |
+
+## Built-in Shell Commands
+
+The following Zephyr built-in shell commands are available for low-level hardware testing.
+
+### Regulator Shell
+
+Controls PMIC regulators (BUCK1/2, LDO1/2) and GPIO-fixed regulators (mic, oled, rfsw):
+
+```bash
+regulator status         # List all regulators and their state
+regulator enable <name>  # Enable a regulator
+regulator disable <name> # Disable a regulator
+regulator vget <name>    # Get regulator voltage
+```
+
+Regulator names (from device tree):
+| Name | Type | Controls |
+|------|------|----------|
+| `BUCK1` | NPM1300 | Motor 3.3V |
+| `BUCK2` | NPM1300 | Main 3.3V (always-on) |
+| `LDO1` | NPM1300 | Mic 1.8V |
+| `LDO2` | NPM1300 | SD card 3.3V |
+| `mic_vdd` | GPIO-fixed | Mic power enable (GPIO1.14) |
+| `oled_vdd` | GPIO-fixed | OLED power enable (GPIO1.8) |
+| `rfsw_vdd` | GPIO-fixed | WiFi RF switch (GPIO0.29) |
+
+### GPIO Shell
+
+```bash
+gpio get <port> <pin>      # Read GPIO pin state
+gpio set <port> <pin> <0|1> # Set GPIO output
+gpio conf <port> <pin> <cfg> # Configure GPIO pin
+```
+
+Examples:
+```bash
+gpio set gpio1 14 1   # Enable mic power
+gpio set gpio1 8 0    # Disable OLED power
+gpio get gpio1 15     # Read button state
+```
+
+### I2C Shell
+
+```bash
+i2c scan i2c1       # Scan I2C1 bus (PMIC @ 0x6B)
+i2c scan i2c2       # Scan I2C2 bus (OLED @ 0x3C)
+i2c read i2c1 0x6b <reg> <len>   # Read NPM1300 register
+i2c write i2c1 0x6b <reg> <data> # Write NPM1300 register
+```
 
 ## Development Notes
 
@@ -346,6 +392,7 @@ Use SHELL_CMD_* macros for shell command registration:
 
 ## Version History
 
+- 2026-04-22: Updated documentation to accurately reflect implemented features, removed non-existent BLE and WiFi scan commands, corrected SD card commands
 - 2025-03-09: Added IMU test module with software I2C
 - 2025-03-09: Added vibration motor test commands
 - 2025-03-09: Added PMIC (NPM1300) test commands

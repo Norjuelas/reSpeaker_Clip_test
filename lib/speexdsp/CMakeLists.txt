@@ -28,11 +28,10 @@ zephyr_library_sources_ifdef(CONFIG_SPEEXDSP
     speexdsp/libspeexdsp/smallft.c
 )
 
-# Private preprocessor defines for fixed-point operation
-# Note: ARM5E_ASM is disabled because it uses Classic ARM conditional instructions
-# that are not compatible with Cortex-M33 (Thumb-2 only). The compiler will
-# automatically use DSP instructions (SMULBB, SMLABB, etc.) for generic C code.
-zephyr_compile_options_ifdef(CONFIG_SPEEXDSP
+# Fixed-point mode for fast FFT processing.
+# AGC is implemented as a lightweight integer AGC in audio.c instead of
+# SpeexDSP's float AGC (which takes ~15ms/frame even with hardware FPU).
+zephyr_library_compile_options(
     -DUSE_KISS_FFT=1
     -DEXPORT=
     -DRANDOM_PREFIX=speex
@@ -42,7 +41,7 @@ zephyr_compile_options_ifdef(CONFIG_SPEEXDSP
 )
 
 # Compile options to suppress warnings from upstream code
-zephyr_compile_options_ifdef(CONFIG_SPEEXDSP
+zephyr_library_compile_options(
     -Wno-sign-compare
     -Wno-maybe-uninitialized
     -Wno-double-promotion

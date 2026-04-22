@@ -23,7 +23,7 @@ source "subsys/logging/Kconfig.template.log_config"
 
 config CLIP_NORMAL_BITRATE
 	int "Normal mode Opus bitrate (bps)"
-	default 24000
+	default 32000
 
 config CLIP_NORMAL_COMPLEXITY
 	int "Normal mode Opus complexity (0-10)"
@@ -32,7 +32,7 @@ config CLIP_NORMAL_COMPLEXITY
 
 config CLIP_ENHANCED_BITRATE
 	int "Enhanced mode Opus bitrate (bps)"
-	default 24000
+	default 32000
 
 config CLIP_ENHANCED_COMPLEXITY
 	int "Enhanced mode Opus complexity (0-10)"
@@ -41,7 +41,7 @@ config CLIP_ENHANCED_COMPLEXITY
 
 config CLIP_DEFAULT_NOISE
 	int "Default noise suppression level (dB)"
-	default 30
+	default 20
 
 config CLIP_DEFAULT_DEREVERB
 	bool "Default dereverberation enabled"
@@ -49,7 +49,7 @@ config CLIP_DEFAULT_DEREVERB
 
 config CLIP_AGC_MAX_GAIN
 	int "AGC maximum gain (dB)"
-	default 20
+	default 60
 
 config CLIP_AGC_TARGET
 	int "AGC target level"
@@ -57,11 +57,11 @@ config CLIP_AGC_TARGET
 
 config CLIP_AGC_INCREMENT
 	int "AGC max increase (dB/s)"
-	default 12
+	default 60
 
 config CLIP_AGC_DECREMENT
 	int "AGC max decrease (dB/s)"
-	default -40
+	default -100
 
 config CLIP_DEFAULT_AUTODEL
 	int "Default auto-delete days (-1 for off)"
