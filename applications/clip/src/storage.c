@@ -705,6 +705,97 @@ int storage_count_sessions(void)
     return count;
 }
 
+int storage_list_session_ids(char ids[][16], int max_ids)
+{
+    struct fs_dir_t dirp;
+    struct fs_dirent entry;
+    int count = 0;
+    int rc;
+
+    if (!sd_mounted || !ids) {
+        return -EINVAL;
+    }
+
+    fs_dir_t_init(&dirp);
+    rc = fs_opendir(&dirp, STORAGE_BASE_PATH);
+    if (rc != 0) {
+        LOG_ERR("Failed to open REC directory: %d", rc);
+        return rc;
+    }
+
+    /* Scan all session directories. Keep only the newest max_ids by
+     * maintaining a sorted insertion: if buffer is full and the new
+     * entry is newer than the oldest (last) entry, replace it.
+     */
+    while (true) {
+        rc = fs_readdir(&dirp, &entry);
+        if (rc != 0 || entry.name[0] == '\0') {
+            break;
+        }
+
+        if (entry.type != FS_DIR_ENTRY_DIR) {
+            continue;
+        }
+
+        /* Validate: 14 digits (YYYYMMDDHHMMSS) */
+        size_t len = strlen(entry.name);
+        if (len != 14) {
+            continue;
+        }
+
+        bool valid = true;
+        for (size_t i = 0; i < len; i++) {
+            if (entry.name[i] < '0' || entry.name[i] > '9') {
+                valid = false;
+                break;
+            }
+        }
+        if (!valid) {
+            continue;
+        }
+
+        if (count < max_ids) {
+            /* Buffer not full yet — insert sorted (descending) */
+            int pos = count;
+            for (int k = 0; k < count; k++) {
+                if (strcmp(entry.name, ids[k]) > 0) {
+                    pos = k;
+                    break;
+                }
+            }
+            /* Shift elements right to make room */
+            for (int k = count; k > pos; k--) {
+                strncpy(ids[k], ids[k - 1], 16);
+            }
+            strncpy(ids[pos], entry.name, 15);
+            ids[pos][15] = '\0';
+            count++;
+        } else {
+            /* Buffer full — only insert if newer than oldest (last entry) */
+            if (strcmp(entry.name, ids[max_ids - 1]) > 0) {
+                /* Find insertion point */
+                int pos = max_ids - 1;
+                for (int k = 0; k < max_ids - 1; k++) {
+                    if (strcmp(entry.name, ids[k]) > 0) {
+                        pos = k;
+                        break;
+                    }
+                }
+                /* Shift elements right, dropping the last one */
+                for (int k = max_ids - 1; k > pos; k--) {
+                    strncpy(ids[k], ids[k - 1], 16);
+                }
+                strncpy(ids[pos], entry.name, 15);
+                ids[pos][15] = '\0';
+            }
+        }
+    }
+
+    fs_closedir(&dirp);
+
+    return count;
+}
+
 int storage_list_sessions_paginated(struct storage_session_info *sessions,
                                     int offset, int limit)
 {

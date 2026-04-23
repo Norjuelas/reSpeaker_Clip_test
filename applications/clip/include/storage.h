@@ -210,6 +210,19 @@ int storage_list_sessions(struct storage_session_info *sessions, int max_session
 int storage_count_sessions(void);
 
 /**
+ * @brief List session IDs only (fast, no session.json reads)
+ *
+ * Scans REC directory for valid session directories and returns
+ * sorted session IDs. Does not read session.json or any other files.
+ * Empty sessions (no .opus files) are automatically deleted.
+ *
+ * @param ids Output array for session IDs (each at least 16 bytes)
+ * @param max_ids Maximum number of IDs to return
+ * @return Number of IDs found, or negative error code
+ */
+int storage_list_session_ids(char ids[][16], int max_ids);
+
+/**
  * @brief List sessions with pagination support
  *
  * @param sessions Output array for session info
