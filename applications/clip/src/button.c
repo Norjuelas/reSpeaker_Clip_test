@@ -26,6 +26,9 @@ static void *button_user_data = NULL;
 /* Track power-off screen state for two-step shutdown */
 static atomic_t poweroff_screen_active = ATOMIC_INIT(0);
 
+/* Track if recording was stopped by long press (skip RELEASE action) */
+static atomic_t recording_stopped = ATOMIC_INIT(0);
+
 static void button_event_callback(const struct device *dev, enum button_action action)
 {
     ARG_UNUSED(dev);
@@ -43,11 +46,18 @@ static void button_event_callback(const struct device *dev, enum button_action a
 
     case BUTTON_LONG_PRESS:
 	LOG_INF("LONG_PRESS (held >1s, still holding), state=%d", state);
-	/* Auto-triggered while still holding — vibrate to confirm threshold.
-	 * Actual start/stop is deferred to BUTTON_RELEASE.
-	 */
-	if (state == CLIP_STATE_RECORDING ||
-	    state == CLIP_STATE_IDLE || state == CLIP_STATE_ERROR) {
+	if (state == CLIP_STATE_RECORDING) {
+		/* Stop recording immediately, vibrate to confirm.
+		 * User can continue holding for power-off (LEVEL_1/2/3).
+		 */
+		struct clip_event_result_info info;
+		clip_post_event_sync(CLIP_EVENT_STOP, &info);
+		haptic_play_pattern(HAPTIC_SHORT);
+		atomic_set(&recording_stopped, 1);
+	} else if (state == CLIP_STATE_IDLE || state == CLIP_STATE_ERROR) {
+		/* Vibrate to confirm long-press threshold.
+		 * Actual start deferred to RELEASE.
+		 */
 		haptic_play_pattern(HAPTIC_SHORT);
 	}
 	break;
@@ -64,8 +74,14 @@ static void button_event_callback(const struct device *dev, enum button_action a
 	LOG_INF("RELEASE, state=%d, poweroff=%d", state, atomic_get(&poweroff_screen_active));
 	if (atomic_cas(&poweroff_screen_active, 1, 0)) {
 	    clip_post_event(CLIP_EVENT_POWER_OFF_EXEC);
+	} else if (atomic_cas(&recording_stopped, 1, 0)) {
+	    /* Recording was stopped by long press, ignore this release */
 	} else if (state == CLIP_STATE_RECORDING) {
+	    /* Should not reach here — recording is stopped in LONG_PRESS.
+	     * But handle as safety fallback.
+	     */
 	    clip_post_event(CLIP_EVENT_STOP);
+	    haptic_play_pattern(HAPTIC_SHORT);
 	} else if (state == CLIP_STATE_IDLE || state == CLIP_STATE_ERROR) {
 	    clip_post_event(CLIP_EVENT_START);
 	}

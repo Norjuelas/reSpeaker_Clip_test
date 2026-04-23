@@ -1176,17 +1176,16 @@ static int16_t *process_pcm_frame(int16_t *stereo_input, int frame_size)
             }
 
             /* Step 2: Gain computer.
-             * Target 14000 ≈ -7.3dBFS: moderate level, near-field speech
-             * gets compressed down, far-field gets boosted up.
-             * Below soft limiter knee (26000) so peaks have headroom.
+             * Target 12000 ≈ -8.6dBFS: moderate compression for near-field
+             * suppression. Far-field gets boosted toward this level by max gain.
              */
-            int32_t target_level = 14000;
-            int32_t noise_gate = 500;
+            int32_t target_level = 12000;
+            int32_t noise_gate = 200;
 
             int32_t desired_q8;
             if (agc_envelope > noise_gate) {
                 desired_q8 = (target_level << 8) / agc_envelope;
-                if (desired_q8 > 4096) desired_q8 = 4096;  /* +24dB max */
+                if (desired_q8 > 6144) desired_q8 = 6144;  /* +27.6dB max for far-field */
                 if (desired_q8 < 64) desired_q8 = 64;      /* -12dB min */
             } else {
                 desired_q8 = 256;
@@ -1195,9 +1194,9 @@ static int16_t *process_pcm_frame(int16_t *stereo_input, int frame_size)
             /* Step 3: Gain smoother */
             int32_t diff = desired_q8 - agc_gain_q8;
             if (diff < 0) {
-                agc_gain_q8 += diff >> 2;   /* Attack: ~3 frames */
+                agc_gain_q8 += diff >> 1;   /* Attack: ~2 frames, fast near-field suppression */
             } else {
-                agc_gain_q8 += diff >> 5;   /* Release: ~32 frames */
+                agc_gain_q8 += diff >> 7;   /* Release: ~128 frames, slow decay sustains far-field boost */
             }
 
             /* Step 4: Apply gain (no separate makeup gain).

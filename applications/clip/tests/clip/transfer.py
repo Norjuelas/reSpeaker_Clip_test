@@ -417,6 +417,12 @@ class SessionSync(FileTransfer):
                 await self._merge_opus_files(result["files"], merged_path)
                 if merged_path.exists():
                     result["merged_file"] = str(merged_path)
+            # Delete from device if requested (even for already-synced sessions)
+            if delete_after and not continuous:
+                try:
+                    await self.commands.delete_session(session_id)
+                except Exception:
+                    pass
             return result
 
         # Determine start file based on synced_files from device

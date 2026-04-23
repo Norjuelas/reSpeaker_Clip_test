@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-/* Device tree overlay for Clip2 application */
+/* Device tree overlay for Clip application */
 
 / {
     /* Reserved for future use */

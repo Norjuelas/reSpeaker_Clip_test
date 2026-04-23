@@ -347,17 +347,40 @@ class WiFiSync:
         return {"ok": False, "error": "No response"}
 
     def list_sessions(self) -> List[dict]:
-        """List sessions on the device."""
-        result = self._send_at_command("LIST")
-        if not result.get("ok"):
-            print(f"  AT+LIST error: {result.get('error')}")
-            return []
-        data = result.get("data", [])
-        if isinstance(data, list):
-            return data
-        if isinstance(data, dict):
-            return data.get("sessions", [])
-        return []
+        """List all sessions on the device (paginated)."""
+        all_sessions = []
+        page = 1
+        while True:
+            result = self._send_at_command(f"LIST?{page}&50")
+            if not result.get("ok"):
+                # Fallback: try without pagination
+                if page == 1:
+                    result = self._send_at_command("LIST")
+                    if not result.get("ok"):
+                        return []
+                    data = result.get("data", [])
+                    if isinstance(data, list):
+                        return data
+                    if isinstance(data, dict):
+                        return data.get("sessions", [])
+                break
+
+            data = result.get("data", {})
+            if isinstance(data, dict):
+                sessions = data.get("sessions", [])
+            elif isinstance(data, list):
+                sessions = data
+            else:
+                break
+
+            all_sessions.extend(sessions)
+
+            total = data.get("total", 0) if isinstance(data, dict) else len(sessions)
+            if len(all_sessions) >= total or len(sessions) == 0:
+                break
+            page += 1
+
+        return all_sessions
 
     def delete_session(self, session_id: str) -> bool:
         """Delete a session from the device."""
@@ -639,6 +662,7 @@ class WiFiSync:
         # Delete session from device if requested
         if delete_after and files_received > 0:
             print(f"  Deleting session from device...")
+            time.sleep(0.3)  # Wait for device to finish transfer cleanup
             self.delete_session(session_id)
 
         return files_received > 0

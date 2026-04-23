@@ -35,6 +35,11 @@ static bool reboot_clear_bonds;
 
 static void reboot_work_handler(struct k_work *work)
 {
+    /* Stop recording if active before rebooting */
+    if (audio_is_recording()) {
+        audio_stop_recording();
+        k_sleep(K_MSEC(100));
+    }
     if (reboot_clear_bonds) {
         ble_clear_bonds();
     }
@@ -811,12 +816,11 @@ static int cmd_stop_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
         }
     }
 
-    haptic_play_pattern(HAPTIC_SHORT);
-
     struct audio_stats audio_stats;
     if (audio_get_stats(&audio_stats) != 0) {
         char data[128];
         snprintf(data, sizeof(data), "{\"session\":\"%s\"}", session_id);
+        haptic_play_pattern(HAPTIC_SHORT);
         return create_json_response(true, NULL, data, response, len);
     }
 
@@ -831,6 +835,8 @@ static int cmd_stop_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
             (uint32_t)(audio_stats.recording_time_ms / 1000),
             audio_stats.frames_encoded,
             audio_stats.total_bytes);
+
+    haptic_play_pattern(HAPTIC_SHORT);
 
     return create_json_response(true, NULL, data, response, len);
 }

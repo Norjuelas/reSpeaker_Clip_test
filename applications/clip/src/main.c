@@ -141,7 +141,7 @@ int clip_init(void)
 {
     int err;
 
-    LOG_INF("Initializing Clip2...");
+    LOG_INF("Initializing Clip...");
 
     /* Initialize context */
 
@@ -363,7 +363,7 @@ void clip_main_loop(void)
 int main(void)
 {
     /* Print version and build info at startup */
-    LOG_INF("Clip2 Firmware v%s", APP_VERSION_STRING);
+    LOG_INF("Clip Firmware v%s", APP_VERSION_STRING);
     LOG_INF("Build: %s %s", __DATE__, __TIME__);
 
     int err;

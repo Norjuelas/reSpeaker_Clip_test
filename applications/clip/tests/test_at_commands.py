@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-AT Command Tests for Clip2
+AT Command Tests for Clip
 
 Tests AT commands via BLE connection.
 Requires: bleak, asyncio
@@ -12,14 +12,14 @@ import sys
 from typing import Optional, Dict, Any
 from bleak import BleakClient, BleakScanner
 
-# UUIDs - Matching the Clip2 BLE service
+# UUIDs - Matching the Clip BLE service
 SERVICE_UUID = "6E400001-B5A3-F393-E0A9-E50E24DCCA9E"
 CMD_RECV_UUID = "6E400002-B5A3-F393-E0A9-E50E24DCCA9E"
 RESP_SEND_UUID = "6E400003-B5A3-F393-E0A9-E50E24DCCA9E"
 
 
-class Clip2Device:
-    """Clip2 BLE Device Interface"""
+class ClipDevice:
+    """Clip BLE Device Interface"""
 
     def __init__(self, address: str):
         self.address = address
@@ -116,7 +116,7 @@ def parse_response(response_str: str) -> Dict[str, Any]:
         return {"ok": False, "msg": "Invalid JSON"}
 
 
-async def test_basic_commands(device: Clip2Device):
+async def test_basic_commands(device: ClipDevice):
     """Test basic AT commands"""
     print("\n=== Testing Basic Commands ===")
 
@@ -138,7 +138,7 @@ async def test_basic_commands(device: Clip2Device):
     print("\n✓ Basic commands test passed")
 
 
-async def test_config_commands(device: Clip2Device):
+async def test_config_commands(device: ClipDevice):
     """Test configuration commands"""
     print("\n=== Testing Config Commands ===")
 
@@ -163,7 +163,7 @@ async def test_config_commands(device: Clip2Device):
     print("\n✓ Config commands test passed")
 
 
-async def test_invalid_commands(device: Clip2Device):
+async def test_invalid_commands(device: ClipDevice):
     """Test invalid commands"""
     print("\n=== Testing Invalid Commands ===")
 
@@ -176,8 +176,8 @@ async def test_invalid_commands(device: Clip2Device):
     print("\n✓ Invalid commands test passed")
 
 
-async def scan_for_device(name_prefix: str = "Clip2") -> Optional[str]:
-    """Scan for Clip2 device"""
+async def scan_for_device(name_prefix: str = "Clip") -> Optional[str]:
+    """Scan for Clip device"""
     print(f"Scanning for {name_prefix}...")
     devices = await BleakScanner.discover()
     for device in devices:
@@ -194,16 +194,16 @@ async def main():
         address = sys.argv[1]
     else:
         # Scan for device
-        address = await scan_for_device("Clip2")
+        address = await scan_for_device("Clip")
         if not address:
-            print("No Clip2 device found!")
+            print("No Clip device found!")
             print("Usage: python test_at_commands.py <BLE_ADDRESS>")
             sys.exit(1)
 
     print(f"Using device: {address}")
 
     # Create device interface
-    device = Clip2Device(address)
+    device = ClipDevice(address)
 
     try:
         # Connect

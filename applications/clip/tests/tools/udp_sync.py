@@ -44,6 +44,8 @@ def main():
     parser.add_argument("--file", "-f", help="Start from specific file (e.g., 0015.opus)")
     parser.add_argument("--delete", action="store_true",
                        help="Delete session from device after sync")
+    parser.add_argument("--delete-synced", action="store_true",
+                       help="Delete successfully synced sessions (implies --delete)")
     parser.add_argument("--no-ogg", action="store_true",
                        help="Skip OGG conversion")
     args = parser.parse_args()
@@ -76,6 +78,18 @@ def main():
         for idx, s in enumerate(sessions_to_sync, 1):
             sid = s.get("id", "?")
             print(f"\n[{idx}/{len(sessions_to_sync)}] {sid}")
+
+            # Check if session already synced locally
+            local_ogg = args.output / "Clip" / sid / f"{sid}.ogg"
+            local_opus = args.output / "Clip" / sid / f"{sid}.opus"
+            if local_ogg.exists() or local_opus.exists():
+                print(f"  Already synced, skipping download")
+                if args.delete:
+                    print(f"  Deleting session from device...")
+                    sync.delete_session(sid)
+                ok += 1
+                continue
+
             if sync.download_session(
                 sid, args.output,
                 convert_ogg=not args.no_ogg,

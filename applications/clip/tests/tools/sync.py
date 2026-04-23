@@ -175,7 +175,7 @@ Examples:
             print(f"  Mode: {state.mode}")
             print(f"  Bitrate: {state.bitrate}")
 
-            sessions = await cmds.list_sessions()
+            sessions = await cmds.list_all_sessions()
             print(f"\nSessions: {len(sessions)}")
             for s in sessions:
                 print(f"  - {s.id}: {s.files} files, {format_bytes(s.size)}")
@@ -189,7 +189,7 @@ Examples:
 
             # First, list all sessions
             cmds = ClipCommands(device)
-            sessions = await cmds.list_sessions()
+            sessions = await cmds.list_all_sessions()
 
             print(f"\nFound {len(sessions)} session(s) on device:")
             for s in sessions:

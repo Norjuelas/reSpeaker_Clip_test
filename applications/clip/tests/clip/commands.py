@@ -639,6 +639,44 @@ class ClipCommands:
 
         return [SessionInfo.from_dict(s) for s in sessions]
 
+    async def list_all_sessions(self, per_page: int = 15) -> List[SessionInfo]:
+        """
+        List all recording sessions with automatic pagination.
+
+        Args:
+            per_page: Items per page (max 15)
+
+        Returns:
+            List of all SessionInfo objects
+        """
+        all_sessions = []
+        page = 1
+
+        while True:
+            if page == 1 and per_page == 10:
+                response = await self._send_and_check("AT+LIST")
+            else:
+                response = await self._send_and_check(f"AT+LIST?{page}&{per_page}")
+
+            data = response.get('data', {})
+
+            if isinstance(data, list):
+                # Old format: no pagination, return as-is
+                return [SessionInfo.from_dict(s) for s in data]
+
+            sessions = data.get('sessions', [])
+            all_sessions.extend([SessionInfo.from_dict(s) for s in sessions])
+
+            total = data.get('total', len(all_sessions))
+            if len(all_sessions) >= total or len(sessions) == 0:
+                break
+
+            page += 1
+            if (page - 1) * per_page >= total:
+                break
+
+        return all_sessions
+
     async def get_session_info(self, session_id: str) -> 'SessionInfo':
         """
         Get detailed session information including synced files count and audio format.
