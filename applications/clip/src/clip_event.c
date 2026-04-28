@@ -393,9 +393,14 @@ static enum clip_event_result execute_transition(enum clip_event event,
     switch (event) {
     case CLIP_EVENT_START:
     {
-        enum audio_mode mode = AUDIO_MODE_MERGE;  /* Both modes use merge (L+R → mono) */
+        if (from == CLIP_STATE_WIFI_SYNC) {
+            display_post_event(UI_EVENT_WIFI_BLOCKED);
+            return CLIP_EVENT_INVALID;
+        }
 
-        err = audio_start_recording(mode);
+        struct clip_context *ctx = clip_get_context();
+
+        err = audio_start_recording(AUDIO_MODE_MERGE);
         if (err) {
             if (err == -EBUSY) {
                 return CLIP_EVENT_BUSY;

@@ -69,6 +69,9 @@ static int prev_bond_count;
 /* Work queue for advertising restart */
 static struct k_work adv_work;
 
+/* Track current advertising speed */
+static bool is_fast_adv;
+
 /* Fast advertising: for initial pairing discovery (100-150ms) */
 static const struct bt_le_adv_param adv_param_fast =
     BT_LE_ADV_PARAM_INIT(BT_LE_ADV_OPT_CONN, BT_GAP_ADV_FAST_INT_MIN_1,
@@ -300,6 +303,7 @@ static void adv_timeout_handler(struct k_work *work)
 	}
 
 	LOG_INF("slow adv");
+	is_fast_adv = false;
 	bt_le_adv_stop();
 	int err = bt_le_adv_start(&adv_param_slow, ad, ARRAY_SIZE(ad),
 				  sd, ARRAY_SIZE(sd));
@@ -333,6 +337,7 @@ static void adv_work_handler(struct k_work *work)
 		/* Schedule switch to slow advertising after timeout */
 		k_work_reschedule(&adv_timeout_work,
 				  K_MSEC(ADV_FAST_TIMEOUT_MS));
+		is_fast_adv = true;
 	}
 }
 
@@ -420,6 +425,9 @@ static void disconnected(struct bt_conn *conn, uint8_t reason)
 
         /* Clear transport layer */
         transport_ble_update_connection(NULL, false);
+
+        /* Notify display that BLE disconnected */
+        display_post_event(UI_EVENT_BLE_DISCONNECTED);
 
         /* Clean up any ongoing transfer via work queue to avoid stack overflow
          * in BLE RX thread context (transfer_cancel -> storage_set_synced_files
@@ -661,6 +669,7 @@ int ble_init(void)
 
     /* Schedule switch to slow advertising (stays fast if unbonded) */
     k_work_schedule(&adv_timeout_work, K_MSEC(ADV_FAST_TIMEOUT_MS));
+    is_fast_adv = true;
 
     LOG_INF("BLE ready, device: %s", ble_ctx.device_name);
 
@@ -910,6 +919,13 @@ void ble_adv_restart_fast(void)
 	return;
     }
 
+    /* If already fast advertising, just extend the timeout */
+    if (is_fast_adv) {
+	k_work_reschedule(&adv_timeout_work, K_MSEC(ADV_FAST_TIMEOUT_MS));
+	LOG_INF("fast adv (extend)");
+	return;
+    }
+
     bt_le_adv_stop();
     int err = bt_le_adv_start(&adv_param_fast, ad, ARRAY_SIZE(ad),
 			      sd, ARRAY_SIZE(sd));
@@ -917,6 +933,7 @@ void ble_adv_restart_fast(void)
 	LOG_ERR("Fast advertising restart failed: %d", err);
     } else {
 	LOG_INF("fast adv (button)");
+	is_fast_adv = true;
     }
 
     /* Re-schedule switch to slow advertising */

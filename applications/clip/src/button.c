@@ -54,7 +54,8 @@ static void button_event_callback(const struct device *dev, enum button_action a
 		clip_post_event_sync(CLIP_EVENT_STOP, &info);
 		haptic_play_pattern(HAPTIC_SHORT);
 		atomic_set(&recording_stopped, 1);
-	} else if (state == CLIP_STATE_IDLE || state == CLIP_STATE_ERROR) {
+	} else if (state == CLIP_STATE_IDLE || state == CLIP_STATE_ERROR
+		   || state == CLIP_STATE_WIFI_SYNC) {
 		/* Vibrate to confirm long-press threshold.
 		 * Actual start deferred to RELEASE.
 		 */
@@ -82,7 +83,8 @@ static void button_event_callback(const struct device *dev, enum button_action a
 	     */
 	    clip_post_event(CLIP_EVENT_STOP);
 	    haptic_play_pattern(HAPTIC_SHORT);
-	} else if (state == CLIP_STATE_IDLE || state == CLIP_STATE_ERROR) {
+	} else if (state == CLIP_STATE_IDLE || state == CLIP_STATE_ERROR
+		   || state == CLIP_STATE_WIFI_SYNC) {
 	    clip_post_event(CLIP_EVENT_START);
 	}
 	break;

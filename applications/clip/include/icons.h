@@ -49,6 +49,7 @@ typedef enum {
 	ICON_LOW_BATTERY_DISPLAY, /**< Low battery display icon */
 	ICON_DISCONNECT_NOT_TRANSFORM, /**< Disconnect not transfer icon */
 	ICON_OTA,                 /**< OTA upgrade icon */
+	ICON_POWER,               /**< Power button icon */
 } icon_id_t;
 
 /**

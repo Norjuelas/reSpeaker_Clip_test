@@ -39,6 +39,7 @@ enum ui_state {
 	UI_STATE_OTA_PROGRESS,         /**< OTA with progress bar */
 	UI_STATE_ERROR,                /**< Error message display */
 	UI_STATE_LOW_BATTERY,          /**< Low battery warning */
+	UI_STATE_WIFI_BLOCKED,         /**< WiFi active, cannot record */
 };
 
 /* =============================================================================
@@ -64,6 +65,9 @@ enum ui_event {
 	UI_EVENT_TIMEOUT,              /**< State timeout */
 	UI_EVENT_ERROR_SHOW,           /**< Show error message */
 	UI_EVENT_LOW_BATTERY,          /**< Low battery warning */
+	UI_EVENT_BLE_DISCONNECTED,     /**< BLE disconnected */
+	UI_EVENT_WIFI_BLOCKED,         /**< WiFi active, cannot record */
+	UI_EVENT_ANIM_TICK,            /**< Animation frame tick (internal) */
 };
 
 /* =============================================================================
@@ -157,6 +161,14 @@ void display_post_error(const char *msg);
 int clip_display_set_brightness(uint8_t brightness);
 
 void display_clear_untransferred(void);
+
+/**
+ * @brief Check storage for unsynced sessions and update display
+ *
+ * Called after storage_init() completes (SD card mounted).
+ * Refreshes status bar if the untransferred state changed.
+ */
+void display_check_untransferred(void);
 
 /**
  * @brief Update transfer status and refresh display immediately

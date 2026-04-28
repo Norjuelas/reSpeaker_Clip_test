@@ -21,6 +21,7 @@
 #include "transfer.h"
 #include "transport.h"
 #include "battery.h"
+#include "storage.h"
 
 LOG_MODULE_REGISTER(display, CONFIG_CLIP_LOG_LEVEL);
 
@@ -704,45 +705,45 @@ static void render_status_bar(uint8_t *buf)
 	/* Percent symbol */
 	draw_percent(buf, digit_x + 2, digit_y);
 
-	/* Right edge icon at (64, 12) - priority: UDP connected > transferring > BLE > arrow */
-	struct transport *active_tp = transport_get_active();
-	if (active_tp && active_tp->type == TRANSPORT_TYPE_UDP) {
-		/* UDP client connected — show WiFi UDP icon for entire sync session */
-		const uint8_t *wifi_udp_bitmap = icon_get_bitmap(ICON_WIFI_UDP, NULL, NULL);
-		if (wifi_udp_bitmap) {
-			icon_draw_bitmap(buf, 64, 12, wifi_udp_bitmap, ICON_WIDTH, ICON_HEIGHT);
-		}
-	} else if (g_status.transferring) {
-		if (g_status.ble_connected) {
-			/* Show BLE icon when transferring via BLE or BLE connected */
-			draw_ble_icon(buf, 64, 12, true);
-		} else {
-			/* Show arrow icon by default */
+	/* Right edge icon at (64, 12) */
+		struct transport *active_tp = transport_get_active();
+		LOG_INF("icon: udp=%d xfer=%d ble=%d wifi=%d charge=%d untrx=%d",
+			active_tp && active_tp->type == TRANSPORT_TYPE_UDP,
+			g_status.transferring, g_status.ble_connected,
+			g_status.wifi_running, g_status.battery_charging,
+			g_has_untransferred);
+		if (active_tp && active_tp->type == TRANSPORT_TYPE_UDP) {
+			const uint8_t *wifi_udp_bitmap = icon_get_bitmap(ICON_WIFI_UDP, NULL, NULL);
+			if (wifi_udp_bitmap) {
+				icon_draw_bitmap(buf, 64, 12, wifi_udp_bitmap, ICON_WIDTH, ICON_HEIGHT);
+			}
+		} else if (g_status.transferring) {
 			const uint8_t *arrow_bitmap = icon_get_bitmap(ICON_ARROW, NULL, NULL);
 			if (arrow_bitmap) {
 				icon_draw_bitmap(buf, 64, 12, arrow_bitmap, ICON_WIDTH, ICON_HEIGHT);
 			}
-		}
-	} else if (g_has_untransferred) {
-		/* Show disconnect icon when recording done but not transferred */
-		const uint8_t *disc_bitmap = icon_get_bitmap(ICON_DISCONNECT_NOT_TRANSFORM, NULL, NULL);
-		if (disc_bitmap) {
-			icon_draw_bitmap(buf, 64, 12, disc_bitmap, ICON_WIDTH, ICON_HEIGHT);
-		}
-	} else if (g_status.battery_charging) {
-		/* Show wired charging icon when USB power cable plugged in */
-		const uint8_t *wired_bitmap = icon_get_bitmap(ICON_WIRED_TRANSFER, NULL, NULL);
-		if (wired_bitmap) {
-			icon_draw_bitmap(buf, 64, 12, wired_bitmap, ICON_WIDTH, ICON_HEIGHT);
-		}
-	} else {
-		/* Show arrow icon by default */
-		const uint8_t *arrow_bitmap = icon_get_bitmap(ICON_ARROW, NULL, NULL);
-		if (arrow_bitmap) {
-			icon_draw_bitmap(buf, 64, 12, arrow_bitmap, ICON_WIDTH, ICON_HEIGHT);
+		} else if (g_has_untransferred) {
+			const uint8_t *disc_bitmap = icon_get_bitmap(ICON_DISCONNECT_NOT_TRANSFORM, NULL, NULL);
+			if (disc_bitmap) {
+				icon_draw_bitmap(buf, 64, 12, disc_bitmap, ICON_WIDTH, ICON_HEIGHT);
+			}
+		} else if (g_status.ble_connected) {
+			const uint8_t *ble_bitmap = icon_get_bitmap(ICON_ARROW, NULL, NULL);
+			if (ble_bitmap) {
+				icon_draw_bitmap(buf, 64, 12, ble_bitmap, ICON_WIDTH, ICON_HEIGHT);
+			}
+		} else if (g_status.wifi_running) {
+			const uint8_t *wifi_bitmap = icon_get_bitmap(ICON_WIFI_CONNECTED, NULL, NULL);
+			if (wifi_bitmap) {
+				icon_draw_bitmap(buf, 64, 12, wifi_bitmap, ICON_WIDTH, ICON_HEIGHT);
+			}
+		} else if (g_status.battery_charging) {
+			const uint8_t *wired_bitmap = icon_get_bitmap(ICON_WIRED_TRANSFER, NULL, NULL);
+			if (wired_bitmap) {
+				icon_draw_bitmap(buf, 64, 12, wired_bitmap, ICON_WIDTH, ICON_HEIGHT);
+			}
 		}
 	}
-}
 
 /* =============================================================================
  * Power Off Screen
@@ -752,15 +753,16 @@ static void render_power_off(uint8_t *buf)
 {
 	clear_screen(buf);
 
-	const char *line1 = "Release to";
-	const char *line2 = "Power Off";
-	/* Left-aligned, vertically centered (same as pairing guide) */
-	int text_x = 2;
-	int y1 = (OLED_HEIGHT - 28) / 2;
-	int y2 = y1 + 12 + 4;
+	/* Power icon on the left */
+	const uint8_t *power_icon = icon_get_bitmap(ICON_POWER, NULL, NULL);
+	if (power_icon) {
+		icon_draw_bitmap(buf, 4, 12, power_icon, ICON_WIDTH, ICON_HEIGHT);
+	}
 
-	draw_string_6x12(buf, line1, text_x, y1);
-	draw_string_6x12(buf, line2, text_x, y2);
+	/* "Power Off" text on the right */
+	int text_x = 30;
+	int text_y = (OLED_HEIGHT - 12) / 2;
+	draw_string_6x12(buf, "Power Off", text_x, text_y);
 }
 
 /* =============================================================================
@@ -1161,7 +1163,8 @@ static void handle_event(enum ui_event event)
 	case UI_EVENT_TIMEOUT:
 		if (g_ui_state == UI_STATE_STATUS_BAR ||
 		    g_ui_state == UI_STATE_USB_CONNECTED ||
-		    g_ui_state == UI_STATE_LOW_BATTERY) {
+		    g_ui_state == UI_STATE_LOW_BATTERY ||
+		    g_ui_state == UI_STATE_WIFI_BLOCKED) {
 			if (g_ota_active) {
 				set_ui_state(UI_STATE_OTA_PROGRESS);
 			} else if (g_error_active) {
@@ -1182,7 +1185,14 @@ static void handle_event(enum ui_event event)
 				set_ui_state(UI_STATE_PAIRING_GUIDE);
 			}
 		} else if (g_ui_state == UI_STATE_REC_WAVE) {
-			set_ui_state(UI_STATE_REC_DOT);
+				/* Only transition if 5s actually elapsed.
+				 * A stale TIMEOUT event from a previous state's
+				 * timeout work may be in the queue.
+				 */
+				if (k_uptime_get() - g_rec_wave_start_ms
+						>= DISPLAY_REC_WAVE_TIMEOUT_MS) {
+					set_ui_state(UI_STATE_REC_DOT);
+				}
 		} else if (g_ui_state == UI_STATE_ERROR) {
 			g_error_active = false;
 			if (g_recording) {
@@ -1213,6 +1223,26 @@ static void handle_event(enum ui_event event)
 			set_ui_state(UI_STATE_LOW_BATTERY);
 			k_work_schedule(&display_timeout_work, K_MSEC(3000));
 		}
+		break;
+
+	case UI_EVENT_BLE_DISCONNECTED:
+		g_status.ble_connected = false;
+		if (g_ui_state == UI_STATE_STATUS_BAR) {
+			render_status_bar(display_buffer);
+			flush_display();
+		}
+		break;
+
+	case UI_EVENT_WIFI_BLOCKED:
+		k_work_cancel_delayable(&display_timeout_work);
+		set_ui_state(UI_STATE_WIFI_BLOCKED);
+		k_work_schedule(&display_timeout_work, K_MSEC(2000));
+		break;
+
+	case UI_EVENT_ANIM_TICK:
+		/* Animation frame rendered below in render_current_state().
+		 * Reschedule is handled after render in the thread loop.
+		 */
 		break;
 
 	default:
@@ -1411,6 +1441,19 @@ static void render_current_state(void)
 		break;
 	}
 
+	case UI_STATE_WIFI_BLOCKED: /* WiFi active, cannot record */
+	{
+		clear_screen(display_buffer);
+		const uint8_t *wifi_blocked = icon_get_bitmap(ICON_WIFI_CONNECTED, NULL, NULL);
+		if (wifi_blocked) {
+			int x = (OLED_WIDTH - ICON_WIDTH) / 2;
+			int y = (OLED_HEIGHT - ICON_HEIGHT) / 2;
+			icon_draw_bitmap(display_buffer, x, y, wifi_blocked, ICON_WIDTH, ICON_HEIGHT);
+		}
+		flush_display();
+		break;
+	}
+
 	default:
 		break;
 	}
@@ -1422,14 +1465,7 @@ static void render_current_state(void)
 
 static void display_anim_work_handler(struct k_work *work)
 {
-	render_current_state();
-
-	/* Only REC_WAVE needs continuous animation reschedule.
-	 * REC_DOT is static after initial animation, MARKING runs synchronously.
-	 */
-	if (g_ui_state == UI_STATE_REC_WAVE) {
-		k_work_schedule(&display_anim_work, DISPLAY_ANIMATION_PERIOD);
-	}
+	display_post_event(UI_EVENT_ANIM_TICK);
 }
 
 static void display_timeout_work_handler(struct k_work *work)
@@ -1555,12 +1591,23 @@ void display_clear_untransferred(void)
 	g_has_untransferred = false;
 }
 
+void display_check_untransferred(void)
+{
+	bool had = g_has_untransferred;
+	g_has_untransferred = storage_has_unsynced_sessions();
+	if (had != g_has_untransferred && g_ui_state == UI_STATE_STATUS_BAR) {
+		render_status_bar(display_buffer);
+		flush_display();
+	}
+}
+
 void display_set_transferring(bool transferring)
 {
 	g_status.transferring = transferring;
 
-	if (transferring) {
-		g_has_untransferred = false;
+	if (!transferring) {
+		/* Transfer finished - recheck if any unsynced sessions remain */
+		g_has_untransferred = storage_has_unsynced_sessions();
 	}
 
 	if (g_ui_state == UI_STATE_STATUS_BAR) {
