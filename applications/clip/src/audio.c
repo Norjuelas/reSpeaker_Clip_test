@@ -53,8 +53,8 @@ static struct pcm_stream_cfg audio_stream = {
 /* DMIC configuration */
 static struct dmic_cfg audio_cfg = {
     .io = {
-        .min_pdm_clk_freq = 1000000,
-        .max_pdm_clk_freq = 3500000,
+        .min_pdm_clk_freq = 1280000,
+        .max_pdm_clk_freq = 1280000,
         .min_pdm_clk_dc = 40,
         .max_pdm_clk_dc = 60,
     },
@@ -206,11 +206,11 @@ int audio_init(void)
         return ret;
     }
 
-    /* Set microphone gain - maximum gain (+20dB, ~3x amplitude increase) */
+    /* Set microphone gain - +10dB for balanced near/far-field */
 #ifdef NRF_PDM0_S
-    nrf_pdm_gain_set(NRF_PDM0_S, 0x50, 0x50);
+    nrf_pdm_gain_set(NRF_PDM0_S, 0x48, 0x48);
 #else
-    nrf_pdm_gain_set(NRF_PDM0_NS, 0x50, 0x50);
+    nrf_pdm_gain_set(NRF_PDM0_NS, 0x48, 0x48);
 #endif
 
     /* Initialize stop-done semaphore */
@@ -939,12 +939,11 @@ static int init_opus_encoder(void)
     }
 
     /* Create Opus encoder.
-     * VOIP mode optimizes for voice clarity and is efficient at complexity 1.
-     * At 32kbps with VBR, the bitrate budget is sufficient for transcription
-     * quality even without higher complexity or AUDIO mode.
+     * AUDIO mode preserves high-frequency detail (fricatives: zhi/chi/shi)
+     * better than VOIP mode for STT transcription accuracy.
      */
     opus_encoder = opus_encoder_create(AUDIO_SAMPLE_RATE, opus_channels,
-                       OPUS_APPLICATION_VOIP, &err);
+                       OPUS_APPLICATION_AUDIO, &err);
     if (!opus_encoder) {
         LOG_ERR("Failed to create Opus encoder: %d", err);
         return err;
@@ -1179,13 +1178,13 @@ static int16_t *process_pcm_frame(int16_t *stereo_input, int frame_size)
              * Target 12000 ≈ -8.6dBFS: moderate compression for near-field
              * suppression. Far-field gets boosted toward this level by max gain.
              */
-            int32_t target_level = 12000;
+            int32_t target_level = 8000;
             int32_t noise_gate = 200;
 
             int32_t desired_q8;
             if (agc_envelope > noise_gate) {
                 desired_q8 = (target_level << 8) / agc_envelope;
-                if (desired_q8 > 6144) desired_q8 = 6144;  /* +27.6dB max for far-field */
+                if (desired_q8 > 4096) desired_q8 = 4096;  /* +24dB max for far-field */
                 if (desired_q8 < 64) desired_q8 = 64;      /* -12dB min */
             } else {
                 desired_q8 = 256;

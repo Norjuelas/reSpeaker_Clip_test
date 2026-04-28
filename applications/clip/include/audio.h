@@ -30,8 +30,8 @@
  * @brief Audio recording modes
  */
 enum audio_mode {
-    AUDIO_MODE_STEREO = 0,  /* Stereo: record both channels, encode as stereo */
-    AUDIO_MODE_MERGE = 1,   /* Enhanced: mix L+R to mono, apply DSP, encode as mono */
+	AUDIO_MODE_STEREO = 0,  /* Stereo: record both channels, encode as stereo */
+	AUDIO_MODE_MERGE = 1,   /* Enhanced: mix L+R to mono, apply DSP, encode as mono */
 };
 
 /**
