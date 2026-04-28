@@ -345,6 +345,16 @@ void clip_event_process(void)
             goto notify;
         }
 
+        /* Special case: recording blocked while WiFi active */
+        if (current == CLIP_STATE_WIFI_SYNC && item.event == CLIP_EVENT_START) {
+            LOG_INF("Recording blocked: WiFi active");
+            display_post_event(UI_EVENT_WIFI_BLOCKED);
+            if (item.result) {
+                item.result->result = CLIP_EVENT_INVALID;
+            }
+            goto notify;
+        }
+
         uint8_t next = transition_table[current][item.event];
         if (next == TRANS_INVALID) {
             LOG_WRN("Invalid transition: state=%d event=%d", current, item.event);
@@ -393,11 +403,6 @@ static enum clip_event_result execute_transition(enum clip_event event,
     switch (event) {
     case CLIP_EVENT_START:
     {
-        if (from == CLIP_STATE_WIFI_SYNC) {
-            display_post_event(UI_EVENT_WIFI_BLOCKED);
-            return CLIP_EVENT_INVALID;
-        }
-
         struct clip_context *ctx = clip_get_context();
 
         err = audio_start_recording(AUDIO_MODE_MERGE);

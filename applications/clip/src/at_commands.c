@@ -770,6 +770,10 @@ static int cmd_start_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
 
     if (ret != 0 || info.result != CLIP_EVENT_OK) {
         if (info.result == CLIP_EVENT_INVALID) {
+            if (clip_event_get_state() == CLIP_STATE_WIFI_SYNC) {
+                return create_json_response(false, "WiFi active, cannot record",
+                                           NULL, response, len);
+            }
             return create_json_response(false, "Already recording or invalid state",
                                        NULL, response, len);
         }

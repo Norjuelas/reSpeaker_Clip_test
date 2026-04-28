@@ -67,6 +67,10 @@ static void button_event_callback(const struct device *dev, enum button_action a
     case BUTTON_LONG_PRESS_LEVEL_2:
     case BUTTON_LONG_PRESS_LEVEL_3:
 	LOG_INF("LONG_PRESS_LEVEL (power off screen), action=%d state=%d", action, state);
+	if (clip_get_context()->status.battery_charging) {
+		LOG_INF("USB charging, ignore power off");
+		break;
+	}
 	clip_post_event(CLIP_EVENT_POWER_OFF_SHOW);
 	atomic_set(&poweroff_screen_active, 1);
 	break;

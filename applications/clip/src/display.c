@@ -1444,12 +1444,10 @@ static void render_current_state(void)
 	case UI_STATE_WIFI_BLOCKED: /* WiFi active, cannot record */
 	{
 		clear_screen(display_buffer);
-		const uint8_t *wifi_blocked = icon_get_bitmap(ICON_WIFI_CONNECTED, NULL, NULL);
-		if (wifi_blocked) {
-			int x = (OLED_WIDTH - ICON_WIDTH) / 2;
-			int y = (OLED_HEIGHT - ICON_HEIGHT) / 2;
-			icon_draw_bitmap(display_buffer, x, y, wifi_blocked, ICON_WIDTH, ICON_HEIGHT);
-		}
+		int y = (OLED_HEIGHT - 24) / 2;
+		draw_string_6x12(display_buffer, "!", 40, y - 4);
+		int msg_x = (OLED_WIDTH - (int)strlen("WiFi Busy") * 6 + 1) / 2;
+		draw_string_6x12(display_buffer, "WiFi Busy", msg_x, y + 12);
 		flush_display();
 		break;
 	}
