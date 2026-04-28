@@ -425,6 +425,7 @@ int storage_write_frame(struct storage_file *file, const uint8_t *data, uint32_t
 
     file->bytes_written += len + 2; /* +2 for length header */
     file->frames_written++;
+    total_bytes += len + 2;
 
     return 0;
 }
@@ -867,6 +868,12 @@ int storage_list_sessions_paginated(struct storage_session_info *sessions,
         rc = storage_get_session_info(entry.name, &sessions[count]);
         if (rc == 0)
         {
+            /* Auto-delete empty sessions (0 files, 0 bytes) */
+            if (sessions[count].file_count == 0 && sessions[count].total_bytes == 0) {
+                LOG_INF("Deleting empty session: %s", entry.name);
+                storage_delete_session(entry.name);
+                continue;
+            }
             count++;
         }
 
@@ -1047,6 +1054,23 @@ int storage_get_session_info(const char *session_id, struct storage_session_info
     }
 
     return 0;
+}
+
+bool storage_has_unsynced_sessions(void)
+{
+	struct storage_session_info info;
+	char ids[64][16];
+	int count = storage_list_session_ids(ids, 64);
+
+	for (int i = 0; i < count; i++) {
+		memset(&info, 0, sizeof(info));
+		if (storage_get_session_info(ids[i], &info) == 0) {
+			if (info.synced_files < info.file_count) {
+				return true;
+			}
+		}
+	}
+	return false;
 }
 
 int storage_list_chunks(const char *session_id, uint32_t *chunks, int max_chunks, int skip)
@@ -1410,7 +1434,7 @@ static int update_session_json(const char *session_id, uint32_t duration_sec,
                    "  \"id\": \"%s\",\n"
                    "  \"duration\": %u,\n"
                    "  \"files\": %u,\n"
-                   "  \"size\": %llu,\n"
+                   "  \"size\": %u,\n"
                    "  \"synced\": %s,\n"
                    "  \"channels\": %s,\n"
                    "  \"sample_rate\": %s,\n"
@@ -1418,7 +1442,7 @@ static int update_session_json(const char *session_id, uint32_t duration_sec,
                    "  \"recording\": false\n"
                    "}\n",
                    session_id, duration_sec, chunk_count,
-                   (unsigned long long)session_bytes,
+                   (unsigned int)session_bytes,
                    synced_str, channels_str, sample_rate_str, mode_str);
 
     if (len < 0 || len >= (int)sizeof(json_buf))

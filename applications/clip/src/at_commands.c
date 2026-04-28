@@ -960,6 +960,12 @@ static int cmd_list_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
                 struct storage_session_info info;
                 if (storage_get_session_info(list_ids[i], &info) != 0) continue;
 
+                /* Auto-delete empty sessions */
+                if (info.file_count == 0 && info.total_bytes == 0) {
+                    storage_delete_session(list_ids[i]);
+                    continue;
+                }
+
                 int bm = storage_count_bookmarks(list_ids[i]);
                 if (bm < 0) bm = 0;
 

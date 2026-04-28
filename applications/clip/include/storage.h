@@ -234,6 +234,13 @@ int storage_list_sessions_paginated(struct storage_session_info *sessions,
                                    int offset, int limit);
 
 /**
+ * @brief Check if there are any sessions with unsynced files
+ *
+ * @return true if at least one session has synced_files < file_count
+ */
+bool storage_has_unsynced_sessions(void);
+
+/**
  * @brief Get session information
  *
  * @param session_id Session ID

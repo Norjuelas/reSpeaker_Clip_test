@@ -226,6 +226,9 @@ int clip_init(void)
     if (err) {
         LOG_WRN("Storage init failed: %d", err);
         /* Continue anyway - storage is optional */
+    } else {
+        /* SD card mounted - check for unsynced sessions */
+        display_check_untransferred();
     }
 
     /* Initialize USB CDC ACM + MSC (serial port + SD card drive) */

@@ -155,6 +155,21 @@ int transfer_start(const char *session_id, const char *filename, struct transpor
         }
     }
 
+    /* Wait for thread to finish cleanup and reach sem_take.
+     * Without this, memset + state=TRANSMITTING can race with
+     * the thread's transfer_cleanup() which sets state=IDLE.
+     */
+    {
+        int retry = 0;
+        while (!transfer_thread_waiting && retry < 200) {
+            k_sleep(K_MSEC(10));
+            retry++;
+        }
+        if (!transfer_thread_waiting) {
+            LOG_WRN("Transfer thread not waiting after 2s");
+        }
+    }
+
     if (!storage_is_mounted()) {
         LOG_ERR("SD card not mounted");
         return -ENODEV;
@@ -164,6 +179,12 @@ int transfer_start(const char *session_id, const char *filename, struct transpor
     struct storage_session_info session_info;
     if (storage_get_session_info(session_id, &session_info) != 0) {
         LOG_ERR("Session not found: %s", session_id);
+        return -ENOENT;
+    }
+
+    /* Skip empty sessions (0 files) */
+    if (session_info.file_count == 0) {
+        LOG_INF("Empty session, skipping: %s", session_id);
         return -ENOENT;
     }
 
@@ -223,6 +244,8 @@ int transfer_start(const char *session_id, const char *filename, struct transpor
 
     /* Start transfer thread */
     transfer_thread_running = true;
+    LOG_INF("xfer: sem give, state=%d waiting=%d",
+        current_transfer.state, transfer_thread_waiting);
     k_sem_give(&transfer_trigger_sem);
 
     return 0;
@@ -283,6 +306,11 @@ int transfer_resume_from(const char *session_id, const char *start_file, struct 
     struct storage_session_info tmp_info;
     if (storage_get_session_info(session_id, &tmp_info) != 0) {
         LOG_ERR("Session not found: %s", session_id);
+        return -ENOENT;
+    }
+
+    if (tmp_info.file_count == 0) {
+        LOG_INF("Empty session, skipping: %s", session_id);
         return -ENOENT;
     }
 
@@ -517,6 +545,8 @@ static void transfer_thread_main(void *p1, void *p2, void *p3)
     k_sem_take(&transfer_trigger_sem, K_FOREVER);
     transfer_thread_waiting = false;
 
+    LOG_INF("xfer: initial wake, state=%d", current_transfer.state);
+
     while (transfer_thread_running) {
         /* Check if paused */
         if (current_transfer.state == TRANSFER_STATE_PAUSED) {
@@ -572,12 +602,21 @@ process_next_file:
             transfer_thread_waiting = true;
             k_sem_take(&transfer_trigger_sem, K_FOREVER);
             transfer_thread_waiting = false;
+            LOG_INF("xfer: re-woke, state=%d tp=%d",
+                current_transfer.state, current_transport != NULL);
             goto process_next_file;
         }
 
+        LOG_INF("xfer loop: state=%d file_open=%d tp=%d",
+            current_transfer.state, transfer_file_open,
+            current_transport != NULL);
+
         /* Open first file if not already open */
         if (!transfer_file_open) {
+            LOG_INF("xfer: next file (idx=%u/%u)",
+                current_transfer.file_index, current_transfer.total_files);
             ret = transfer_next_file();
+            LOG_INF("xfer: next_file ret=%d", ret);
             if (ret == 0) {
                 consecutive_file_errors = 0;
             }
@@ -734,7 +773,6 @@ process_next_file:
                     fs_close(&transfer_file);
                     transfer_file_open = false;
                     memset(&current_transfer.current_file, 0, sizeof(current_transfer.current_file));
-                    k_sem_give(&transfer_trigger_sem);
                     break;
                 } else if (ret == -ENOTCONN || ret == -EIO) {
                     /* Connection error, cancel transfer */
@@ -904,6 +942,11 @@ wait_for_write:
             LOG_WRN("File missing: %s, skipping", current_transfer.current_file);
             current_transfer.file_index = file_num;  /* Advance past missing file */
             current_transfer.current_file[0] = '\0';  /* Clear so next call generates new filename */
+            /* Safety: stop at total_files + 10 missing files */
+            if (file_num > current_transfer.total_files + 10) {
+                LOG_INF("too many missing files, stopping at %u", file_num);
+                return -ENOENT;
+            }
             return -EAGAIN;
         }
 
