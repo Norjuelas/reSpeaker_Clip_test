@@ -155,7 +155,7 @@ class FileTransfer:
         last_file_time = time.time()
         # In continuous mode, use longer timeout to accommodate long segment durations
         # (segment duration can be up to 300 seconds when not syncing)
-        no_file_timeout = 120.0 if continuous else 30.0
+        no_file_timeout = 120.0 if continuous else 300.0
 
         files_received = []
 

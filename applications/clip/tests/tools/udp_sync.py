@@ -48,6 +48,8 @@ def main():
                        help="Delete successfully synced sessions (implies --delete)")
     parser.add_argument("--no-ogg", action="store_true",
                        help="Skip OGG conversion")
+    parser.add_argument("--resync", "-r", action="store_true",
+                       help="Re-download even if already synced locally")
     args = parser.parse_args()
 
     sync = WiFiSync(args.host, args.port, args.timeout)
@@ -79,10 +81,16 @@ def main():
             sid = s.get("id", "?")
             print(f"\n[{idx}/{len(sessions_to_sync)}] {sid}")
 
+            # Check if session has files (skip empty sessions)
+            session_info = s if isinstance(s, dict) else {}
+            if session_info.get('files', 0) == 0:
+                print(f"  Empty session (0 files), skipping")
+                continue
+
             # Check if session already synced locally
             local_ogg = args.output / "Clip" / sid / f"{sid}.ogg"
             local_opus = args.output / "Clip" / sid / f"{sid}.opus"
-            if local_ogg.exists() or local_opus.exists():
+            if not args.resync and (local_ogg.exists() or local_opus.exists()):
                 print(f"  Already synced, skipping download")
                 if args.delete:
                     print(f"  Deleting session from device...")
