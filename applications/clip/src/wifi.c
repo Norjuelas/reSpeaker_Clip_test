@@ -200,6 +200,8 @@ static int wifi_set_reg_domain(struct net_if *iface)
 	return ret;
 }
 
+#define WIFI_AP_ENABLE_RETRIES 2
+
 static int wifi_enable_ap(struct net_if *iface)
 {
 	struct wifi_connect_req_params req;
@@ -215,28 +217,30 @@ static int wifi_enable_ap(struct net_if *iface)
 	req.mfp = WIFI_MFP_OPTIONAL;
 	req.band = WIFI_FREQ_BAND_5_GHZ;
 
-	ret = net_mgmt(NET_REQUEST_WIFI_AP_ENABLE, iface, &req, sizeof(req));
-	if (ret)
-	{
-		LOG_ERR("AP enable request failed: %d", ret);
-		return ret;
+	for (int attempt = 0; attempt <= WIFI_AP_ENABLE_RETRIES; attempt++) {
+		k_sem_reset(&ap_enabled_sem);
+
+		ret = net_mgmt(NET_REQUEST_WIFI_AP_ENABLE, iface, &req, sizeof(req));
+		if (ret) {
+			LOG_ERR("AP enable request failed: %d (attempt %d)", ret, attempt);
+			continue;
+		}
+
+		ret = k_sem_take(&ap_enabled_sem, K_SECONDS(5));
+		if (ret) {
+			LOG_WRN("AP enable timeout (attempt %d)", attempt);
+			continue;
+		}
+
+		if (!ap_running) {
+			LOG_ERR("AP enable rejected (attempt %d)", attempt);
+			continue;
+		}
+
+		return 0;
 	}
 
-	/* Wait for AP_ENABLE_RESULT event */
-	ret = k_sem_take(&ap_enabled_sem, K_SECONDS(5));
-	if (ret)
-	{
-		LOG_ERR("Timeout waiting for AP enable result");
-		return -ETIMEDOUT;
-	}
-
-	if (!ap_running)
-	{
-		LOG_ERR("AP enable failed");
-		return -EIO;
-	}
-
-	return 0;
+	return -ETIMEDOUT;
 }
 
 static int wifi_start_dhcp_server(struct net_if *iface)
@@ -290,10 +294,17 @@ int wifi_on(void)
 			LOG_ERR("net_if_up failed: %d", ret);
 			return ret;
 		}
-		LOG_INF("WiFi interface up");
 
-		/* Wait for WPA supplicant to initialize */
-		k_sleep(K_SECONDS(2));
+		/* Wait for WiFi driver ready instead of blind sleep */
+		if (!wifi_ready) {
+			ret = k_sem_take(&wifi_ready_sem, K_SECONDS(3));
+			if (ret) {
+				LOG_ERR("WiFi ready timeout");
+				net_if_down(iface);
+				return -ETIMEDOUT;
+			}
+		}
+
 	}
 
 	/* Set regulatory domain */
@@ -303,6 +314,9 @@ int wifi_on(void)
 	ret = wifi_enable_ap(iface);
 	if (ret)
 	{
+		/* Cleanup: bring interface down to restore clean state */
+		net_if_down(iface);
+		ap_running = false;
 		return ret;
 	}
 
@@ -364,6 +378,10 @@ int wifi_off(void)
 	net_mgmt(NET_REQUEST_WIFI_AP_DISABLE, iface, NULL, 0);
 	ap_running = false;
 	sta_connected = false;
+
+	/* Reset WiFi ready state so next wifi_on() waits properly */
+	wifi_ready = false;
+	k_sem_reset(&wifi_ready_sem);
 
 #ifdef CONFIG_NRF70_SR_COEX
 	/* Reset coexistence hardware */
