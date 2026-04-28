@@ -41,11 +41,11 @@ config CLIP_ENHANCED_COMPLEXITY
 
 config CLIP_DEFAULT_NOISE
 	int "Default noise suppression level (dB)"
-	default 20
+	default 15
 
 config CLIP_DEFAULT_DEREVERB
 	bool "Default dereverberation enabled"
-	default y
+	default n
 
 config CLIP_AGC_MAX_GAIN
 	int "AGC maximum gain (dB)"
@@ -69,7 +69,7 @@ config CLIP_DEFAULT_AUTODEL
 
 config CLIP_DEFAULT_BRIGHTNESS
 	int "Default OLED brightness (0-255)"
-	default 128
+	default 32
 
 # =============================================================================
 # Button Configuration

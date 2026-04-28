@@ -1364,7 +1364,7 @@ static void render_current_state(void)
 
 		/* Centered text */
 		int y = (OLED_HEIGHT - 12) / 2;
-		draw_string_6x12(display_buffer, "Updating...", 26, y);
+		draw_string_6x12(display_buffer, "Updating...", 22, y);
 		flush_display();
 		break;
 	}
@@ -1381,7 +1381,7 @@ static void render_current_state(void)
 
 		/* "OTA" label centered */
 		int label_y = 6;
-		draw_string_6x12(display_buffer, "Updating...", 26, label_y);
+		draw_string_6x12(display_buffer, "Updating...", 22, label_y);
 
 		/* Progress bar */
 		int bar_x = 10;
