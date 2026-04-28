@@ -9,19 +9,29 @@ The patches are against **NCS v3.2.1** (`~/ncs/v3.2.1/bootloader/mcuboot`).
 cd ~/ncs/v3.2.1/bootloader/mcuboot
 git apply /path/to/ReSpeaker_Clip/patches/mcuboot/0001-require-vbus-for-gpio-serial-recovery.patch
 git apply /path/to/ReSpeaker_Clip/patches/mcuboot/0002-add-oled-display-support.patch
+git apply /path/to/ReSpeaker_Clip/patches/mcuboot/0003-add-serial-upload-progress-hook.patch
 ```
 
 To verify a patch is already applied:
 ```sh
 cd ~/ncs/v3.2.1/bootloader/mcuboot
-git diff boot/zephyr/io.c
+git status
 ```
+
+## Patch Development Workflow
+
+1. **Modify source directly** in `~/ncs/v3.2.1/bootloader/mcuboot/`
+2. **Build**: `west build --build-dir build-clip --pristine --board clip/nrf5340/cpuapp applications/clip`
+3. **Test**: Flash or export `dfu_application.zip`
+4. **Export patches**: `git diff` from mcuboot tree → save to `patches/mcuboot/`
+5. **Verify patches**: `git checkout -- .` then `git apply` each patch in order, rebuild
+6. **Update this README**
 
 ---
 
 ## 0001-require-vbus-for-gpio-serial-recovery.patch
 
-**File**: `boot/zephyr/io.c`  
+**File**: `boot/zephyr/io.c`
 **Function**: `io_detect_pin()`
 
 ### Problem
@@ -42,57 +52,67 @@ and the device boots normally.
 
 **Logic**: `enter DFU ⟺ button held AND USB VBUS present`
 
-```c
-#if defined(CONFIG_SOC_NRF5340_CPUAPP)
-    if (pin_active) {
-        if (!(NRF_USBREGULATOR_S->USBREGSTATUS & USBREG_USBREGSTATUS_VBUSDETECT_Msk)) {
-            printk("[MCUboot] Button pressed but USB not connected, skipping serial recovery\n");
-            pin_active = 0;
-        }
-    }
-#endif
-```
-
-**Peripheral**: `NRF_USBREGULATOR_S` (base `0x50037000`), `USBREGSTATUS.VBUSDETECT` bit 0.  
-This register is readable without initializing the USB stack — it reflects hardware state.
-
 ### DFU Entry Methods (all still work)
 
 | Method | Trigger | VBUS required? |
 |--------|---------|----------------|
 | **Button + USB** | Hold button at power-on/reset with USB connected | Yes |
-| **AT+DFU** | App BLE command → `bootmode_set` + reboot | No (app already running) |
+| **AT+DFU** | App BLE command → `bootmode_set` + reboot | No |
 | **`BOOT_SERIAL_BOOT_MODE`** | App sets retention register + reboot | No |
-
-### Tested On
-
-- NCS v3.2.1, MCUboot commit `3cdbf4df`
-- Board: `clip/nrf5340/cpuapp` (Seeed ReSpeaker Clip)
 
 ---
 
 ## 0002-add-oled-display-support.patch
 
-**Files**: `boot/zephyr/CMakeLists.txt`, `boot/zephyr/Kconfig`, `boot/zephyr/main.c`, `boot/zephyr/io_display.c` (new)
+**Files**: `boot/zephyr/CMakeLists.txt`, `boot/zephyr/Kconfig`, `boot/zephyr/main.c`, `boot/zephyr/io_display.c` (new), `boot/bootutil/src/loader.c`
 
 ### Summary
 
-Adds OLED display support to MCUboot for showing status messages on the CH1115 display during boot, DFU recovery, and error conditions.
+Adds OLED display support to MCUboot for showing OTA progress, status messages, and error conditions on the CH1115 display (88x48).
 
 ### What it adds
 
-- **`io_display.c`**: Self-contained display helper using Zephyr Display API. Includes a 6x12 pixel font (95 printable ASCII chars) and renders two-line centered text.
+- **`io_display.c`**: Self-contained display helper using Zephyr Display API.
+  - 6x12 pixel font (95 printable ASCII chars)
+  - 24x24 OTA icon (column-major bitmap)
+  - `draw_bitmap()` for column-major rendering
+  - `io_display_show()` for two-line centered text
+  - `io_display_show_progress()` for OTA icon + progress bar + percentage
 - **`CONFIG_MCUBOOT_DISPLAY`**: New Kconfig option (selects I2C, depends on GPIO)
-- **Status messages** in `main.c`:
+- **Progress hooks** in `main.c`:
+  - `mcuboot_status_change()`: Shows OTA icon + "Updating..." + 0% on swap start
+  - `boot_serial_upload_progress_hook()`: Serial recovery upload progress
+  - `boot_copy_progress_hook()`: Real-time progress during image copy (`boot_copy_region()`)
+- **Weak hook** in `loader.c`: `boot_copy_progress_hook(total, copied)` called after each chunk
+
+### Display states
 
 | Condition | Display |
 |-----------|---------|
 | Serial recovery (button+USB or boot mode) | "Recovery Mode" |
-| OTA image swap (`boot_go()`) | "Updating ..." |
+| OTA image swap | OTA icon + "Updating..." + progress bar + real-time % |
+| Serial recovery upload | OTA icon + "Updating..." + progress bar + upload % |
 | No bootable image | "Error No Image" |
-| Before jumping to app (`do_boot()`) | Display off |
+| Before jumping to app | Display off |
 
 ### Requirements
 
 - `CONFIG_DISPLAY=y`, `CONFIG_I2C=y`, `CONFIG_REGULATOR=y` in MCUboot config
 - I2C2, CH1115, and `oled_reg` must be enabled in MCUboot device tree overlay
+
+---
+
+## 0003-add-serial-upload-progress-hook.patch
+
+**File**: `boot/boot_serial/src/boot_serial.c`
+
+### Summary
+
+Adds a weak callback `boot_serial_upload_progress_hook(img_index, curr_off, img_size)` in `bs_upload()` that fires after each flash chunk is written during serial recovery uploads, and once when upload completes (`curr_off == img_size`).
+
+### What it adds
+
+- `__weak boot_serial_upload_progress_hook()` default no-op
+- Called after `curr_off += img_chunk_len + rem_bytes` (per-chunk progress)
+- Called after upload completes (100%)
+- Override in `main.c` provides display updates via `io_display_show_progress()`

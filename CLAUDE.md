@@ -148,6 +148,90 @@ Binary frame protocol with per-file CRC32 verification:
 - **FAT directory order**: Not chronological. Session listing uses a cached sorted buffer invalidated on mutations.
 - **Transfer thread safety**: AT commands and transfer run on different threads. Use volatile flags for coordination (e.g., `transfer_cancel_requested`).
 
+## MCUboot Patch Development
+
+MCUboot source is in the NCS tree (`~/ncs/v3.2.1/bootloader/mcuboot`). Patches are stored in `patches/mcuboot/`. The workflow is: **modify source → build → verify → export patches**.
+
+### Step 1: Modify MCUboot source directly
+
+```sh
+# Edit files in the NCS tree
+vim ~/ncs/v3.2.1/bootloader/mcuboot/boot/zephyr/main.c
+vim ~/ncs/v3.2.1/bootloader/mcuboot/boot/zephyr/io_display.c
+vim ~/ncs/v3.2.1/bootloader/mcuboot/boot/boot_serial/src/boot_serial.c
+vim ~/ncs/v3.2.1/bootloader/mcuboot/boot/bootutil/src/loader.c
+```
+
+### Step 2: Build (must be pristine for mcuboot changes)
+
+```sh
+west build --build-dir build-clip --pristine --board clip/nrf5340/cpuapp applications/clip
+```
+
+### Step 3: Verify and test
+
+```sh
+# Flash both mcuboot + app
+west flash --build-dir build-clip && nrfutil device reset
+
+# Or export for OTA test
+cp build-clip/dfu_application.zip output/
+```
+
+### Step 4: Export patches from modified source
+
+```sh
+cd ~/ncs/v3.2.1/bootloader/mcuboot
+
+# For existing tracked files (main.c, Kconfig, CMakeLists, etc.)
+git diff boot/zephyr/main.c > /path/to/ReSpeaker_Clip/patches/mcuboot/XXXX.patch
+
+# For new files (io_display.c), use sed to prefix '+'
+{ echo "diff --git a/boot/zephyr/io_display.c b/boot/zephyr/io_display.c"
+  echo "new file mode 100644"
+  echo "--- /dev/null"
+  echo "+++ b/boot/zephyr/io_display.c"
+  printf "@@ -0,0 +1,%d @@\n" $(wc -l < boot/zephyr/io_display.c)
+  sed 's/^/+/' boot/zephyr/io_display.c
+} >> /path/to/ReSpeaker_Clip/patches/mcuboot/XXXX.patch
+
+# Multiple file changes can be combined into one patch:
+git diff boot/zephyr/CMakeLists.txt boot/zephyr/Kconfig boot/zephyr/main.c >> patch.diff
+```
+
+### Step 5: Verify patches apply cleanly
+
+```sh
+# Reset mcuboot source to clean state first
+cd ~/ncs/v3.2.1/bootloader/mcuboot
+git checkout -- .
+
+# Apply patches in order
+git apply /path/to/0001-xxx.patch
+git apply /path/to/0002-xxx.patch
+git apply /path/to/0003-xxx.patch
+
+# Verify and build
+west build --build-dir build-clip --pristine --board clip/nrf5340/cpuapp applications/clip
+```
+
+### Step 6: Update patches/mcuboot/README.md
+
+Document what each patch does, which files it touches, and any constraints.
+
+### Output firmware files
+
+```sh
+# Get version from app
+VERSION=$(grep APP_VERSION_STRING build-clip/clip/zephyr/include/generated/zephyr/app_version.h | cut -d'"' -f2)
+echo "Version: $VERSION"
+
+mkdir -p output/$VERSION
+cp build-clip/merged.hex output/$VERSION/                  # mcuboot + app (full flash)
+cp build-clip/merged_CPUNET.hex output/$VERSION/           # network core
+cp build-clip/dfu_application.zip output/$VERSION/clip-$VERSION-ota.zip  # OTA update package
+```
+
 ## Board & Hardware
 
 ### Device Tree (`boards/seeed/clip/clip_nrf5340_cpuapp.dts`)

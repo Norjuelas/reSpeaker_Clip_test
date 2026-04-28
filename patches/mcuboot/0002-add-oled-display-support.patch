@@ -34,23 +34,24 @@ index a99e0df2..610504c2 100644
  
  config BOOT_INTR_VEC_RELOC
 diff --git a/boot/zephyr/main.c b/boot/zephyr/main.c
-index 9aaaadd7..20bda9c2 100644
+index 9aaaadd7..d5bdc52a 100644
 --- a/boot/zephyr/main.c
 +++ b/boot/zephyr/main.c
-@@ -40,6 +40,12 @@
+@@ -40,6 +40,13 @@
  #include "io/io.h"
  #include "target.h"
  
 +#ifdef CONFIG_MCUBOOT_DISPLAY
 +void io_display_init(void);
 +void io_display_show(const char *line1, const char *line2);
++void io_display_show_progress(const char *label, int percent);
 +void io_display_off(void);
 +#endif
 +
  #include "bootutil/bootutil_log.h"
  #include "bootutil/image.h"
  #include "bootutil/bootutil.h"
-@@ -657,6 +663,11 @@ static void boot_serial_enter()
+@@ -657,6 +664,11 @@ static void boot_serial_enter()
      io_led_set(1);
  #endif
  
@@ -62,7 +63,7 @@ index 9aaaadd7..20bda9c2 100644
      mcuboot_status_change(MCUBOOT_STATUS_SERIAL_DFU_ENTERED);
  
      BOOT_LOG_INF("Enter the serial recovery mode");
-@@ -721,6 +732,10 @@ int main(void)
+@@ -721,6 +733,10 @@ int main(void)
      io_led_init();
  #endif
  
@@ -73,7 +74,7 @@ index 9aaaadd7..20bda9c2 100644
      os_heap_init();
  
      ZEPHYR_BOOT_LOG_START();
-@@ -856,6 +871,10 @@ int main(void)
+@@ -856,6 +872,10 @@ int main(void)
  
          mcuboot_status_change(MCUBOOT_STATUS_NO_BOOTABLE_IMAGE_FOUND);
  
@@ -84,7 +85,7 @@ index 9aaaadd7..20bda9c2 100644
  #ifdef CONFIG_BOOT_SERIAL_NO_APPLICATION
          /* No bootable image and configuration set to remain in serial
           * recovery mode
-@@ -943,6 +962,10 @@ int main(void)
+@@ -943,6 +963,10 @@ int main(void)
  
      ZEPHYR_BOOT_LOG_STOP();
  
@@ -95,13 +96,38 @@ index 9aaaadd7..20bda9c2 100644
      do_boot(&rsp);
  
      mcuboot_status_change(MCUBOOT_STATUS_BOOT_FAILED);
-
+@@ -951,3 +975,26 @@ int main(void)
+     while (1)
+         ;
+ }
++
++__weak void mcuboot_status_change(mcuboot_status_type_t status)
++{
++#ifdef CONFIG_MCUBOOT_DISPLAY
++	if (status == MCUBOOT_STATUS_UPGRADING) {
++		io_display_show_progress("Updating...", 0);
++	}
++#endif
++}
++
++#ifdef CONFIG_MCUBOOT_DISPLAY
++void boot_serial_upload_progress_hook(uint32_t img_index,
++                                      size_t curr_off, size_t img_size)
++{
++	if (img_size > 0) {
++		int percent = (int)((curr_off * 100) / img_size);
++		if (percent > 100) {
++			percent = 100;
++		}
++		io_display_show_progress("Updating...", percent);
++	}
++}
++#endif
 diff --git a/boot/zephyr/io_display.c b/boot/zephyr/io_display.c
 new file mode 100644
-index 0000000..1a74ab0d91c413582257fba56f4457e637c00988
 --- /dev/null
 +++ b/boot/zephyr/io_display.c
-@@ -0,0 +1,287 @@
+@@ -0,0 +1,353 @@
 +/*
 + * OLED display helpers for MCUboot status messages.
 + * Uses Zephyr Display API to render text on CH1115 OLED.
@@ -115,6 +141,7 @@ index 0000000..1a74ab0d91c413582257fba56f4457e637c00988
 +#include <zephyr/drivers/display.h>
 +#include <zephyr/drivers/gpio.h>
 +#include <zephyr/devicetree.h>
++#include <stdio.h>
 +#include <string.h>
 +#include "bootutil/bootutil_log.h"
 +#ifdef CONFIG_MCUBOOT_DISPLAY
@@ -257,6 +284,36 @@ index 0000000..1a74ab0d91c413582257fba56f4457e637c00988
 +	{0x00, 0x00, 0x28, 0x54, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}, /* '~' */
 +};
 +
++/* ---- 24x24 OTA icon (column-major bitmap) ---- */
++
++#define ICON_W 24
++#define ICON_H 24
++#define ICON_BYTES ((ICON_W * ICON_H + 7) / 8)
++static const uint8_t icon_ota[ICON_BYTES] = {
++	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFE, 0x00,
++	0x01, 0xFE, 0x00, 0x07, 0xFF, 0xC0, 0x1E, 0x01, 0xE0, 0x1C, 0x00, 0xE0,
++	0x1C, 0x00, 0x60, 0x1C, 0x00, 0x60, 0x1C, 0x00, 0x60, 0x1C, 0x00, 0x60,
++	0x1C, 0x00, 0x60, 0x1C, 0x00, 0x60, 0x1C, 0x10, 0x60, 0x1E, 0x18, 0x60,
++	0x0F, 0x3C, 0x00, 0x07, 0xFE, 0x00, 0x00, 0xFE, 0x00, 0x00, 0x3C, 0x00,
++	0x00, 0x18, 0x00, 0x00, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
++};
++
++/* ---- Bitmap rendering ---- */
++
++static void draw_bitmap(int x, int y, const uint8_t *bmp, int w, int h)
++{
++	int bytes_per_col = (h + 7) / 8;
++	for (int col = 0; col < w; col++) {
++		for (int row = 0; row < h; row++) {
++			int byte_idx = col * bytes_per_col + (row / 8);
++			int bit_idx = 7 - (row % 8);
++			if (bmp[byte_idx] & (1 << bit_idx)) {
++				set_pixel(x + col, y + row);
++			}
++		}
++	}
++}
++
 +/* ---- Text rendering ---- */
 +
 +static void draw_char(char c, int x, int y)
@@ -363,6 +420,51 @@ index 0000000..1a74ab0d91c413582257fba56f4457e637c00988
 +	flush_display();
 +}
 +
++void io_display_show_progress(const char *label, int percent)
++{
++	if (!display_initialized) {
++		return;
++	}
++
++	memset(display_buf, 0, OLED_BUF_SIZE);
++
++	/* OTA icon at top-left */
++	draw_bitmap(0, 0, icon_ota, ICON_W, ICON_H);
++
++	/* Label text to the right of icon */
++	if (label) {
++		draw_string(label, 26, 6);
++	}
++
++	/* Progress bar at y=26, h=2 */
++	int bar_x = 10, bar_y = 26, bar_w = 68, bar_h = 2;
++	for (int x = bar_x; x < bar_x + bar_w; x++) {
++		set_pixel(x, bar_y);
++		set_pixel(x, bar_y + bar_h);
++	}
++	for (int y = bar_y; y <= bar_y + bar_h; y++) {
++		set_pixel(bar_x, y);
++		set_pixel(bar_x + bar_w - 1, y);
++	}
++	int fill_w = (percent * (bar_w - 2)) / 100;
++	for (int x = bar_x + 1; x < bar_x + 1 + fill_w; x++) {
++		for (int y = bar_y + 1; y < bar_y + bar_h; y++) {
++			set_pixel(x, y);
++		}
++	}
++
++	/* Percentage text: number + "%" centered at y=38 */
++	char pct[8];
++	snprintf(pct, sizeof(pct), "%u", (unsigned)percent);
++	int num_len = string_width(pct);
++	int total_w = num_len + 3 + FONT_WIDTH;
++	int pct_x = (OLED_WIDTH - total_w) / 2;
++	draw_string(pct, pct_x, 38);
++	draw_string("%", pct_x + num_len + 3, 38);
++
++	flush_display();
++}
++
 +void io_display_off(void)
 +{
 +	if (!display_initialized) {
@@ -379,13 +481,3 @@ index 0000000..1a74ab0d91c413582257fba56f4457e637c00988
 +
 +	display_initialized = false;
 +}
-+
-+/* MCUboot status change hook — show "Updating" only when swap is needed */
-+#ifdef CONFIG_MCUBOOT_DISPLAY
-+__weak void mcuboot_status_change(mcuboot_status_type_t status)
-+{
-+	if (status == MCUBOOT_STATUS_UPGRADING) {
-+		io_display_show("Updating", "...");
-+	}
-+}
-+#endif
