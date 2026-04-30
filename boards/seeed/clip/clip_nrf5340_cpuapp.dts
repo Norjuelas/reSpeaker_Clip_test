@@ -124,7 +124,7 @@
 	pinctrl-0 = <&pdm0_default>;
 	pinctrl-names = "default";
 	clock-source = "PCLK32M_HFXO";
-	queue-size = <16>;
+	queue-size = <32>;
 };
 
 &i2c1 {

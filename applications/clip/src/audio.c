@@ -35,7 +35,7 @@
 LOG_MODULE_REGISTER(audio, CONFIG_CLIP_LOG_LEVEL);
 
 /* Memory slab for DMIC buffers */
-K_MEM_SLAB_DEFINE_STATIC(audio_mem_slab, AUDIO_BLOCK_SIZE, 16, 4);
+K_MEM_SLAB_DEFINE_STATIC(audio_mem_slab, AUDIO_BLOCK_SIZE, 32, 4);
 
 /* DMIC device */
 static const struct device *const dmic_dev = DEVICE_DT_GET(DT_ALIAS(dmic0));
@@ -681,14 +681,20 @@ void audio_recording_thread(void *p1, void *p2, void *p3)
                 continue;
             }
 
-            /* Read one audio block from DMIC */
-            ret = dmic_read(dmic_dev, 0, &buffer, &size, AUDIO_FRAME_MS*2);
+            /* Read one audio block from DMIC.
+             * Use a generous timeout to tolerate transient scheduling delays
+             * caused by BLE activity (BT RX thread runs at higher priority).
+             * With 32 buffers (640ms queue), the DMIC can absorb short gaps.
+             */
+            ret = dmic_read(dmic_dev, 0, &buffer, &size, 200);
             if (ret < 0) {
+                LOG_WRN("dmic_read: err=%d consec=%d frames=%u",
+                        ret, dmic_timeout_count + 1, stats.frames_encoded);
                 if (ret == -EAGAIN) {
                     /* Timeout - track consecutive timeouts for recovery */
                     dmic_timeout_count++;
 
-                    if (dmic_timeout_count >= 5) {
+                    if (dmic_timeout_count >= 2) {
                         LOG_WRN("DMIC timeout recovery: retriggering DMIC");
                         LOG_WRN("DSP avg=%u us/enc avg=%u us (frames=%u)",
                                 stats.frames_encoded > 0 ?

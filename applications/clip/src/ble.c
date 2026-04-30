@@ -770,6 +770,8 @@ int ble_send_file_data(const uint8_t *data, uint16_t len)
                              data, len);
 
         if (err == 0) {
+            /* Yield to let higher-priority audio thread run */
+            k_yield();
             break; /* Success */
         }
 
