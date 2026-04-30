@@ -1470,18 +1470,25 @@ static void display_thread_fn(void *p1, void *p2, void *p3)
 	LOG_INF("Display thread started");
 
 	while (true) {
-		/* Wait for events */
-		if (k_msgq_get(&display_event_queue, &event, K_FOREVER) == 0) {
+		/* Use timed wait so the thread wakes itself for time-based state
+		 * transitions (e.g. REC_WAVE → REC_DOT) even if ANIM_TICK events
+		 * are lost due to queue pressure.
+		 */
+		bool needs_anim = (g_ui_state == UI_STATE_REC_WAVE);
+		k_timeout_t wait = needs_anim ? K_MSEC(100) : K_SECONDS(10);
+
+		if (k_msgq_get(&display_event_queue, &event, wait) == 0) {
 			LOG_DBG("Display event: %d", event);
 			handle_event(event);
-			render_current_state();
+		}
+		/* Always render — handles time-based transitions independently */
+		render_current_state();
 
-			/* Start/stop animation work */
-			if (g_ui_state == UI_STATE_REC_WAVE) {
-				k_work_schedule(&display_anim_work, DISPLAY_ANIMATION_PERIOD);
-			} else {
-				k_work_cancel_delayable(&display_anim_work);
-			}
+		/* Start/stop animation work */
+		if (g_ui_state == UI_STATE_REC_WAVE) {
+			k_work_schedule(&display_anim_work, DISPLAY_ANIMATION_PERIOD);
+		} else {
+			k_work_cancel_delayable(&display_anim_work);
 		}
 	}
 }
