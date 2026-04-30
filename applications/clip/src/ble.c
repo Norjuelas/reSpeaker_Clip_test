@@ -327,7 +327,7 @@ static void adv_work_handler(struct k_work *work)
 {
 	int err;
 	const struct bt_le_adv_param *param = ble_is_bonded()
-		? &adv_param_fast : &adv_param_fast;
+		? &adv_param_slow : &adv_param_fast;
 
 	err = bt_le_adv_start(param, ad, ARRAY_SIZE(ad),
 			      sd, ARRAY_SIZE(sd));

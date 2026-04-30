@@ -82,19 +82,23 @@ struct transport *transport_get(uint8_t type)
 /* Get active transport (priority: UDP > BLE) */
 struct transport *transport_get_active(void)
 {
-    k_mutex_lock(&transport_lock, K_FOREVER);
+	k_mutex_lock(&transport_lock, K_FOREVER);
 
-    /* Priority: UDP > BLE (UDP is better for large file transfers) */
-    for (int i = TRANSPORT_TYPE_MAX - 1; i >= 0; i--) {
-        struct transport *tp = transports[i];
-        if (tp && tp->ready && tp->ops && tp->ops->is_connected()) {
-            k_mutex_unlock(&transport_lock);
-            return tp;
-        }
-    }
+	/* Explicit priority order: UDP first (better for large transfers), then BLE */
+	static const uint8_t priority[] = {
+		TRANSPORT_TYPE_UDP,
+		TRANSPORT_TYPE_BLE,
+	};
+	for (int i = 0; i < (int)ARRAY_SIZE(priority); i++) {
+		struct transport *tp = transports[priority[i]];
+		if (tp && tp->ready && tp->ops && tp->ops->is_connected()) {
+			k_mutex_unlock(&transport_lock);
+			return tp;
+		}
+	}
 
-    k_mutex_unlock(&transport_lock);
-    return NULL;
+	k_mutex_unlock(&transport_lock);
+	return NULL;
 }
 
 /* Send data through specific transport */

@@ -129,9 +129,9 @@ static void ota_progress_work_handler(struct k_work *work)
 static atomic_t g_state;
 static atomic_t g_boost_refcnt;
 
-/* OTA progress tracking - store total size for percentage calculation */
+/* OTA progress tracking - protected by ota_mutex (accessed from MCUmgr cb + work queue) */
+static K_MUTEX_DEFINE(ota_mutex);
 static size_t g_ota_total_size = 0;
-/* OTA chunk counter for fallback progress display */
 static uint32_t g_ota_chunk_count = 0;
 
 /* ========================================================================== */
@@ -153,8 +153,10 @@ static enum mgmt_cb_return mcumgr_dfu_cb(uint32_t event, enum mgmt_cb_return pre
 {
     if (event == MGMT_EVT_OP_IMG_MGMT_DFU_STARTED) {
         LOG_INF("OTA started");
+        k_mutex_lock(&ota_mutex, K_FOREVER);
         g_ota_total_size = 0;
         g_ota_chunk_count = 0;
+        k_mutex_unlock(&ota_mutex);
         ota_in_progress = true;
         /* Start periodic work to poll g_img_mgmt_state */
         k_work_schedule(&ota_progress_work, K_MSEC(OTA_PROGRESS_POLL_INTERVAL_MS));
@@ -175,6 +177,7 @@ static enum mgmt_cb_return mcumgr_dfu_cb(uint32_t event, enum mgmt_cb_return pre
                     check, check->action, check->req);
 
             /* Get total size from action (only once, on first chunk) */
+            k_mutex_lock(&ota_mutex, K_FOREVER);
             if (check->action && g_ota_total_size == 0) {
                 unsigned long long action_size = check->action->size;
                 if (action_size > 0) {
@@ -200,7 +203,9 @@ static enum mgmt_cb_return mcumgr_dfu_cb(uint32_t event, enum mgmt_cb_return pre
                     uint8_t pct = (uint8_t)((offset * 100) / g_ota_total_size);
                     LOG_DBG("OTA progress: %u%% (offset=%zu/%zu)",
                             pct, offset, g_ota_total_size);
+                    k_mutex_unlock(&ota_mutex);
                     display_set_ota_progress(pct);
+                    k_mutex_lock(&ota_mutex, K_FOREVER);
                 }
             }
 
@@ -209,18 +214,23 @@ static enum mgmt_cb_return mcumgr_dfu_cb(uint32_t event, enum mgmt_cb_return pre
             if (g_ota_total_size == 0 && g_ota_chunk_count > 1) {
                 /* Show animated progress based on chunk count (0-90%) */
                 uint8_t pct = (g_ota_chunk_count % 90);
+                k_mutex_unlock(&ota_mutex);
                 display_set_ota_progress(pct);
                 LOG_DBG("OTA fallback progress: %u%% (chunk %u)",
                         pct, g_ota_chunk_count);
+                k_mutex_lock(&ota_mutex, K_FOREVER);
             }
+            k_mutex_unlock(&ota_mutex);
         } else {
             LOG_WRN("DFU: invalid data ptr");
         }
     } else if (event == MGMT_EVT_OP_IMG_MGMT_DFU_PENDING) {
+        k_mutex_lock(&ota_mutex, K_FOREVER);
         LOG_INF("OTA done, pending reboot (%u chunks)",
                 g_ota_chunk_count);
         g_ota_total_size = 0;
         g_ota_chunk_count = 0;
+        k_mutex_unlock(&ota_mutex);
         ota_in_progress = false;
         /* Cancel the progress work */
         k_work_cancel_delayable(&ota_progress_work);

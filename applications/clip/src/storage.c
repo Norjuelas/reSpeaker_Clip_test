@@ -169,6 +169,20 @@ int storage_get_stats(struct storage_stats *stats)
     return 0;
 }
 
+/* Validate session_id: must be non-NULL, non-empty, digits only (prevent path traversal) */
+static int validate_session_id(const char *session_id)
+{
+    if (!session_id || !session_id[0]) {
+        return -EINVAL;
+    }
+    for (const char *p = session_id; *p; p++) {
+        if (*p < '0' || *p > '9') {
+            return -EINVAL;
+        }
+    }
+    return 0;
+}
+
 int storage_create_session(const char *session_id, uint8_t channels,
                            uint32_t sample_rate, const char *mode)
 {
@@ -902,6 +916,9 @@ int storage_list_sessions_paginated(struct storage_session_info *sessions,
 
 int storage_get_session_info(const char *session_id, struct storage_session_info *info)
 {
+    if (validate_session_id(session_id) != 0) {
+        return -EINVAL;
+    }
     char filepath[128];
     struct fs_file_t file;
     char json_buf[512];
@@ -1075,6 +1092,9 @@ bool storage_has_unsynced_sessions(void)
 
 int storage_list_chunks(const char *session_id, uint32_t *chunks, int max_chunks, int skip)
 {
+    if (validate_session_id(session_id) != 0) {
+        return -EINVAL;
+    }
     char dir_path[128];
     struct fs_dir_t dirp;
     struct fs_dirent entry;
@@ -1133,6 +1153,9 @@ int storage_list_chunks(const char *session_id, uint32_t *chunks, int max_chunks
 
 int storage_delete_session(const char *session_id)
 {
+    if (validate_session_id(session_id) != 0) {
+        return -EINVAL;
+    }
     char dir_path[128];
     struct fs_dir_t dirp;
     struct fs_dirent entry;

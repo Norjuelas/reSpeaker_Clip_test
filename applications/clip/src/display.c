@@ -590,19 +590,6 @@ static void draw_battery_by_level(uint8_t *buf, int x, int y, uint8_t percent, b
 	}
 }
 
-/**
- * @brief Draw BLE connection icon
- */
-static void draw_ble_icon(uint8_t *buf, int x, int y, bool connected)
-{
-	if (connected) {
-		const uint8_t *bitmap = icon_get_bitmap(ICON_BLE_CONNECTED, NULL, NULL);
-		if (bitmap) {
-			icon_draw_bitmap(buf, x, y, bitmap, ICON_WIDTH, ICON_HEIGHT);
-		}
-	}
-}
-
 /* Full-screen 88x48 low battery icon (Vertical MSB First, 88 cols x 6 bytes/col) */
 #define LOWBAT_WIDTH  88
 #define LOWBAT_HEIGHT 48
@@ -707,7 +694,7 @@ static void render_status_bar(uint8_t *buf)
 
 	/* Right edge icon at (64, 12) */
 		struct transport *active_tp = transport_get_active();
-		LOG_INF("icon: udp=%d xfer=%d ble=%d wifi=%d charge=%d untrx=%d",
+		LOG_DBG("icon: udp=%d xfer=%d ble=%d wifi=%d charge=%d untrx=%d",
 			active_tp && active_tp->type == TRANSPORT_TYPE_UDP,
 			g_status.transferring, g_status.ble_connected,
 			g_status.wifi_running, g_status.battery_charging,

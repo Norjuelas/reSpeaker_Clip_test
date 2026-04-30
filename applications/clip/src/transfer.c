@@ -47,10 +47,10 @@ static char last_transferred_file[32] = {0};
 /* Transfer rate tracking */
 static int64_t file_transfer_start_ms = 0;
 
-/* Transfer control flags */
-static volatile bool transfer_pause_requested = false;
-static volatile bool transfer_cancel_requested = false;
-static volatile bool transfer_complete_sent = false;
+/* Transfer control flags (atomic for thread safety) */
+static atomic_t transfer_pause_requested = ATOMIC_INIT(0);
+static atomic_t transfer_cancel_requested = ATOMIC_INIT(0);
+static atomic_t transfer_complete_sent = ATOMIC_INIT(0);
 
 /* Forward declarations */
 static void transfer_thread_main(void *, void *, void *);
@@ -188,8 +188,8 @@ int transfer_start(const char *session_id, const char *filename, struct transpor
         return -ENOENT;
     }
 
-    transfer_complete_sent = false;
-    transfer_pause_requested = false;
+    atomic_set(&transfer_complete_sent, 0);
+    atomic_set(&transfer_pause_requested, 0);
 
     /* Initialize transfer state */
     memset(&current_transfer, 0, sizeof(current_transfer));
@@ -314,8 +314,8 @@ int transfer_resume_from(const char *session_id, const char *start_file, struct 
         return -ENOENT;
     }
 
-    transfer_complete_sent = false;
-    transfer_pause_requested = false;
+    atomic_set(&transfer_complete_sent, 0);
+    atomic_set(&transfer_pause_requested, 0);
 
     /* Save the transport for this transfer session */
     current_transport = tp;
@@ -377,8 +377,8 @@ int transfer_cancel(void)
     }
 
     LOG_INF("xfer canceled");
-    transfer_cancel_requested = true;
-    transfer_pause_requested = false;
+    atomic_set(&transfer_cancel_requested, 1);
+    atomic_set(&transfer_pause_requested, 0);
 
     return 0;
 }
@@ -562,7 +562,7 @@ static void transfer_thread_main(void *p1, void *p2, void *p3)
 
 process_next_file:
         /* Handle cancel: send TRANSFER_DONE then cleanup */
-        if (transfer_cancel_requested) {
+        if (atomic_get(&transfer_cancel_requested)) {
             LOG_INF("Transfer thread handling cancel");
             if (transfer_file_open) {
                 fs_close(&transfer_file);
@@ -572,7 +572,7 @@ process_next_file:
                 send_transfer_complete_once(current_transfer.session_id,
                                              (int)current_transfer.synced_files);
             }
-            transfer_cancel_requested = false;
+            atomic_set(&transfer_cancel_requested, 0);
             transfer_cleanup();
             transfer_thread_waiting = true;
             k_sem_take(&transfer_trigger_sem, K_FOREVER);
@@ -663,7 +663,7 @@ process_next_file:
         /* Send data chunks */
         while (transfer_thread_running &&
                current_transfer.state == TRANSFER_STATE_TRANSMITTING &&
-               !transfer_cancel_requested) {
+               !atomic_get(&transfer_cancel_requested)) {
 
             /* Check if transport is connected before sending */
             if (!transport_is_connected()) {
@@ -1106,7 +1106,7 @@ static int send_file_complete_event(const char *filename)
 
 static void send_transfer_complete_once(const char *session_id, int file_count)
 {
-    if (transfer_complete_sent) {
+    if (atomic_get(&transfer_complete_sent)) {
         LOG_DBG("transfer_complete already sent, skipping duplicate");
         return;
     }
@@ -1126,7 +1126,7 @@ static void send_transfer_complete_once(const char *session_id, int file_count)
     }
 
     LOG_INF("xfer done: %s files=%d", session_id, file_count);
-    transfer_complete_sent = true;
+    atomic_set(&transfer_complete_sent, 1);
 }
 
 static void transfer_cleanup(void)
@@ -1158,8 +1158,8 @@ static void transfer_cleanup(void)
     current_transfer.bytes_transferred = 0;
     current_transfer.total_bytes = 0;
     current_transfer.progress_percent = 0;
-    transfer_pause_requested = false;
-    transfer_cancel_requested = false;
-    transfer_complete_sent = false;
+    atomic_set(&transfer_pause_requested, 0);
+    atomic_set(&transfer_cancel_requested, 0);
+    atomic_set(&transfer_complete_sent, 0);
 }
   
