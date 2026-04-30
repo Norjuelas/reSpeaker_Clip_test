@@ -78,6 +78,17 @@ west build --build-dir build-test --board clip/nrf5340/cpuapp --pristine tests/c
 west flash --build-dir build-test && nrfutil device reset
 ```
 
+### nRF70 OTP Programming (Factory Tool)
+
+```sh
+west build --build-dir build-otp --board clip/nrf5340/cpuapp --pristine tests/otp
+west flash --build-dir build-otp && nrfutil device reset
+```
+
+Shell commands: `nrf70 otp status/read/write_mac0/write_mac1/lock`
+
+See `tests/otp/README.md` for full usage.
+
 ## Documentation
 
 - `docs/protocol.md` - BLE AT command protocol specification
@@ -279,5 +290,6 @@ GPIO-controlled: mic_vdd (gpio1.14), oled_vdd (gpio1.8), rfsw_vdd (gpio0.29).
 - `drivers/` - Custom device drivers (input)
 - `lib/` - Third-party libraries (opus, speexdsp, lua)
 - `tests/clip/` - Multi-image hardware test suite
+- `tests/otp/` - nRF70 OTP programming tool (factory MAC address burning)
 - `tests/ble_test.py` - BLE protocol test script
 - `docs/` - Protocol, architecture, requirements, development docs
