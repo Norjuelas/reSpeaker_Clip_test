@@ -1035,10 +1035,10 @@ int storage_get_session_info(const char *session_id, struct storage_session_info
         }
     }
 
-    /* Fallback: if session.json has no file info (empty/corrupt),
-     * count files from directory */
-    if (info->file_count == 0 && info->total_bytes == 0 &&
-        info->channels == 0 && info->sample_rate_khz == 0)
+    /* Scan directory for actual file count and total size.
+     * This is more reliable than session.json which may be stale
+     * if the device powered off without closing the session.
+     */
     {
         char dir_path[128];
         struct fs_dir_t dirp;
@@ -1050,6 +1050,8 @@ int storage_get_session_info(const char *session_id, struct storage_session_info
         if (fs_opendir(&dirp, dir_path) == 0)
         {
             uint32_t file_count = 0;
+            uint64_t actual_bytes = 0;
+
             while (fs_readdir(&dirp, &entry) == 0 && entry.name[0] != '\0')
             {
                 size_t len = strlen(entry.name);
@@ -1057,15 +1059,14 @@ int storage_get_session_info(const char *session_id, struct storage_session_info
                     (len == 9 && strcmp(entry.name + 4, ".ogg") == 0))
                 {
                     file_count++;
+                    actual_bytes += (uint64_t)entry.size;
                 }
             }
             fs_closedir(&dirp);
-            if (file_count > 0)
-            {
+
+            if (file_count > 0) {
                 info->file_count = file_count;
-                LOG_WRN("session.json missing/empty for %s, "
-                        "counted %u files from directory",
-                        session_id, file_count);
+                info->total_bytes = actual_bytes;
             }
         }
     }
