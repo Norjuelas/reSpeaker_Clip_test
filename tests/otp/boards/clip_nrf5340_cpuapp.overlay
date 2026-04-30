@@ -1,0 +1,15 @@
+/*
+ * Copyright (c) 2023 Nordic Semiconductor ASA
+ *
+ * SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
+ */
+
+/* UART configuration for 921600 baud rate */
+&uart0 {
+	current-speed = <921600>;
+};
+
+/* Disable unused peripherals */
+&ch1115 {
+	status = "disabled";
+};

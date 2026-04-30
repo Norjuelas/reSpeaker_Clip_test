@@ -177,16 +177,19 @@ static int write_mac_to_otp(unsigned int index, unsigned int *words)
 
 	err = poll_otp_ready();
 	if (err) {
+		LOG_ERR("poll_otp_ready failed: %d", err);
 		return err;
 	}
 	set_otp_timing_reg_40mhz();
 
 	err = otp_set_voltage(OTP_VOLTCTRL_2V5);
 	if (err) {
+		LOG_ERR("otp_set_voltage 2V5 failed: %d", err);
 		return err;
 	}
 	err = req_otp_byte_write_mode();
 	if (err) {
+		LOG_ERR("req_otp_byte_write_mode failed: %d", err);
 		return err;
 	}
 
@@ -204,6 +207,10 @@ static int write_mac_to_otp(unsigned int index, unsigned int *words)
 	unsigned int mask = (index == 0) ? MAC0_ADDR_FLAG_MASK : MAC1_ADDR_FLAG_MASK;
 
 	write_otp_location(REGION_DEFAULTS, mask);
+
+	/* Must return to standby and lower voltage to commit writes */
+	req_otp_standby_mode();
+	otp_set_voltage(OTP_VOLTCTRL_1V8);
 	return 0;
 
 exit:
@@ -245,27 +252,39 @@ static int unlock_otp(void)
 {
 	int err;
 
+	LOG_INF("unlock_otp: starting...");
+
 	err = poll_otp_ready();
 	if (err) {
+		LOG_ERR("unlock: poll_otp_ready failed: %d", err);
 		return err;
 	}
 	set_otp_timing_reg_40mhz();
 
 	err = otp_set_voltage(OTP_VOLTCTRL_2V5);
 	if (err) {
+		LOG_ERR("unlock: otp_set_voltage failed: %d", err);
 		return err;
 	}
 	err = req_otp_byte_write_mode();
 	if (err) {
+		LOG_ERR("unlock: req_otp_byte_write_mode failed: %d", err);
 		return err;
 	}
 
 	for (int i = 0; i < 4; i++) {
-		write_otp_location(REGION_PROTECT + i, OTP_ENABLE_PATTERN);
+		err = write_otp_location(REGION_PROTECT + i, OTP_ENABLE_PATTERN);
+		if (err) {
+			LOG_ERR("unlock: write REGION_PROTECT+%d failed: %d", i, err);
+		} else {
+			LOG_INF("unlock: REGION_PROTECT+%d = 0x%08x OK", i, OTP_ENABLE_PATTERN);
+		}
 	}
 
 	req_otp_standby_mode();
 	otp_set_voltage(OTP_VOLTCTRL_1V8);
+
+	LOG_INF("unlock_otp: done");
 	return 0;
 }
 
@@ -281,11 +300,12 @@ static int parse_mac(const char *str, unsigned int words[2])
 		   &b[0], &b[1], &b[2], &b[3], &b[4], &b[5]) != 6) {
 		return -EINVAL;
 	}
-	/* All zeros or multicast */
+	/* All zeros */
 	if (b[0] == 0 && b[1] == 0 && b[2] == 0 &&
 	    b[3] == 0 && b[4] == 0 && b[5] == 0) {
 		return -EINVAL;
 	}
+	/* Multicast (bit 0 of first byte) */
 	if (b[0] & 0x01) {
 		return -EINVAL;
 	}
@@ -409,18 +429,23 @@ static int do_write_mac(const struct shell *shell, int index, const char *mac_st
 
 	err = parse_mac(mac_str, words);
 	if (err) {
-		shell_error(shell, "Invalid MAC: %s (format: AA:BB:CC:DD:EE:FF)", mac_str);
+		shell_error(shell, "Invalid MAC: %s", mac_str);
+		shell_print(shell, "Format: AA:BB:CC:DD:EE:FF (first byte must be even)");
 		return -EINVAL;
 	}
 
 	/* Check protection */
-	err = read_otp_memory(REGION_PROTECT, val, 4);
+	err = read_otp_memory(REGION_PROTECT, &val[REGION_PROTECT], 4);
 	if (err) {
-		shell_error(shell, "Failed to read OTP");
+		shell_error(shell, "Failed to read OTP (err=%d)", err);
 		return -ENOEXEC;
 	}
 
 	prot = check_protection(val);
+	shell_print(shell, "Protection: %s",
+		    prot == OTP_PROGRAMMED ? "LOCKED" :
+		    prot == OTP_ENABLE_PATTERN ? "OPEN" :
+		    prot == OTP_FRESH_FROM_FAB ? "FRESH" : "INVALID");
 	if (prot == OTP_PROGRAMMED) {
 		shell_error(shell, "OTP is LOCKED - cannot write");
 		return -EPERM;
@@ -468,7 +493,7 @@ static int cmd_lock(const struct shell *shell, size_t argc, char *argv[])
 	unsigned int prot;
 	int err;
 
-	err = read_otp_memory(REGION_PROTECT, val, 4);
+	err = read_otp_memory(REGION_PROTECT, &val[REGION_PROTECT], 4);
 	if (err) {
 		shell_error(shell, "Failed to read OTP");
 		return -ENOEXEC;
