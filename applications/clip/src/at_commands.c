@@ -1037,18 +1037,25 @@ static int cmd_list_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
     if (n < 0 || n >= rem) return AT_ERR_NOMEM;
     p += n; rem -= n; written += n;
 
+    bool first = true;
     for (int i = 0; i < result_count && rem > 100; i++) {
         struct storage_session_info info;
         if (storage_get_session_info(list_ids[i], &info) != 0) continue;
 
+        /* Skip empty sessions (deleted or no files) */
+        if (info.file_count == 0 && info.total_bytes == 0) {
+            continue;
+        }
+
         int bm = storage_count_bookmarks(list_ids[i]);
         if (bm < 0) bm = 0;
 
-        if (i > 0) {
+        if (!first) {
             n = snprintf(p, rem, ",");
             if (n < 0 || n >= rem) return AT_ERR_NOMEM;
             p += n; rem -= n; written += n;
         }
+        first = false;
 
         n = snprintf(p, rem,
             "{\"id\":\"%s\",\"files\":%u,\"size\":%u,\"bookmarks\":%d}",

@@ -1047,27 +1047,29 @@ int storage_get_session_info(const char *session_id, struct storage_session_info
         snprintf(dir_path, sizeof(dir_path), "%s/%s",
                  STORAGE_BASE_PATH, session_id);
         fs_dir_t_init(&dirp);
-        if (fs_opendir(&dirp, dir_path) == 0)
+        if (fs_opendir(&dirp, dir_path) != 0) {
+            /* Session directory does not exist */
+            return -ENOENT;
+        }
+
+        uint32_t file_count = 0;
+        uint64_t actual_bytes = 0;
+
+        while (fs_readdir(&dirp, &entry) == 0 && entry.name[0] != '\0')
         {
-            uint32_t file_count = 0;
-            uint64_t actual_bytes = 0;
-
-            while (fs_readdir(&dirp, &entry) == 0 && entry.name[0] != '\0')
+            size_t len = strlen(entry.name);
+            if ((len == 9 && strcmp(entry.name + 4, ".opus") == 0) ||
+                (len == 9 && strcmp(entry.name + 4, ".ogg") == 0))
             {
-                size_t len = strlen(entry.name);
-                if ((len == 9 && strcmp(entry.name + 4, ".opus") == 0) ||
-                    (len == 9 && strcmp(entry.name + 4, ".ogg") == 0))
-                {
-                    file_count++;
-                    actual_bytes += (uint64_t)entry.size;
-                }
+                file_count++;
+                actual_bytes += (uint64_t)entry.size;
             }
-            fs_closedir(&dirp);
+        }
+        fs_closedir(&dirp);
 
-            if (file_count > 0) {
-                info->file_count = file_count;
-                info->total_bytes = actual_bytes;
-            }
+        if (file_count > 0) {
+            info->file_count = file_count;
+            info->total_bytes = actual_bytes;
         }
     }
 
