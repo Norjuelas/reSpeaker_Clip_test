@@ -950,11 +950,18 @@ static int cmd_list_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
                 return create_json_response(false, "Session not found", NULL, response, len);
             }
 
+            if (info.file_count == 0) {
+                return create_json_response(true, NULL,
+                    "{\"files\":0,\"size\":0,\"synced\":0,\"bookmarks\":0,"
+                    "\"channels\":0,\"sample_rate\":0,\"mode\":\"\"}",
+                    response, len);
+            }
+
             uint32_t chunks[20];
             int skip = (page - 1) * per_page;
             int file_count = storage_list_chunks(session_id, chunks, per_page, skip);
             if (file_count < 0) {
-                return create_json_response(false, "Failed to list files", NULL, response, len);
+                return create_json_response(false, "Session not found", NULL, response, len);
             }
 
             char *p = response;
