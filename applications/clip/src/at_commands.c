@@ -1002,13 +1002,21 @@ static int cmd_list_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
         char *session_id = args_copy;
 
         size_t sid_len = query ? (size_t)(query - session_id) : strlen(session_id);
-        if (sid_len != 14 || !is_valid_session_id(session_id)) {
+        if (sid_len != 14) {
+            return create_json_response(false, "Invalid session ID", NULL, response, len);
+        }
+
+        /* Null-terminate session_id before validation */
+        if (query) {
+            *query = '\0';
+        }
+
+        if (!is_valid_session_id(session_id)) {
             return create_json_response(false, "Invalid session ID", NULL, response, len);
         }
 
         if (query) {
             /* AT+LIST=id?page&per_page - file list with pagination */
-            *query = '\0';
             query++;
 
             int page, per_page;
