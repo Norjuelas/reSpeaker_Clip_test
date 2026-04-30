@@ -76,7 +76,7 @@ static void button_event_callback(const struct device *dev, enum button_action a
 	break;
 
     case BUTTON_RELEASE:
-	LOG_INF("RELEASE, state=%d, poweroff=%d", state, atomic_get(&poweroff_screen_active));
+	LOG_INF("RELEASE, state=%d, poweroff=%ld", state, atomic_get(&poweroff_screen_active));
 	if (atomic_cas(&poweroff_screen_active, 1, 0)) {
 	    clip_post_event(CLIP_EVENT_POWER_OFF_EXEC);
 	} else if (atomic_cas(&recording_stopped, 1, 0)) {

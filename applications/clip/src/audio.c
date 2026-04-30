@@ -894,8 +894,8 @@ create_new_segment:
 
         LOG_INF("rec done: %u frm %us %uKB",
             stats.frames_encoded,
-            stats.recording_time_ms / 1000,
-            stats.total_bytes / 1024);
+            (unsigned int)(stats.recording_time_ms / 1000),
+            (unsigned int)(stats.total_bytes / 1024));
     }
 }
 

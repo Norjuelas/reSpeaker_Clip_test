@@ -9,6 +9,7 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include "clip.h"
 
 /* Configuration keys */
 #define CONFIG_KEY_MODE          0x03
