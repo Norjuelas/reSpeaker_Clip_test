@@ -1030,12 +1030,12 @@ static void set_ui_state(enum ui_state new_state)
 
 		/* Handle display blanking on state transitions */
 		if (new_state == UI_STATE_OFF) {
-			/* Entering OFF state - blank display (low power mode) */
+			/* Entering OFF state - blank display */
 			if (display_dev) {
 				display_blanking_on(display_dev);
 			}
 		} else {
-			/* Any non-OFF state - ensure display is unblanked */
+			/* Leaving OFF state - unblank display */
 			if (display_dev) {
 				display_blanking_off(display_dev);
 			}
@@ -1470,19 +1470,21 @@ static void display_thread_fn(void *p1, void *p2, void *p3)
 	LOG_INF("Display thread started");
 
 	while (true) {
-		/* Use timed wait so the thread wakes itself for time-based state
-		 * transitions (e.g. REC_WAVE → REC_DOT) even if ANIM_TICK events
-		 * are lost due to queue pressure.
+		/* Animation states need periodic wake (100ms), other states
+		 * rely entirely on events — no polling needed.
 		 */
-		bool needs_anim = (g_ui_state == UI_STATE_REC_WAVE);
-		k_timeout_t wait = needs_anim ? K_MSEC(100) : K_SECONDS(10);
+		k_timeout_t wait;
+		if (g_ui_state == UI_STATE_REC_WAVE) {
+			wait = K_MSEC(100);
+		} else {
+			wait = K_FOREVER;
+		}
 
 		if (k_msgq_get(&display_event_queue, &event, wait) == 0) {
 			LOG_DBG("Display event: %d", event);
 			handle_event(event);
+			render_current_state();
 		}
-		/* Always render — handles time-based transitions independently */
-		render_current_state();
 
 		/* Start/stop animation work */
 		if (g_ui_state == UI_STATE_REC_WAVE) {
