@@ -7,6 +7,7 @@
 #include <zephyr/kernel.h>
 #include <zephyr/device.h>
 #include <zephyr/drivers/display.h>
+#include <zephyr/pm/device.h>
 #include <zephyr/logging/log.h>
 #include <string.h>
 #include <math.h>
@@ -1030,14 +1031,17 @@ static void set_ui_state(enum ui_state new_state)
 
 		/* Handle display blanking on state transitions */
 		if (new_state == UI_STATE_OFF) {
-			/* Entering OFF state - blank display */
+			/* Entering OFF state - suspend display (disable charge pump) */
 			if (display_dev) {
-				display_blanking_on(display_dev);
+				pm_device_action_run(display_dev, PM_DEVICE_ACTION_SUSPEND);
 			}
-		} else {
-			/* Leaving OFF state - unblank display */
+		} else if (g_ui_state == UI_STATE_OFF) {
+			/* Leaving OFF state - resume display (re-enable + re-init) */
 			if (display_dev) {
-				display_blanking_off(display_dev);
+				pm_device_action_run(display_dev, PM_DEVICE_ACTION_RESUME);
+				/* Restore brightness after re-init */
+				struct clip_context *ctx = clip_get_context();
+				clip_display_set_brightness(ctx->config.oled_brightness);
 			}
 		}
 

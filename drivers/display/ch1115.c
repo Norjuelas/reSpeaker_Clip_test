@@ -257,11 +257,9 @@ static int ch1115_clear(const struct device *dev)
     return ch1115_write(dev, 0, 0, &desc, config->clear_buf);
 }
 
-static int ch1115_init(const struct device *dev)
+static int ch1115_hw_init(const struct device *dev)
 {
     const struct ch1115_config *config = dev->config;
-    struct ch1115_data *data = dev->data;
-    int ret;
 
     uint8_t init_cmds[] = {
         0xAE,
@@ -291,13 +289,21 @@ static int ch1115_init(const struct device *dev)
         0xDB,
         0x40,
         0xAD,
-		/* Vendor init sequence for CH1115-based 0.50\" 88x48 modules */
-		0x8B,
-		0x33,
+        0x8B,
+        0x33,
         0xA4,
         0xA6,
         0xAF,
     };
+
+    return ch1115_write_cmds(dev, init_cmds, sizeof(init_cmds));
+}
+
+static int ch1115_init(const struct device *dev)
+{
+    const struct ch1115_config *config = dev->config;
+    struct ch1115_data *data = dev->data;
+    int ret;
 
     if (!i2c_is_ready_dt(&config->i2c)) {
         LOG_ERR("I2C bus not ready");
@@ -326,7 +332,7 @@ static int ch1115_init(const struct device *dev)
     data->pf = PIXEL_FORMAT_MONO01;
 	data->suspended = false;
 
-    ret = ch1115_write_cmds(dev, init_cmds, sizeof(init_cmds));
+    ret = ch1115_hw_init(dev);
     if (ret < 0) {
         LOG_ERR("Failed to init CH1115 (%d)", ret);
         return ret;
@@ -365,22 +371,36 @@ static int ch1115_pm_action(const struct device *dev, enum pm_device_action acti
 
     switch (action) {
     case PM_DEVICE_ACTION_SUSPEND:
-        /* Lowest-risk "sleep": turn display off. RAM is typically retained. */
-        ret = ch1115_blanking_on(dev);
+        /* Disable charge pump + display off for minimum power */
+        {
+            uint8_t sleep_cmds[] = { 0x8D, 0x10, 0xAE };
+            ret = ch1115_write_cmds(dev, sleep_cmds, sizeof(sleep_cmds));
+        }
         if (ret == 0) {
             data->suspended = true;
         }
         return ret;
     case PM_DEVICE_ACTION_RESUME:
-        /* Wake: turn display on. App can optionally clear/redraw. */
-        ret = ch1115_blanking_off(dev);
+        /* Re-enable charge pump + full re-init + display on */
+        {
+            uint8_t pump_on[] = { 0x8D, 0x14 };
+            ret = ch1115_write_cmds(dev, pump_on, sizeof(pump_on));
+            if (ret < 0) {
+                return ret;
+            }
+            k_sleep(K_MSEC(10));
+        }
+        ret = ch1115_hw_init(dev);
         if (ret == 0) {
             data->suspended = false;
         }
         return ret;
     case PM_DEVICE_ACTION_TURN_OFF:
-        /* Treat TURN_OFF as suspend for now (no external power gating). */
-        ret = ch1115_blanking_on(dev);
+        /* Same as suspend: disable charge pump */
+        {
+            uint8_t off_cmds[] = { 0x8D, 0x10, 0xAE };
+            ret = ch1115_write_cmds(dev, off_cmds, sizeof(off_cmds));
+        }
         if (ret == 0) {
             data->suspended = true;
         }
