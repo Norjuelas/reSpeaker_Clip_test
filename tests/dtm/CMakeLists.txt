@@ -1,3 +1,9 @@
+#
+# Copyright (c) 2024 Seeed Studio
+#
+# SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
+#
+
 cmake_minimum_required(VERSION 3.20.0)
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 project(dtm)
@@ -14,14 +20,9 @@ target_sources_ifdef(CONFIG_DTM_TRANSPORT_HCI app PRIVATE
   ${DTM_SRC}/src/transport/dtm_hci.c
 )
 
-if(CONFIG_DTM_TRANSPORT_HCI AND "${BOARD}" STREQUAL "nrf5340dk")
-  target_sources(app PRIVATE ${DTM_SRC}/src/transport/hci_uart_remote.c)
-  target_include_directories(app PRIVATE ${DTM_SRC}/rpc)
-else()
-  target_sources_ifdef(CONFIG_DTM_TRANSPORT_HCI app PRIVATE
-    ${DTM_SRC}/src/transport/hci_uart.c
-  )
-endif()
+target_sources_ifdef(CONFIG_DTM_TRANSPORT_HCI app PRIVATE
+  ${DTM_SRC}/src/transport/hci_uart.c
+)
 
 target_sources(app PRIVATE
   ${DTM_SRC}/src/dtm.c
