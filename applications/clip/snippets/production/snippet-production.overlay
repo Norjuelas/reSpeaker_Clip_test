@@ -1,4 +1,6 @@
-/* Production: disable UART0 hardware to minimize power */
+/* Production: disable non-essential hardware to minimize power */
+
+/* Disable debug UART */
 &uart0 {
 	status = "disabled";
 };

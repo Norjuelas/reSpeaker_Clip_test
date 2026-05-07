@@ -26,7 +26,7 @@
 };
 
 &uart0 {
-	current-speed = <921600>;
+	status = "disabled";
 };
 
 /* Boot mode retention register - written by app to trigger USB DFU on reboot */
