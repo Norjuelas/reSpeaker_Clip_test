@@ -208,4 +208,27 @@ int ble_send_response_buffer(size_t len);
  */
 int ble_send_audio_vis(const uint8_t *data, uint16_t len);
 
+/**
+ * @brief Notify recording state change via BLE
+ *
+ * Sends JSON event: {"event":"state","state":"<state>","session":"<id>"[,"duration":N]}
+ *
+ * @param state State string (RECORDING, IDLE, PAUSED)
+ * @param session_id Session ID string
+ * @param duration Duration in seconds, or -1 if not applicable
+ * @return 0 on success, negative error code on failure
+ */
+int ble_notify_state_change(const char *state, const char *session_id, int duration);
+
+/**
+ * @brief Notify bookmark mark event via BLE
+ *
+ * Sends JSON event: {"event":"mark","session":"<id>","mark_count":N}
+ *
+ * @param session_id Session ID string
+ * @param mark_count Current bookmark count
+ * @return 0 on success, negative error code on failure
+ */
+int ble_notify_mark(const char *session_id, int mark_count);
+
 #endif /* CLIP_BLE_H */

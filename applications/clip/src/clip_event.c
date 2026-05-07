@@ -25,6 +25,7 @@
 #include "display.h"
 #include "ble.h"
 #include "wifi.h"
+#include "storage.h"
 
 LOG_MODULE_REGISTER(clip_event, CONFIG_CLIP_LOG_LEVEL);
 
@@ -426,6 +427,7 @@ static enum clip_event_result execute_transition(enum clip_event event,
         }
         display_post_event(UI_EVENT_REC_START);
         display_set_recording(true, c->config.mode == MODE_ENHANCED);
+        ble_notify_state_change("RECORDING", audio_get_session_id(), -1);
         return CLIP_EVENT_OK;
     }
 
@@ -442,6 +444,15 @@ static enum clip_event_result execute_transition(enum clip_event event,
         }
         display_post_event(UI_EVENT_REC_STOP);
         display_set_recording(false, false);
+        {
+            struct audio_stats stats;
+            int dur = -1;
+
+            if (audio_get_stats(&stats) == 0) {
+                dur = (int)(stats.recording_time_ms / 1000U);
+            }
+            ble_notify_state_change("IDLE", audio_get_session_id(), dur);
+        }
         return CLIP_EVENT_OK;
     }
 
@@ -458,6 +469,7 @@ static enum clip_event_result execute_transition(enum clip_event event,
         }
         haptic_play_pattern(HAPTIC_SHORT);
         display_post_event(UI_EVENT_REC_PAUSE);
+        ble_notify_state_change("PAUSED", audio_get_session_id(), -1);
         return CLIP_EVENT_OK;
     }
 
@@ -471,6 +483,7 @@ static enum clip_event_result execute_transition(enum clip_event event,
         haptic_play_pattern(HAPTIC_SHORT);
         display_post_event(UI_EVENT_REC_RESUME);
         display_set_recording(true, c->config.mode == MODE_ENHANCED);
+        ble_notify_state_change("RECORDING", audio_get_session_id(), -1);
         return CLIP_EVENT_OK;
     }
 
@@ -486,6 +499,13 @@ static enum clip_event_result execute_transition(enum clip_event event,
             return CLIP_EVENT_ERROR;
         }
         display_post_event(UI_EVENT_MARK);
+        {
+            int count = storage_count_bookmarks(audio_get_session_id());
+
+            if (count > 0) {
+                ble_notify_mark(audio_get_session_id(), count);
+            }
+        }
         return CLIP_EVENT_OK;
     }
 

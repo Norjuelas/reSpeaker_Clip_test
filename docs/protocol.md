@@ -1838,47 +1838,62 @@ touch /SD:/REC/20240203100000/.transferred
 
 The device sends unsolicited notifications via the Response characteristic for important events.
 
-#### 7.1.1 Recording Started
+#### 7.1.1 Recording State Change
+
+Sent when recording state changes (start, stop, pause, resume). Uses `"event":"state"` to distinguish from AT command responses.
 
 ```json
-{
-  "ok": true,
-  "event": "recording_started",
-  "session": "20240203100000"
-}
+{"event":"state","state":"RECORDING","session":"20240203100000"}
 ```
 
 **Trigger:** Recording starts (AT+START or button long press)
 
-#### 7.1.2 Recording Stopped
-
 ```json
-{
-  "ok": true,
-  "event": "recording_stopped",
-  "session": "20240203100000",
-  "duration": 600
-}
+{"event":"state","state":"IDLE","session":"20240203100000","duration":600}
 ```
 
-**Trigger:** Recording stops (AT+STOP or button long press)
-
-#### 7.1.3 Bookmark Added
+**Trigger:** Recording stops (AT+STOP or button long press). `duration` is in seconds.
 
 ```json
-{
-  "ok": true,
-  "event": "bookmark_added",
-  "timestamp": 1706918430,
-  "offset": 123,
-  "file": "0002.opus",
-  "note": "Important point"
-}
+{"event":"state","state":"PAUSED","session":"20240203100000"}
+```
+
+**Trigger:** Recording paused (AT+PAUSE)
+
+```json
+{"event":"state","state":"RECORDING","session":"20240203100000"}
+```
+
+**Trigger:** Recording resumed (AT+RESUME)
+
+**Fields:**
+- `event`: Always `"state"` for state change events
+- `state`: New state — `"RECORDING"`, `"IDLE"`, or `"PAUSED"`
+- `session`: Session ID
+- `duration`: Recording duration in seconds (only present on stop/IDLE)
+
+**Notes:**
+- Sent on the Response Send characteristic (same as AT responses)
+- Distinguish from AT responses by checking for the `"event"` field
+- Not sent if BLE is not connected or notifications are not enabled
+- Triggered by both AT commands and button events
+
+#### 7.1.2 Bookmark Mark Event
+
+Sent when a bookmark is added during recording.
+
+```json
+{"event":"mark","session":"20240203100000","mark_count":3}
 ```
 
 **Trigger:** Bookmark added (AT+MARK or button short press)
 
-#### 7.1.4 Battery Low Warning
+**Fields:**
+- `event`: Always `"mark"` for bookmark events
+- `session`: Session ID
+- `mark_count`: Total number of bookmarks in the session after this mark
+
+#### 7.1.3 Battery Low Warning
 
 ```json
 {
@@ -1890,7 +1905,7 @@ The device sends unsolicited notifications via the Response characteristic for i
 
 **Trigger:** Battery falls below 10%
 
-#### 7.1.5 Storage Low Warning
+#### 7.1.4 Storage Low Warning
 
 ```json
 {
@@ -1902,7 +1917,7 @@ The device sends unsolicited notifications via the Response characteristic for i
 
 **Trigger:** Free space < 100MB
 
-#### 7.1.6 Error Notification
+#### 7.1.5 Error Notification
 
 ```json
 {
@@ -2239,17 +2254,17 @@ Device: {"ok":true}
 ```
 App: AT+START
 Device: {"ok":true,"data":{"session":"20240203100000",...}}
-Device: {"ok":true,"event":"recording_started","session":"20240203100000"}
+Device: {"event":"state","state":"RECORDING","session":"20240203100000"}
 
 [Recording in progress, Audio Vis data streaming on char 0x6E400005...]
 
 App: AT+MARK=Important point
 Device: {"ok":true,"data":{"timestamp":1706918430,...}}
-Device: {"ok":true,"event":"bookmark_added",...}
+Device: {"event":"mark","session":"20240203100000","mark_count":1}
 
 App: AT+STOP
 Device: {"ok":true,"data":{"duration":600,...}}
-Device: {"ok":true,"event":"recording_stopped",...}
+Device: {"event":"state","state":"IDLE","session":"20240203100000","duration":600}
 
 App: AT+LIST
 Device: {"ok":true,"data":{"total":1,"sessions":[...]}}

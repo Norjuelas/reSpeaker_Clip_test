@@ -733,6 +733,47 @@ int ble_send(const uint8_t *data, uint16_t len)
     return 0;
 }
 
+int ble_notify_state_change(const char *state, const char *session_id, int duration)
+{
+    char buf[128];
+    int len;
+
+    if (!ble_ctx.conn || !ble_ctx.notify_enabled) {
+        return -ENOTCONN;
+    }
+
+    if (duration >= 0) {
+        len = snprintf(buf, sizeof(buf),
+                       "{\"event\":\"state\",\"state\":\"%s\","
+                       "\"session\":\"%s\",\"duration\":%d}",
+                       state, session_id, duration);
+    } else {
+        len = snprintf(buf, sizeof(buf),
+                       "{\"event\":\"state\",\"state\":\"%s\","
+                       "\"session\":\"%s\"}",
+                       state, session_id);
+    }
+
+    return ble_send(buf, len);
+}
+
+int ble_notify_mark(const char *session_id, int mark_count)
+{
+    char buf[96];
+    int len;
+
+    if (!ble_ctx.conn || !ble_ctx.notify_enabled) {
+        return -ENOTCONN;
+    }
+
+    len = snprintf(buf, sizeof(buf),
+                   "{\"event\":\"mark\",\"session\":\"%s\","
+                   "\"mark_count\":%d}",
+                   session_id, mark_count);
+
+    return ble_send(buf, len);
+}
+
 int ble_send_file_data(const uint8_t *data, uint16_t len)
 {
     int err;
