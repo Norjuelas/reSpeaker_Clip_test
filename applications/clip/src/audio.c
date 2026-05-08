@@ -1146,6 +1146,16 @@ static int16_t *process_pcm_frame(int16_t *stereo_input, int frame_size)
         }
 
 #ifdef CONFIG_SPEEXDSP
+        /* First-order high-pass filter (fc≈100Hz at 16kHz) */
+        {
+            static int32_t hp_x1 = 0;
+            for (int i = 0; i < frame_size; i++) {
+                int32_t x = processed_buffer[i];
+                processed_buffer[i] = (int16_t)(x - hp_x1);
+                hp_x1 += (x - hp_x1) * 39 >> 10;
+            }
+        }
+
         if (speex_enabled && speex_pp) {
             speex_preprocess_run(speex_pp, processed_buffer);
         }
@@ -1172,19 +1182,18 @@ static int16_t *process_pcm_frame(int16_t *stereo_input, int frame_size)
                 if (s > peak) peak = s;
             }
 
-            /* Ballistics: fast attack (tau≈10ms), slow release (tau≈300ms) */
+            /* Ballistics: slower attack to reduce pop (tau≈30ms), slow release (tau≈300ms) */
             if (peak > agc_envelope) {
-                agc_envelope += (peak - agc_envelope) * 7 >> 3;
+                agc_envelope += (peak - agc_envelope) * 3 >> 2;
             } else {
                 agc_envelope = agc_envelope - (agc_envelope >> 4);
                 if (agc_envelope < peak) agc_envelope = peak;
             }
 
             /* Step 2: Gain computer.
-             * Target 12000 ≈ -8.6dBFS: moderate compression for near-field
-             * suppression. Far-field gets boosted toward this level by max gain.
+             * Target 6000 ≈ -14.7dBFS: lower target reduces pop from sudden gain jumps.
              */
-            int32_t target_level = 8000;
+            int32_t target_level = 6000;
             int32_t noise_gate = 200;
 
             int32_t desired_q8;
@@ -1196,12 +1205,12 @@ static int16_t *process_pcm_frame(int16_t *stereo_input, int frame_size)
                 desired_q8 = 256;
             }
 
-            /* Step 3: Gain smoother */
+            /* Step 3: Gain smoother — slower transitions to reduce pop */
             int32_t diff = desired_q8 - agc_gain_q8;
             if (diff < 0) {
-                agc_gain_q8 += diff >> 1;   /* Attack: ~2 frames, fast near-field suppression */
+                agc_gain_q8 += diff >> 2;   /* Attack: ~4 frames */
             } else {
-                agc_gain_q8 += diff >> 7;   /* Release: ~128 frames, slow decay sustains far-field boost */
+                agc_gain_q8 += diff >> 8;   /* Release: ~256 frames */
             }
 
             /* Step 4: Apply gain (no separate makeup gain).

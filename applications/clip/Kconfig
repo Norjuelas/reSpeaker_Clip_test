@@ -41,11 +41,11 @@ config CLIP_ENHANCED_COMPLEXITY
 
 config CLIP_DEFAULT_NOISE
 	int "Default noise suppression level (dB)"
-	default 15
+	default 10
 
 config CLIP_DEFAULT_DEREVERB
 	bool "Default dereverberation enabled"
-	default n
+	default y
 
 config CLIP_AGC_MAX_GAIN
 	int "AGC maximum gain (dB)"
