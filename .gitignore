@@ -54,6 +54,7 @@ applications/clip/tests/tests/test_edge_cases.py
 
 # Distribution folders
 ClipTest_FW/
+output/
 
 # Reference docs (not for commit)
 ref/

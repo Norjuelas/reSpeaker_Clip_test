@@ -27,11 +27,14 @@ export ZEPHYR_EXTRA_MODULES=$(pwd)
 ## Building & Flashing
 
 ```sh
-# Build (incremental)
+# Build (incremental, debug)
 west build --build-dir build-clip --board clip/nrf5340/cpuapp applications/clip
 
-# Build (clean)
+# Build (clean, debug)
 west build --build-dir build-clip --pristine --board clip/nrf5340/cpuapp applications/clip
+
+# Build production (disables debug UART/console to save power)
+west build --build-dir build-clip-release --pristine --board clip/nrf5340/cpuapp applications/clip -- -DSNIPPET_ROOT=applications/clip -DSNIPPET=production
 
 # Flash and reset (required: west flash --reset does NOT work on this board)
 west flash --build-dir build-clip && nrfutil device reset
@@ -41,6 +44,33 @@ minicom -D /dev/ttyACM0 -b 115200
 ```
 
 **Board identifier**: `clip/nrf5340/cpuapp` (NOT `respeaker/...`)
+
+### Build Snippets
+
+Snippets are in `applications/clip/snippets/`. Each snippet has a conf file, optional overlay, and `snippet.yml`.
+
+| Snippet | Purpose | Changes |
+|---------|---------|---------|
+| `production` | Production firmware | Disables debug UART and console |
+
+Build with snippet: `west build ... -- -DSNIPPET_ROOT=applications/clip -DSNIPPET=<name>`
+
+### Output Firmware
+
+```sh
+VERSION=$(grep APP_VERSION_STRING build-clip/clip/zephyr/include/generated/zephyr/app_version.h | cut -d'"' -f2)
+mkdir -p output/$VERSION/debug output/$VERSION/release
+
+# Debug (full logging, debug UART)
+cp build-clip-debug/merged.hex output/$VERSION/debug/
+cp build-clip-debug/merged_CPUNET.hex output/$VERSION/debug/
+cp build-clip-debug/dfu_application.zip output/$VERSION/debug/clip-$VERSION-debug-ota.zip
+
+# Release/Production (no debug UART)
+cp build-clip-release/merged.hex output/$VERSION/release/
+cp build-clip-release/merged_CPUNET.hex output/$VERSION/release/
+cp build-clip-release/dfu_application.zip output/$VERSION/release/clip-$VERSION-ota.zip
+```
 
 ## Testing
 
@@ -229,19 +259,6 @@ west build --build-dir build-clip --pristine --board clip/nrf5340/cpuapp applica
 ### Step 6: Update patches/mcuboot/README.md
 
 Document what each patch does, which files it touches, and any constraints.
-
-### Output firmware files
-
-```sh
-# Get version from app
-VERSION=$(grep APP_VERSION_STRING build-clip/clip/zephyr/include/generated/zephyr/app_version.h | cut -d'"' -f2)
-echo "Version: $VERSION"
-
-mkdir -p output/$VERSION
-cp build-clip/merged.hex output/$VERSION/                  # mcuboot + app (full flash)
-cp build-clip/merged_CPUNET.hex output/$VERSION/           # network core
-cp build-clip/dfu_application.zip output/$VERSION/clip-$VERSION-ota.zip  # OTA update package
-```
 
 ## Board & Hardware
 
