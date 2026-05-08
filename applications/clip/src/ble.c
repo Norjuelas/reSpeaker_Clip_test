@@ -754,6 +754,7 @@ int ble_notify_state_change(const char *state, const char *session_id, int durat
                        state, session_id);
     }
 
+    LOG_INF("Event: state=%s session=%s duration=%d", state, session_id, duration);
     return ble_send(buf, len);
 }
 
@@ -771,6 +772,7 @@ int ble_notify_mark(const char *session_id, int mark_count)
                    "\"mark_count\":%d}",
                    session_id, mark_count);
 
+    LOG_INF("Event: mark session=%s count=%d", session_id, mark_count);
     return ble_send(buf, len);
 }
 
