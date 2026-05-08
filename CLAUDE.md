@@ -27,14 +27,11 @@ export ZEPHYR_EXTRA_MODULES=$(pwd)
 ## Building & Flashing
 
 ```sh
-# Build (incremental, debug)
+# Build (incremental)
 west build --build-dir build-clip --board clip/nrf5340/cpuapp applications/clip
 
-# Build (clean, debug)
+# Build (clean)
 west build --build-dir build-clip --pristine --board clip/nrf5340/cpuapp applications/clip
-
-# Build production (disables debug UART/console to save power)
-west build --build-dir build-clip-release --pristine --board clip/nrf5340/cpuapp applications/clip -- -DSNIPPET_ROOT=applications/clip -DSNIPPET=production
 
 # Flash and reset (required: west flash --reset does NOT work on this board)
 west flash --build-dir build-clip && nrfutil device reset
@@ -45,13 +42,23 @@ minicom -D /dev/ttyACM0 -b 115200
 
 **Board identifier**: `clip/nrf5340/cpuapp` (NOT `respeaker/...`)
 
+### Power Management
+
+`CONFIG_PM_DEVICE_RUNTIME=y` enables automatic peripheral power management. UART, I2C, SPI drivers automatically suspend when idle and resume on access. No separate production snippet needed — the debug console is retained without power penalty since UART auto-suspends between log outputs.
+
+`CONFIG_NRF70_QSPI_LOW_POWER=y` puts QSPI in low power when WiFi is not in use.
+
+BLE slow advertising (1s interval) adds ~0.1mA averaged to idle current.
+
 ### Build Snippets
 
 Snippets are in `applications/clip/snippets/`. Each snippet has a conf file, optional overlay, and `snippet.yml`.
 
 | Snippet | Purpose | Changes |
 |---------|---------|---------|
-| `production` | Production firmware | Disables debug UART and console |
+| `production` | Production firmware (legacy) | Disables debug UART and console |
+
+Note: With `PM_DEVICE_RUNTIME`, the production snippet is no longer necessary for power savings.
 
 Build with snippet: `west build ... -- -DSNIPPET_ROOT=applications/clip -DSNIPPET=<name>`
 
@@ -59,17 +66,11 @@ Build with snippet: `west build ... -- -DSNIPPET_ROOT=applications/clip -DSNIPPE
 
 ```sh
 VERSION=$(grep APP_VERSION_STRING build-clip/clip/zephyr/include/generated/zephyr/app_version.h | cut -d'"' -f2)
-mkdir -p output/$VERSION/debug output/$VERSION/release
+mkdir -p output/$VERSION
 
-# Debug (full logging, debug UART)
-cp build-clip-debug/merged.hex output/$VERSION/debug/
-cp build-clip-debug/merged_CPUNET.hex output/$VERSION/debug/
-cp build-clip-debug/dfu_application.zip output/$VERSION/debug/clip-$VERSION-debug-ota.zip
-
-# Release/Production (no debug UART)
-cp build-clip-release/merged.hex output/$VERSION/release/
-cp build-clip-release/merged_CPUNET.hex output/$VERSION/release/
-cp build-clip-release/dfu_application.zip output/$VERSION/release/clip-$VERSION-ota.zip
+cp build-clip/merged.hex output/$VERSION/
+cp build-clip/merged_CPUNET.hex output/$VERSION/
+cp build-clip/dfu_application.zip output/$VERSION/clip-$VERSION-ota.zip
 ```
 
 ## Testing
@@ -273,6 +274,14 @@ Document what each patch does, which files it touches, and any constraints.
 - **GPIO1.15**: User button (pull-up, active-low)
 
 ### Power Management
+
+`CONFIG_PM_DEVICE_RUNTIME=y` enables automatic peripheral power management. UART, I2C, SPI drivers automatically suspend when idle and resume on access. No separate production snippet needed — the debug console is retained without power penalty since UART auto-suspends between log outputs.
+
+`CONFIG_NRF70_QSPI_LOW_POWER=y` puts QSPI in low power when WiFi is not in use.
+
+BLE slow advertising (1s interval) adds ~0.1mA averaged to idle current.
+
+### PMIC & Regulators
 
 PMIC regulators (I2C1 @ 0x6b): BUCK1 (motor), BUCK2 (main 3.3V), LDO1 (mic 1.8V), LDO2 (SD 3.3V).
 GPIO-controlled: mic_vdd (gpio1.14), oled_vdd (gpio1.8), rfsw_vdd (gpio0.29).

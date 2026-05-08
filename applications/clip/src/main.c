@@ -333,8 +333,11 @@ void clip_main_loop(void)
     int stats_counter = 0;
 
     while (true) {
-        /* Wait for events (timeout 1s for recording time update) */
-        clip_event_wait(K_MSEC(1000));
+        /* Use K_FOREVER when not recording to allow deep idle;
+         * use 1s timeout during recording for time tracking */
+        k_timeout_t wait = (clip_event_get_state() == CLIP_STATE_RECORDING)
+                           ? K_MSEC(1000) : K_FOREVER;
+        clip_event_wait(wait);
 
         /* Process all pending events */
         clip_event_process();
