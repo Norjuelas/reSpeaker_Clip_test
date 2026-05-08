@@ -120,16 +120,48 @@ fs ls /SD:           # 列出文件
 
 ### 4. 麦克风测试
 
-**目的**: 测试 PDM 麦克风音频捕获
+**目的**: 测试 PDM 麦克风音频捕获和 WAV 录音
 
 **命令**:
 ```bash
-mic capture [time_sec]  # 捕获音频 (默认 5 秒)
+mic capture [time_sec]  # 捕获音频并打印采样统计
+mic record [time_sec]   # 录制 WAV 文件到 SD 卡 (默认 3 秒)
 ```
 
 **预期结果**:
 - 音频捕获启动和停止
-- 数据写入 SD 卡
+- 每个数据块打印采样统计 (avg/min/max)
+- WAV 文件保存到 SD 卡 (RECXXXX.WAV)
+
+**典型工作流**:
+1. 插入 SD 卡并挂载: `sd mount`
+2. 录制音频: `mic record 5`
+3. 启用 USB MSC 访问文件: `usb msc on`
+4. 在电脑上从 USB 驱动器复制 WAV 文件
+5. 禁用 USB MSC: `usb msc off`
+
+### 10. USB 大容量存储测试
+
+**目的**: 将 SD 卡作为 USB 驱动器暴露给 PC，直接访问文件
+
+**命令**:
+```bash
+usb msc on       # 卸载 SD，启用 USB MSC (SD 显示为 USB 驱动器)
+usb msc off      # 禁用 USB MSC，重新挂载 SD 卡
+usb status       # 显示 USB 和 SD 卡状态
+```
+
+**使用方法**:
+1. 录制音频到 SD: `mic record 5`
+2. 启用 USB MSC: `usb msc on`
+3. 将 USB 线缆连接到 PC - SD 卡显示为 USB 大容量存储
+4. 从驱动器复制文件
+5. 在 PC 上安全弹出驱动器，然后: `usb msc off`
+
+**注意事项**:
+- USB MSC 和文件系统不能同时访问 SD 卡
+- 再次录音前必须先禁用 MSC
+- UART shell (921600 波特率) 使用独立 UART，不是 USB
 
 ### 5. 按钮测试
 
@@ -298,8 +330,8 @@ imu selftest         # 运行自检
 ## 内存使用
 
 ```
-FLASH:      802 KB (76.5% of 1 MB)
-RAM:        364 KB (79.4% of 448 KB)
+FLASH:      979 KB (93.4% of 1 MB)
+RAM:        374 KB (81.5% of 448 KB)
 ```
 
 ## 测试覆盖矩阵
@@ -309,12 +341,13 @@ RAM:        364 KB (79.4% of 448 KB)
 | BLE | ✓ | ✓ | ✓ | - | - |
 | WiFi | ✓ | ✓ | ✓ | - | - |
 | SD 卡 | ✓ | - | - | ✓ | ✓ |
-| 麦克风 | ✓ | - | ✓ | - | - |
+| 麦克风 | ✓ | - | ✓ | ✓ | ✓ |
 | 按钮 | ✓ | - | - | ✓ | - |
 | OLED | ✓ | ✓ | ✓ | - | - |
 | PMIC | - | ✓ | ✓ | ✓ | ✓ |
 | 马达 | ✓ | - | - | - | - |
 | IMU | ✓ | ✓ | ✓ | ✓ | ✓ |
+| USB MSC | - | ✓ | ✓ | - | ✓ |
 
 ## 内置 Shell 命令
 
@@ -392,6 +425,7 @@ i2c write i2c1 0x6b <reg> <data> # 写入 NPM1300 寄存器
 
 ## 版本历史
 
+- 2026-05-08: 添加 USB MSC 模块 (SD 卡作为 USB 驱动器)，添加 WAV 录音功能
 - 2026-04-22: 更新文档以准确反映实现的特性，移除不存在的 BLE 和 WiFi 扫描命令，更正 SD 卡命令
 - 2025-03-09: 添加软件 I2C 的 IMU 测试模块
 - 2025-03-09: 添加振动马达测试命令

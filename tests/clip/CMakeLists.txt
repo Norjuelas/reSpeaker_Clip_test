@@ -20,6 +20,7 @@ target_sources(app PRIVATE
 	src/pmic.c
 	src/motor.c
 	src/imu.c
+	src/usb.c
 )
 
 

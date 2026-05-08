@@ -8,6 +8,8 @@
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/sys/printk.h>
+#include <zephyr/sys/reboot.h>
+#include <zephyr/shell/shell.h>
 #include "wifi.h"
 #include "ble.h"
 #include "button.h"
@@ -17,8 +19,22 @@
 #include "pmic.h"
 #include "motor.h"
 #include "imu.h"
+#include "usb.h"
 
-LOG_MODULE_REGISTER(Lesson3_Exercise2, LOG_LEVEL_INF);
+LOG_MODULE_REGISTER(main, LOG_LEVEL_INF);
+
+static int cmd_reboot(const struct shell *sh, size_t argc, char **argv)
+{
+	ARG_UNUSED(argc);
+	ARG_UNUSED(argv);
+
+	shell_print(sh, "Rebooting...");
+	k_sleep(K_MSEC(100));
+	sys_reboot(SYS_REBOOT_WARM);
+	return 0;
+}
+
+SHELL_CMD_REGISTER(reboot, NULL, "Reboot device", cmd_reboot);
 
 int main(void)
 {
@@ -71,7 +87,12 @@ int main(void)
 	ret = imu_init();
 	if (ret != 0) {
 		LOG_WRN("IMU initialization failed: %d (optional)", ret);
-		/* Continue anyway, IMU is optional for testing */
+	}
+
+	/* Initialize USB MSC */
+	ret = usb_msc_init();
+	if (ret != 0) {
+		LOG_WRN("USB MSC initialization failed: %d", ret);
 	}
 
 	/* Initialize BLE - starts advertising automatically */
@@ -98,6 +119,7 @@ int main(void)
 	printk("PMIC: Use 'pmic status' to check battery, 'pmic ship' to power off\n");
 	printk("Motor: Use 'motor pulse' or 'motor pattern' to test vibration\n");
 	printk("IMU: Use 'imu init' to initialize, 'imu read' for sensor data\n");
+	printk("USB: Use 'usb msc on' to expose SD card, 'mic record' to record WAV\n");
 
 	return 0;
 }

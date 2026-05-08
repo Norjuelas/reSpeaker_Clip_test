@@ -9,6 +9,7 @@
 #include <zephyr/drivers/display.h>
 #include <zephyr/shell/shell.h>
 #include <zephyr/logging/log.h>
+#include <stdlib.h>
 #include "oled.h"
 
 LOG_MODULE_REGISTER(oled, LOG_LEVEL_INF);
@@ -320,7 +321,7 @@ static int cmd_oled_brightness(const struct shell *sh, size_t argc, char **argv)
 		return -EINVAL;
 	}
 
-	brightness = strtol(argv[1], NULL, 10);
+	brightness = atoi(argv[1]);
 	if (brightness < 0 || brightness > 255) {
 		shell_print(sh, "Error: brightness must be between 0 and 255");
 		return -EINVAL;

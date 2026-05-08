@@ -120,16 +120,48 @@ fs ls /SD:           # List files
 
 ### 4. Microphone Test
 
-**Purpose**: Test PDM microphone audio capture
+**Purpose**: Test PDM microphone audio capture and WAV recording
 
 **Commands**:
 ```bash
-mic capture [time_sec]  # Capture audio (default 5 seconds)
+mic capture [time_sec]  # Capture audio and print sample stats
+mic record [time_sec]   # Record WAV file to SD card (default 3 sec)
 ```
 
 **Expected Results**:
 - Audio capture starts and stops
-- Data is written to SD card
+- Sample statistics (avg/min/max) printed for each block
+- WAV file saved to SD card as RECXXXX.WAV
+
+**Typical Workflow**:
+1. Insert SD card and mount: `sd mount`
+2. Record audio: `mic record 5`
+3. Enable USB MSC to access files: `usb msc on`
+4. Copy WAV files from USB drive on PC
+5. Disable USB MSC: `usb msc off`
+
+### 10. USB Mass Storage Test
+
+**Purpose**: Expose SD card as USB drive for direct file access from PC
+
+**Commands**:
+```bash
+usb msc on       # Unmount SD, enable USB MSC (SD appears as USB drive)
+usb msc off      # Disable USB MSC, remount SD card
+usb status       # Show USB and SD card status
+```
+
+**Usage**:
+1. Record audio to SD: `mic record 5`
+2. Enable USB MSC: `usb msc on`
+3. Connect USB cable to PC - SD card appears as USB mass storage
+4. Copy files from the drive
+5. Safely eject drive on PC, then: `usb msc off`
+
+**Notes**:
+- USB MSC and filesystem cannot access SD card simultaneously
+- Always disable MSC before recording again
+- UART shell (921600 baud) uses a separate UART, not USB
 
 ### 5. Button Test
 
@@ -298,8 +330,8 @@ imu selftest         # Run self-test
 ## Memory Usage
 
 ```
-FLASH:      802 KB (76.5% of 1 MB)
-RAM:        364 KB (79.4% of 448 KB)
+FLASH:      979 KB (93.4% of 1 MB)
+RAM:        374 KB (81.5% of 448 KB)
 ```
 
 ## Test Coverage Matrix
@@ -309,12 +341,13 @@ RAM:        364 KB (79.4% of 448 KB)
 | BLE | ✓ | ✓ | ✓ | - | - |
 | WiFi | ✓ | ✓ | ✓ | - | - |
 | SD Card | ✓ | - | - | ✓ | ✓ |
-| Mic | ✓ | - | ✓ | - | - |
+| Mic | ✓ | - | ✓ | ✓ | ✓ |
 | Button | ✓ | - | - | ✓ | - |
 | OLED | ✓ | ✓ | ✓ | - | - |
 | PMIC | - | ✓ | ✓ | ✓ | ✓ |
 | Motor | ✓ | - | - | - | - |
 | IMU | ✓ | ✓ | ✓ | ✓ | ✓ |
+| USB MSC | - | ✓ | ✓ | - | ✓ |
 
 ## Built-in Shell Commands
 
@@ -392,6 +425,7 @@ Use SHELL_CMD_* macros for shell command registration:
 
 ## Version History
 
+- 2026-05-08: Added USB MSC module (expose SD card as USB drive), added WAV recording
 - 2026-04-22: Updated documentation to accurately reflect implemented features, removed non-existent BLE and WiFi scan commands, corrected SD card commands
 - 2025-03-09: Added IMU test module with software I2C
 - 2025-03-09: Added vibration motor test commands

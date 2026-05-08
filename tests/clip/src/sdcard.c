@@ -27,6 +27,56 @@ static struct fs_mount_t mp = {
 static const char *disk_mount_pt = "/SD:";
 static bool sd_mounted = false;
 
+bool sdcard_is_mounted(void)
+{
+	return sd_mounted;
+}
+
+int sdcard_unmount(void)
+{
+	int rc;
+
+	if (!sd_mounted) {
+		return 0;
+	}
+
+	rc = fs_unmount(&mp);
+	if (rc != 0) {
+		LOG_ERR("Unmount failed: %d", rc);
+		return rc;
+	}
+
+	sd_mounted = false;
+	LOG_INF("SD card unmounted");
+	return 0;
+}
+
+int sdcard_mount(void)
+{
+	int rc;
+
+	if (sd_mounted) {
+		return 0;
+	}
+
+	rc = disk_access_init("SD");
+	if (rc != 0) {
+		LOG_ERR("SD card init failed: %d", rc);
+		return rc;
+	}
+
+	mp.mnt_point = disk_mount_pt;
+	rc = fs_mount(&mp);
+	if (rc != 0) {
+		LOG_ERR("Mount failed: %d", rc);
+		return rc;
+	}
+
+	sd_mounted = true;
+	LOG_INF("SD card mounted at %s", mp.mnt_point);
+	return 0;
+}
+
 /* Format SD card */
 static int cmd_sd_format(const struct shell *sh, size_t argc, char **argv)
 {
@@ -202,54 +252,38 @@ static int cmd_sd_status(const struct shell *sh, size_t argc, char **argv)
 /* Mount SD card */
 static int cmd_sd_mount(const struct shell *sh, size_t argc, char **argv)
 {
-	int rc;
-
 	if (sd_mounted) {
 		shell_print(sh, "SD card already mounted at %s", disk_mount_pt);
 		return 0;
 	}
 
-	shell_print(sh, "Initializing SD card...");
-	rc = disk_access_init("SD");
-	if (rc != 0) {
-		shell_error(sh, "SD card initialization failed: %d", rc);
-		return rc;
-	}
-
 	shell_print(sh, "Mounting SD card...");
-	mp.mnt_point = disk_mount_pt;
-	rc = fs_mount(&mp);
+	int rc = sdcard_mount();
 	if (rc != 0) {
 		shell_error(sh, "Mount failed: %d (not formatted?)", rc);
 		shell_print(sh, "Use 'sd format' to format the SD card");
-		return rc;
 	}
 
-	sd_mounted = true;
-	shell_print(sh, "SD card mounted at %s", disk_mount_pt);
-	return 0;
+	return rc;
 }
 
 /* Unmount SD card */
 static int cmd_sd_umount(const struct shell *sh, size_t argc, char **argv)
 {
-	int rc;
-
 	if (!sd_mounted) {
 		shell_print(sh, "SD card not mounted");
 		return 0;
 	}
 
 	shell_print(sh, "Unmounting SD card...");
-	rc = fs_unmount(&mp);
+	int rc = sdcard_unmount();
 	if (rc != 0) {
 		shell_error(sh, "Unmount failed: %d", rc);
-		return rc;
+	} else {
+		shell_print(sh, "SD card unmounted");
 	}
 
-	sd_mounted = false;
-	shell_print(sh, "SD card unmounted");
-	return 0;
+	return rc;
 }
 
 SHELL_STATIC_SUBCMD_SET_CREATE(sd_cmds,
@@ -265,31 +299,15 @@ SHELL_CMD_REGISTER(sd, &sd_cmds, "SD card commands", NULL);
 
 int sdcard_init(void)
 {
-	int rc;
+	LOG_INF("Initializing SD card...");
 
-	LOG_INF("Initializing SD card (built-in)...");
-
-	/* Initialize SD card disk */
-	rc = disk_access_init("SD");
-	if (rc != 0) {
-		LOG_ERR("SD card initialization failed: %d", rc);
-		LOG_ERR("Use 'sd format' to format the SD card");
-		return rc;
-	}
-
-	/* Try to mount the SD card */
-	mp.mnt_point = disk_mount_pt;
-	rc = fs_mount(&mp);
+	int rc = sdcard_mount();
 	if (rc != 0) {
 		LOG_WRN("SD card mount failed: %d (not formatted?)", rc);
 		LOG_INF("Use 'sd format' to format the SD card as FAT32");
-		/* Don't fail, allow system to boot */
 		return 0;
 	}
 
-	sd_mounted = true;
-	LOG_INF("SD card mounted at %s", mp.mnt_point);
 	LOG_INF("Commands: sd status, sd speed [size_kb], sd format");
-
 	return 0;
 }

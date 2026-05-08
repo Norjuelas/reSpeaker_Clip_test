@@ -18,4 +18,8 @@
  */
 int sdcard_init(void);
 
+bool sdcard_is_mounted(void);
+int sdcard_mount(void);
+int sdcard_unmount(void);
+
 #endif /* SDCARD_H_ */

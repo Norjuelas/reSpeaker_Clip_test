@@ -4,7 +4,6 @@
  * SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
  *
  * WiFi AP mode test module.
- * Reference: samples/wifi_ble_coex
  */
 
 #include <zephyr/kernel.h>
@@ -30,9 +29,6 @@
 
 LOG_MODULE_REGISTER(wifi, LOG_LEVEL_INF);
 
-/* =========================================================================
- * WiFi AP Configuration
- * ========================================================================= */
 #define WIFI_AP_SSID_PREFIX "ClipTest_"
 #define WIFI_AP_PASSWORD "12345678"
 #define WIFI_AP_CHANNEL 36
@@ -41,6 +37,8 @@ LOG_MODULE_REGISTER(wifi, LOG_LEVEL_INF);
 #define IPERF_PORT 5001
 #define IPERF_PACKET_SIZE 1400
 #define IPERF_DURATION_SEC 10
+
+#define WIFI_AP_ENABLE_RETRIES 2
 
 static bool ap_started;
 static char ap_ssid[32] = "ClipTest_XXXX";
@@ -52,9 +50,6 @@ static K_SEM_DEFINE(scan_done_sem, 0, 1);
 static struct wifi_scan_result scan_results[10];
 static int scan_result_count;
 
-/* =========================================================================
- * AP SSID Generation (from chip ID)
- * ========================================================================= */
 static void generate_ap_ssid(void)
 {
 	uint8_t chip_id[16];
@@ -72,9 +67,6 @@ static void generate_ap_ssid(void)
 	}
 }
 
-/* =========================================================================
- * WiFi Coexistence
- * ========================================================================= */
 #ifdef CONFIG_NRF70_SR_COEX
 static void wifi_coex_configure(void)
 {
@@ -94,9 +86,6 @@ static void wifi_coex_configure(void)
 }
 #endif
 
-/* =========================================================================
- * WiFi Event Handler
- * ========================================================================= */
 static void wifi_mgmt_event_handler(struct net_mgmt_event_callback *cb,
 				    uint64_t mgmt_event, struct net_if *iface)
 {
@@ -149,42 +138,27 @@ static void scan_result_callback(struct net_mgmt_event_callback *cb,
 	}
 }
 
-/* =========================================================================
- * AP Start / Stop
- * ========================================================================= */
-static int do_wifi_ap_start(void)
+static int wifi_set_reg_domain(struct net_if *iface)
 {
-	struct net_if *iface = net_if_get_default();
-	struct wifi_connect_req_params req;
 	struct wifi_reg_domain regd = {0};
 	int ret;
 
-	if (!iface) {
-		return -ENODEV;
-	}
-	if (ap_started) {
-		printk("AP already running: %s\n", ap_ssid);
-		return 0;
-	}
-
-	/* Bring up interface */
-	ret = net_if_up(iface);
-	if (ret) {
-		printk("[WiFi] net_if_up failed: %d\n", ret);
-		return ret;
-	}
-
-	k_sleep(K_SECONDS(2));
-
-	/* Set regulatory domain */
 	regd.oper = WIFI_MGMT_SET;
 	strncpy(regd.country_code, WIFI_AP_REG_DOMAIN, WIFI_COUNTRY_CODE_LEN + 1);
+
 	ret = net_mgmt(NET_REQUEST_WIFI_REG_DOMAIN, iface, &regd, sizeof(regd));
 	if (ret) {
 		LOG_WRN("Reg domain failed: %d", ret);
 	}
 
-	/* Configure AP parameters */
+	return ret;
+}
+
+static int wifi_enable_ap(struct net_if *iface)
+{
+	struct wifi_connect_req_params req;
+	int ret;
+
 	memset(&req, 0, sizeof(req));
 	req.ssid = (const uint8_t *)ap_ssid;
 	req.ssid_length = strlen(ap_ssid);
@@ -195,25 +169,59 @@ static int do_wifi_ap_start(void)
 	req.mfp = WIFI_MFP_OPTIONAL;
 	req.band = WIFI_FREQ_BAND_5_GHZ;
 
-	k_sem_reset(&ap_enabled_sem);
-	ret = net_mgmt(NET_REQUEST_WIFI_AP_ENABLE, iface, &req, sizeof(req));
+	for (int attempt = 0; attempt <= WIFI_AP_ENABLE_RETRIES; attempt++) {
+		k_sem_reset(&ap_enabled_sem);
+
+		ret = net_mgmt(NET_REQUEST_WIFI_AP_ENABLE, iface, &req, sizeof(req));
+		if (ret) {
+			LOG_ERR("AP enable request failed: %d (attempt %d)", ret, attempt);
+			continue;
+		}
+
+		ret = k_sem_take(&ap_enabled_sem, K_SECONDS(5));
+		if (ret) {
+			LOG_WRN("AP enable timeout (attempt %d)", attempt);
+			continue;
+		}
+
+		if (!ap_started) {
+			LOG_ERR("AP enable rejected (attempt %d)", attempt);
+			continue;
+		}
+
+		return 0;
+	}
+
+	return -EIO;
+}
+
+static int do_wifi_ap_start(void)
+{
+	struct net_if *iface;
+	int ret;
+
+	if (ap_started) {
+		printk("AP already running: %s\n", ap_ssid);
+		return 0;
+	}
+
+	iface = net_if_get_first_wifi();
+	if (!iface) {
+		printk("[WiFi] No WiFi interface\n");
+		return -ENODEV;
+	}
+
+	/* Set regulatory domain */
+	wifi_set_reg_domain(iface);
+
+	/* Enable AP mode with retries */
+	ret = wifi_enable_ap(iface);
 	if (ret) {
-		LOG_ERR("AP enable request failed: %d", ret);
+		ap_started = false;
 		return ret;
 	}
 
-	/* Wait for AP_ENABLE_RESULT event */
-	ret = k_sem_take(&ap_enabled_sem, K_SECONDS(5));
-	if (ret) {
-		printk("[WiFi] Timeout waiting for AP enable result\n");
-		return -ETIMEDOUT;
-	}
-	if (!ap_started) {
-		printk("[WiFi] AP enable failed\n");
-		return -EIO;
-	}
-
-	/* Manually configure static IP (matching main application) */
+	/* Configure static IP */
 	{
 		struct in_addr addr, netmask, gw;
 		struct net_if_addr *ifaddr;
@@ -229,7 +237,6 @@ static int do_wifi_ap_start(void)
 		net_if_ipv4_set_netmask_by_addr(iface, &addr, &netmask);
 		net_if_ipv4_set_gw(iface, &gw);
 
-		/* Start DHCP server (pool starts at AP IP + 1) */
 		pool_start.s_addr = htonl(ntohl(addr.s_addr) + 1);
 		ret = net_dhcpv4_server_start(iface, &pool_start);
 		if (ret && ret != -EALREADY) {
@@ -251,7 +258,7 @@ static int do_wifi_ap_start(void)
 
 static int do_wifi_ap_stop(void)
 {
-	struct net_if *iface = net_if_get_default();
+	struct net_if *iface = net_if_get_first_wifi();
 
 	if (!iface || !ap_started) {
 		printk("AP not running\n");
@@ -261,19 +268,14 @@ static int do_wifi_ap_stop(void)
 	net_dhcpv4_server_stop(iface);
 	net_mgmt(NET_REQUEST_WIFI_AP_DISABLE, iface, NULL, 0);
 	ap_started = false;
-	net_if_down(iface);
 	printk("[WiFi] AP stopped\n");
 	return 0;
 }
 
-/* =========================================================================
- * Shell Commands
- * ========================================================================= */
 static int cmd_wifi_on(const struct shell *sh, size_t argc, char **argv)
 {
 	ARG_UNUSED(argc);
 	ARG_UNUSED(argv);
-
 	return do_wifi_ap_start();
 }
 
@@ -281,19 +283,11 @@ static int cmd_wifi_off(const struct shell *sh, size_t argc, char **argv)
 {
 	ARG_UNUSED(argc);
 	ARG_UNUSED(argv);
-
 	return do_wifi_ap_stop();
 }
 
 static int cmd_wifi_status(const struct shell *sh, size_t argc, char **argv)
 {
-	struct net_if *iface = net_if_get_default();
-	struct wifi_iface_status status;
-	int ret;
-
-	ARG_UNUSED(argc);
-	ARG_UNUSED(argv);
-
 	shell_print(sh, "WiFi AP Status:");
 
 	if (ap_started) {
@@ -306,20 +300,19 @@ static int cmd_wifi_status(const struct shell *sh, size_t argc, char **argv)
 		shell_print(sh, "  Use 'wifi on' to start AP");
 	}
 
-	ret = net_mgmt(NET_REQUEST_WIFI_IFACE_STATUS, iface,
-		       &status, sizeof(status));
-	if (ret == 0) {
-		shell_print(sh, "  Interface state: %d", status.state);
-	}
-
 	return 0;
 }
 
 static int cmd_wifi_scan(const struct shell *sh, size_t argc, char **argv)
 {
-	struct net_if *iface = net_if_get_default();
+	struct net_if *iface = net_if_get_first_wifi();
 	static struct net_mgmt_event_callback scan_cb;
 	int ret, band = 0;
+
+	if (!iface) {
+		shell_error(sh, "No WiFi interface");
+		return -ENODEV;
+	}
 
 	if (argc >= 2) {
 		band = atoi(argv[1]);
@@ -380,9 +373,7 @@ static int cmd_wifi_scan(const struct shell *sh, size_t argc, char **argv)
 	return 0;
 }
 
-/* =========================================================================
- * zperf UDP throughput test (from wifi_ble_coex sample)
- * ========================================================================= */
+/* zperf UDP throughput test */
 static K_SEM_DEFINE(zperf_done_sem, 0, 1);
 static atomic_t zperf_sessions = ATOMIC_INIT(0);
 static volatile bool zperf_error;
@@ -479,16 +470,10 @@ static int cmd_udp_test(const struct shell *sh, size_t argc, char **argv)
 	params.rate_kbps = rate_kbps;
 	memcpy(&params.peer_addr, &addr, sizeof(addr));
 
-	shell_print(sh, "");
 	shell_print(sh, "UDP throughput test (iperf compatible)");
 	shell_print(sh, "Target: %s:%d", iperf_server_ip, IPERF_PORT);
-	shell_print(sh, "Packet size: %u bytes", IPERF_PACKET_SIZE);
-	shell_print(sh, "Duration: %d seconds", duration_sec);
-	shell_print(sh, "Rate limit: %u kbps (%u Mbps)", rate_kbps, rate_kbps / 1000);
-	shell_print(sh, "");
-	shell_print(sh, "Run iperf server on your PC:");
-	shell_print(sh, "  iperf -s -i 1 -u");
-	shell_print(sh, "");
+	shell_print(sh, "Duration: %d seconds, Rate: %u kbps", duration_sec, rate_kbps);
+	shell_print(sh, "Run on PC: iperf -s -u -p 5001 -i 1");
 
 	zperf_error = false;
 	ret = zperf_udp_upload_async(&params, zperf_cb, (void *)sh);
@@ -519,15 +504,12 @@ SHELL_CMD_REGISTER(wifi, &sub_wifi, "WiFi AP commands", NULL);
 SHELL_CMD_REGISTER(iperf, NULL, "UDP iperf throughput test [server_ip] [duration_sec] [rate_kbps]",
 		   cmd_udp_test);
 
-/* =========================================================================
- * Public API
- * ========================================================================= */
 int wifi_init_and_connect(void)
 {
 	/* Generate AP SSID from chip ID */
 	generate_ap_ssid();
 
-	/* Register WiFi event callbacks */
+	/* Register WiFi management events */
 	net_mgmt_init_event_callback(&wifi_mgmt_cb, wifi_mgmt_event_handler,
 				     NET_EVENT_WIFI_AP_ENABLE_RESULT |
 				     NET_EVENT_WIFI_AP_DISABLE_RESULT |
@@ -535,15 +517,10 @@ int wifi_init_and_connect(void)
 				     NET_EVENT_WIFI_AP_STA_DISCONNECTED);
 	net_mgmt_add_event_callback(&wifi_mgmt_cb);
 
-	printk("WiFi initialized (AP mode)\n");
+	printk("WiFi initialized (AP mode, auto-start)\n");
 	printk("  SSID will be: %s\n", ap_ssid);
 	printk("  Use 'wifi on' to start AP\n");
 
-	return 0;
-}
-
-int wifi_start_throughput_test(void)
-{
 	return 0;
 }
 
