@@ -120,6 +120,29 @@ Shell commands: `nrf70 otp status/read/write_mac0/write_mac1/lock`
 
 See `tests/otp/README.md` for full usage.
 
+### Crystal Capacitance Tuning (tests/clip)
+
+The board has no external load capacitors for LFXO/HFXO. Internal capacitors must be enabled via registers. Use the test firmware shell commands to tune:
+
+```
+lfxo get                — Read 32.768kHz crystal capacitance
+lfxo set <0-3>          — Set (0=external, 1=6pF, 2=7pF, 3=9pF)
+hfxo get                — Read 32MHz crystal capacitance
+hfxo set <pF>           — Set in pF (7.0-20.0, step 0.5, 0=external)
+```
+
+After finding optimal values, configure in device tree:
+```dts
+&lfxo {
+    load-capacitors = "internal";
+    load-capacitance-picofarad = <7>;
+};
+&hfxo {
+    load-capacitors = "internal";
+    load-capacitance-picofarad = <9>;
+};
+```
+
 ## Documentation
 
 - `docs/protocol.md` - BLE AT command protocol specification
