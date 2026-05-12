@@ -21,6 +21,7 @@ target_sources(app PRIVATE
 	src/motor.c
 	src/imu.c
 	src/usb.c
+	src/flash_test.c
 )
 
 

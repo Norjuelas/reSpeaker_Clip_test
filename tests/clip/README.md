@@ -163,6 +163,28 @@ usb status       # Show USB and SD card status
 - Always disable MSC before recording again
 - UART shell (921600 baud) uses a separate UART, not USB
 
+### 11. SPI Flash Speed Test
+
+**Purpose**: Test SPI flash (PY25Q64H 64MB) raw read/write/erase performance
+
+**Commands**:
+```bash
+flash speed            # Test 1MB (default)
+flash speed 2048       # Test 2MB
+flash speed 512        # Test 512KB
+```
+
+**Test Procedure**:
+1. Erases test area (4KB sectors)
+2. Writes test pattern
+3. Reads back and verifies data integrity
+4. Reports erase/write/read speeds in KB/s
+
+**Notes**:
+- Tests on LittleFS partition area (offset 0x130000), OTA slots are not affected
+- 4KB chunk size aligned to flash erase sector
+- Max test size: 10MB
+
 ### 5. Button Test
 
 **Purpose**: Test user button functionality
@@ -248,6 +270,48 @@ imu selftest         # Run self-test
 **Interpreting Sensor Data**:
 - **Accelerometer**: +/- 4g range, ~1000 LSB/g at rest
 - **Gyroscope**: +/- 500dps range, ~0 LSB/s at rest
+
+### 10. Crystal Capacitance Tuning
+
+**Purpose**: Tune internal load capacitance for LFXO (32.768kHz) and HFXO (32MHz) crystals. The board has no external load capacitors — internal capacitance must be configured via registers.
+
+**LFXO Commands** (32.768kHz crystal):
+
+```bash
+lfxo get                # Read current capacitance setting
+lfxo set <0-3>          # Set capacitance (0=external, 1=6pF, 2=7pF, 3=9pF)
+```
+
+**HFXO Commands** (32MHz crystal):
+
+```bash
+hfxo get                # Read current capacitance setting
+hfxo set <pF>           # Set capacitance in pF (7.0-20.0, step 0.5, 0=external)
+```
+
+**Example**:
+```bash
+uart:~$ lfxo get
+LFXO capacitance: 0 (external)
+uart:~$ lfxo set 2
+LFXO capacitance set to: 2 (7pF)
+uart:~$ hfxo get
+HFXO capacitance: external
+uart:~$ hfxo set 9.0
+HFXO capacitance set to: 9.0 pF (CAPVALUE=90)
+```
+
+**After tuning**, configure the optimal values in device tree:
+```dts
+&lfxo {
+    load-capacitors = "internal";
+    load-capacitance-picofarad = <7>;
+};
+&hfxo {
+    load-capacitors = "internal";
+    load-capacitance-picofarad = <9>;
+};
+```
 
 ## Troubleshooting
 
@@ -425,6 +489,8 @@ Use SHELL_CMD_* macros for shell command registration:
 
 ## Version History
 
+- 2026-05-12: Added SPI flash speed test command
+- 2026-05-11: Added LFXO/HFXO crystal capacitance tuning commands
 - 2026-05-08: Added USB MSC module (expose SD card as USB drive), added WAV recording
 - 2026-04-22: Updated documentation to accurately reflect implemented features, removed non-existent BLE and WiFi scan commands, corrected SD card commands
 - 2025-03-09: Added IMU test module with software I2C
