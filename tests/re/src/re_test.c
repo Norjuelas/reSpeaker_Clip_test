@@ -227,6 +227,9 @@ static int test_mic(void)
 		.channel = {
 			.req_num_streams = 1,
 			.req_num_chan = MIC_CHANNELS,
+			.req_chan_map_lo =
+				dmic_build_channel_map(0, 0, PDM_CHAN_LEFT) |
+				dmic_build_channel_map(1, 0, PDM_CHAN_RIGHT),
 		},
 	};
 

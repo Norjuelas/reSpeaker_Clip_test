@@ -532,5 +532,10 @@ int wifi_init_and_connect(void)
 
 int wifi_run_test(void)
 {
-	return wifi_init_and_connect();
+	int ret = wifi_init_and_connect();
+	if (ret != 0) {
+		return ret;
+	}
+
+	return do_wifi_ap_start();
 }
