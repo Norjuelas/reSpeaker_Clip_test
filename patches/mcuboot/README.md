@@ -73,11 +73,13 @@ Adds OLED display support to MCUboot for showing OTA progress, status messages, 
 ### What it adds
 
 - **`io_display.c`**: Self-contained display helper using Zephyr Display API.
-  - 6x12 pixel font (95 printable ASCII chars)
+  - 6x12 pixel font (95 printable ASCII chars) for status text
+  - Native 8x16 pixel font (95 printable ASCII chars) for boot animation
   - 24x24 OTA icon (column-major bitmap)
   - `draw_bitmap()` for column-major rendering
   - `io_display_show()` for two-line centered text
   - `io_display_show_progress()` for OTA icon + progress bar + percentage
+  - `io_display_boot_animation()` for "seeed studio" boot animation with haptic feedback
 - **`CONFIG_MCUBOOT_DISPLAY`**: New Kconfig option (selects I2C, depends on GPIO)
 - **Progress hooks** in `main.c`:
   - `mcuboot_status_change()`: Shows OTA icon + "Updating..." + 0% on swap start
@@ -89,6 +91,7 @@ Adds OLED display support to MCUboot for showing OTA progress, status messages, 
 
 | Condition | Display |
 |-----------|---------|
+| Boot | "seeed studio" animation + double vibration |
 | Serial recovery (button+USB or boot mode) | "Recovery Mode" |
 | OTA image swap | OTA icon + "Updating..." + progress bar + real-time % |
 | Serial recovery upload | OTA icon + "Updating..." + progress bar + upload % |
