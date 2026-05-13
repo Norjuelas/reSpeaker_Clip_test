@@ -501,10 +501,11 @@ static void security_changed(struct bt_conn *conn, bt_security_t level,
 /* Auto-confirm Just Works pairing */
 static void pairing_confirm(struct bt_conn *conn)
 {
-    char addr[BT_ADDR_LE_STR_LEN];
-    bt_addr_le_to_str(bt_conn_get_dst(conn), addr, sizeof(addr));
-    LOG_INF("Pairing confirm: %s", addr);
-    bt_conn_auth_pairing_confirm(conn);
+	char addr[BT_ADDR_LE_STR_LEN];
+	bt_addr_le_to_str(bt_conn_get_dst(conn), addr, sizeof(addr));
+
+	LOG_INF("Pairing confirm: %s", addr);
+	bt_conn_auth_pairing_confirm(conn);
 }
 
 static struct bt_conn_auth_cb auth_callbacks = {

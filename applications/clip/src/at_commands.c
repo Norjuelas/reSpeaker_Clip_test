@@ -544,6 +544,7 @@ static int cmd_pair_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
 
         /* Send response before clearing bonds (which drops BLE link) */
         int ret = create_json_response(true, NULL, "{\"rebooting\":true}", response, len);
+        storage_format_card();
         schedule_reboot(500, true);
         return ret;
     } else {
