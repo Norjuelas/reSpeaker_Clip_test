@@ -40,8 +40,9 @@ LOG_MODULE_REGISTER(display, CONFIG_CLIP_LOG_LEVEL);
 /* UI Thread Configuration */
 #define DISPLAY_EVENT_QUEUE_SIZE  16
 #define DISPLAY_ANIMATION_PERIOD  K_MSEC(50)
-#define DISPLAY_STATUS_TIMEOUT_MS  3000
+#define DISPLAY_STATUS_TIMEOUT_MS       CONFIG_CLIP_DISPLAY_STATUS_TIMEOUT_MS
 #define DISPLAY_REC_WAVE_TIMEOUT_MS 5000
+#define DISPLAY_PAIRING_GUIDE_TIMEOUT_MS CONFIG_CLIP_DISPLAY_PAIRING_TIMEOUT_MS
 
 /* =============================================================================
  * Recording Animation Configuration
@@ -1106,8 +1107,23 @@ static void handle_event(enum ui_event event)
 	case UI_EVENT_STATUS_SHOW:
 		battery_poll();
 		if (!g_recording) {
-			set_ui_state(UI_STATE_STATUS_BAR);
-			k_work_schedule(&display_timeout_work, K_MSEC(DISPLAY_STATUS_TIMEOUT_MS));
+			if (g_ui_state == UI_STATE_OFF && !ble_is_bonded()) {
+				set_ui_state(UI_STATE_PAIRING_GUIDE);
+				k_work_schedule(&display_timeout_work,
+						K_MSEC(DISPLAY_PAIRING_GUIDE_TIMEOUT_MS));
+			} else if (g_ui_state == UI_STATE_PAIRING_GUIDE) {
+				set_ui_state(UI_STATE_STATUS_BAR);
+				k_work_schedule(&display_timeout_work,
+						K_MSEC(DISPLAY_STATUS_TIMEOUT_MS));
+			} else if (g_ui_state == UI_STATE_STATUS_BAR && !ble_is_bonded()) {
+				set_ui_state(UI_STATE_PAIRING_GUIDE);
+				k_work_schedule(&display_timeout_work,
+						K_MSEC(DISPLAY_PAIRING_GUIDE_TIMEOUT_MS));
+			} else {
+				set_ui_state(UI_STATE_STATUS_BAR);
+				k_work_schedule(&display_timeout_work,
+						K_MSEC(DISPLAY_STATUS_TIMEOUT_MS));
+			}
 		}
 		break;
 
@@ -1125,6 +1141,8 @@ static void handle_event(enum ui_event event)
 	case UI_EVENT_PAIRING_SHOW:
 		k_work_cancel_delayable(&display_timeout_work);
 		set_ui_state(UI_STATE_PAIRING_GUIDE);
+		k_work_schedule(&display_timeout_work,
+				K_MSEC(DISPLAY_PAIRING_GUIDE_TIMEOUT_MS));
 		break;
 
 	case UI_EVENT_POWER_OFF_SHOW:
@@ -1165,8 +1183,8 @@ static void handle_event(enum ui_event event)
 				/* USB screen timeout → show status bar with charging icon */
 				set_ui_state(UI_STATE_STATUS_BAR);
 				k_work_schedule(&display_timeout_work, K_MSEC(DISPLAY_STATUS_TIMEOUT_MS));
-			} else if (g_status.battery_charging) {
-				/* Stay on status bar while charging */
+			} else if (g_status.battery_charging && ble_is_bonded()) {
+				/* Stay on status bar while charging (only if paired) */
 				render_status_bar(display_buffer);
 				flush_display();
 				k_work_schedule(&display_timeout_work, K_MSEC(DISPLAY_STATUS_TIMEOUT_MS));
@@ -1174,6 +1192,8 @@ static void handle_event(enum ui_event event)
 				set_ui_state(UI_STATE_OFF);
 			} else {
 				set_ui_state(UI_STATE_PAIRING_GUIDE);
+				k_work_schedule(&display_timeout_work,
+						K_MSEC(DISPLAY_PAIRING_GUIDE_TIMEOUT_MS));
 			}
 		} else if (g_ui_state == UI_STATE_REC_WAVE) {
 				/* Only transition if 5s actually elapsed.
@@ -1184,6 +1204,8 @@ static void handle_event(enum ui_event event)
 						>= DISPLAY_REC_WAVE_TIMEOUT_MS) {
 					set_ui_state(UI_STATE_REC_DOT);
 				}
+		} else if (g_ui_state == UI_STATE_PAIRING_GUIDE) {
+			set_ui_state(UI_STATE_OFF);
 		} else if (g_ui_state == UI_STATE_ERROR) {
 			g_error_active = false;
 			if (g_recording) {
@@ -1258,6 +1280,8 @@ static void render_current_state(void)
 				set_ui_state(UI_STATE_OFF);
 			} else {
 				set_ui_state(UI_STATE_PAIRING_GUIDE);
+				k_work_schedule(&display_timeout_work,
+						K_MSEC(DISPLAY_PAIRING_GUIDE_TIMEOUT_MS));
 			}
 		}
 		break;
@@ -1474,12 +1498,12 @@ static void display_thread_fn(void *p1, void *p2, void *p3)
 	LOG_INF("Display thread started");
 
 	while (true) {
-		/* Animation states need periodic wake (100ms), other states
-		 * rely entirely on events — no polling needed.
-		 */
 		k_timeout_t wait;
 		if (g_ui_state == UI_STATE_REC_WAVE) {
 			wait = K_MSEC(100);
+		} else if (g_ui_state == UI_STATE_STATUS_BAR ||
+			   g_ui_state == UI_STATE_PAIRING_GUIDE) {
+			wait = K_SECONDS(1);
 		} else {
 			wait = K_FOREVER;
 		}
@@ -1487,6 +1511,8 @@ static void display_thread_fn(void *p1, void *p2, void *p3)
 		if (k_msgq_get(&display_event_queue, &event, wait) == 0) {
 			LOG_DBG("Display event: %d", event);
 			handle_event(event);
+			render_current_state();
+		} else {
 			render_current_state();
 		}
 
@@ -1526,9 +1552,9 @@ int display_init(void)
 	k_work_init_delayable(&display_anim_work, display_anim_work_handler);
 	k_work_init_delayable(&display_timeout_work, display_timeout_work_handler);
 
-	/* Initial state: show status bar as default.
-	 * BLE init will correct to pairing guide if not bonded.
-	 * Battery init runs before display init, so battery data is already valid.
+	/* Initial state: show status bar. BLE init will switch to
+	 * PAIRING_GUIDE if not bonded (with correct device name).
+	 * Battery init runs before display init, so data is already valid.
 	 */
 	set_ui_state(UI_STATE_STATUS_BAR);
 	g_status_bar_start_ms = k_uptime_get();

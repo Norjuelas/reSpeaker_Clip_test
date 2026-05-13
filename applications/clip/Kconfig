@@ -71,6 +71,14 @@ config CLIP_DEFAULT_BRIGHTNESS
 	int "Default OLED brightness (0-255)"
 	default 32
 
+config CLIP_DISPLAY_STATUS_TIMEOUT_MS
+	int "Status bar display timeout (ms)"
+	default 10000
+
+config CLIP_DISPLAY_PAIRING_TIMEOUT_MS
+	int "Pairing guide display timeout (ms)"
+	default 60000
+
 # =============================================================================
 # Button Configuration
 # =============================================================================
