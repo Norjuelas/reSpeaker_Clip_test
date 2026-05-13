@@ -49,6 +49,7 @@ static struct re_test_stats stats[NUM_TESTS] = {
 };
 
 static uint32_t round_count;
+static volatile bool stop_requested;
 
 typedef int (*re_test_fn)(void);
 
@@ -333,15 +334,20 @@ static void print_summary(void)
 
 /* --- Main test loop --- */
 
+void re_test_request_stop(void)
+{
+	stop_requested = true;
+}
+
 void re_test_loop(void)
 {
 	printk("\n====== RE Test Starting ======\n");
 	printk("Testing %d peripherals in infinite loop\n\n", NUM_TESTS);
 
-	while (1) {
+	while (!stop_requested) {
 		round_count++;
 
-		for (int i = 0; i < NUM_TESTS; i++) {
+		for (int i = 0; i < NUM_TESTS && !stop_requested; i++) {
 			int rc = test_fns[i]();
 
 			if (rc == 0) {

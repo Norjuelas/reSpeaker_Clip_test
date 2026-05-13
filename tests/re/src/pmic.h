@@ -24,4 +24,10 @@ int pmic_init(void);
  */
 int pmic_get_battery_status(uint32_t *voltage_mv, uint8_t *percent, bool *charging);
 
+/**
+ * @brief Enter ship mode (power off)
+ * @return 0 on success, negative errno on failure
+ */
+int pmic_enter_ship_mode(void);
+
 #endif /* PMIC_H */

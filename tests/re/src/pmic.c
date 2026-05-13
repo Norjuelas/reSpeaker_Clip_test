@@ -196,7 +196,7 @@ static int pmic_get_charger_status_string(char *buf, size_t len)
 }
 
 /* Enter ship mode (power off) */
-static int pmic_enter_ship_mode(void)
+int pmic_enter_ship_mode(void)
 {
 	if (!device_is_ready(pmic_regulators)) {
 		LOG_ERR("npm1300 regulators not ready");
@@ -204,18 +204,12 @@ static int pmic_enter_ship_mode(void)
 	}
 
 	LOG_INF("Entering ship mode (power off)...");
-	LOG_INF("  System will power off immediately");
 	LOG_INF("  Wake up: hold button for ~3 seconds");
 
-	/* Small delay to allow log to be sent */
+	/* Flush logs before ship mode */
 	k_sleep(K_MSEC(100));
 
-	int ret = regulator_parent_ship_mode(pmic_regulators);
-	if (ret != 0) {
-		LOG_ERR("Failed to enter ship mode: %d", ret);
-	}
-
-	return ret;
+	return regulator_parent_ship_mode(pmic_regulators);
 }
 
 /* ============================================================================

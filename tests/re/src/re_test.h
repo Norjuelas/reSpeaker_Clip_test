@@ -16,5 +16,6 @@ struct re_test_stats {
 };
 
 void re_test_loop(void);
+void re_test_request_stop(void);
 
 #endif /* RE_TEST_H */

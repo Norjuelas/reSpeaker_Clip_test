@@ -1,55 +1,51 @@
 /*
- * Copyright (c) 2023 Nordic Semiconductor ASA
+ * Copyright (c) 2026 Seeed Technology Co., Ltd.
  *
  * SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
  */
 
 #include <zephyr/kernel.h>
 #include <zephyr/device.h>
-#include <zephyr/drivers/gpio.h>
+#include <zephyr/drivers/input/button.h>
 #include <zephyr/logging/log.h>
 #include "button.h"
+#include "pmic.h"
 
 LOG_MODULE_REGISTER(button, LOG_LEVEL_INF);
 
-/* Get button from devicetree */
-static const struct gpio_dt_spec button = GPIO_DT_SPEC_GET(DT_NODELABEL(usr_btn), gpios);
-static struct gpio_callback button_cb_data;
-
-/* Button interrupt handler */
-static void button_pressed(const struct device *dev, struct gpio_callback *cb, uint32_t pins)
+static void button_event_cb(const struct device *dev, enum button_action action)
 {
-	LOG_INF("Button pressed!");
+	switch (action) {
+	case BUTTON_DOUBLE_CLICK:
+		LOG_INF("Double click — entering ship mode");
+		pmic_enter_ship_mode();
+		LOG_ERR("Ship mode failed");
+		break;
+	case BUTTON_SINGLE_CLICK:
+		LOG_INF("Button click");
+		break;
+	default:
+		break;
+	}
 }
 
 int button_init(void)
 {
+	const struct device *btn = DEVICE_DT_GET(DT_ALIAS(sw0));
 	int ret;
 
-	LOG_INF("Initializing Button...");
-
-	/* Initialize button */
-	if (!gpio_is_ready_dt(&button)) {
+	if (!device_is_ready(btn)) {
 		LOG_ERR("Button device not ready");
 		return -ENODEV;
 	}
 
-	ret = gpio_pin_configure_dt(&button, GPIO_INPUT);
-	if (ret != 0) {
-		LOG_ERR("Failed to configure button GPIO: %d", ret);
+	ret = button_callback_register(btn, button_event_cb);
+	if (ret < 0) {
+		LOG_ERR("Button callback register failed: %d", ret);
 		return ret;
 	}
 
-	ret = gpio_pin_interrupt_configure_dt(&button, GPIO_INT_EDGE_TO_ACTIVE);
-	if (ret != 0) {
-		LOG_ERR("Failed to configure button interrupt: %d", ret);
-		return ret;
-	}
-
-	gpio_init_callback(&button_cb_data, button_pressed, BIT(button.pin));
-	gpio_add_callback(button.port, &button_cb_data);
-
-	LOG_INF("Button ready on GPIO P0.%d - press to see log message", button.pin);
+	LOG_INF("Button ready (double click = ship mode)");
 
 	return 0;
 }
