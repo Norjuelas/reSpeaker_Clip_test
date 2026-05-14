@@ -212,6 +212,7 @@ Format: `AT+XX?`
 
 Query current configuration:
 - `AT+DEVICE?` - Get device name
+- `AT+NAME?` - Get user-defined device name
 - `AT+MODE?` - Get current mode
 - `AT+NOISE?` - Get noise suppression level
 - `AT+DEREVERB?` - Get dereverberation setting
@@ -1126,6 +1127,62 @@ AT+DEVICE?
   "device": "Clip"
 }
 ```
+
+---
+
+##### AT+NAME - User-Defined Device Name
+
+Set or query a user-defined device name. This is stored persistently and survives reboots. It does not affect BLE or WiFi naming.
+
+**Request (Set):**
+```
+AT+NAME=My Clip
+```
+
+**Request (Clear):**
+```
+AT+NAME=CLEAR
+```
+
+**Request (Query):**
+```
+AT+NAME?
+```
+
+**Response (Set):**
+```json
+{
+  "ok": true,
+  "data": {"name": "My Clip"}
+}
+```
+
+**Response (Query):**
+```json
+{
+  "ok": true,
+  "data": {"name": "My Clip"}
+}
+```
+
+**Response (Empty):**
+```json
+{
+  "ok": true,
+  "data": {"name": ""}
+}
+```
+
+**Validation Rules:**
+- Length: 1–32 characters
+- Allowed: printable UTF-8 characters (letters, digits, CJK, spaces, `-`, `_`, etc.)
+- Not allowed: control characters (0x00–0x1F), empty string
+- `AT+NAME=CLEAR` removes the name (sets to empty)
+
+**Error Cases:**
+- Name too long (> 32 characters)
+- Contains control characters
+- Empty name (use `CLEAR` to remove)
 
 ---
 
@@ -2233,6 +2290,60 @@ To prevent BLE congestion:
 | AT+PAIR | GET/SET | BLE pairing | 3.3.7 |
 | AT+FACTORY | SET | Factory reset | 3.3.7 |
 | AT+REBOOT | EXEC | Reboot | 3.3.7 |
+| AT+NAME | GET/SET | User device name | 3.3.7 |
+
+## Appendix E: Button Events
+
+The device has a single user button (GPIO1.15, active-low) with multi-level press detection.
+
+### E.1 Button Actions
+
+| Action | Trigger | Behavior |
+|--------|---------|----------|
+| Single Click | Press & release (< 1s) | Context-dependent (see below) |
+| Long Press | Hold > 1s | Start/stop recording, confirm with vibration |
+| Long Press Level 1/2/3 | Continue holding > 2s/3s/4s | Power off screen (cancel on release) |
+| Release | Button released | Execute deferred action or power off |
+| Double Click | Two quick presses | Reserved (no action) |
+
+### E.2 Single Click Behavior
+
+| Current State | Action |
+|---------------|--------|
+| RECORDING | Add bookmark |
+| PAUSED | Add bookmark |
+| IDLE | Show status bar (timed) |
+| WIFI_SYNC | Show status bar (timed) |
+| ERROR | Show status bar (timed) |
+
+### E.3 Long Press Behavior
+
+**Recording active:**
+1. At 1s hold → Stop recording immediately + vibrate
+2. Continue holding → Enter power-off flow
+
+**Idle / Error / WiFi Sync:**
+1. At 1s hold → Vibrate to confirm threshold
+2. Continue holding → Enter power-off flow
+3. On release before power-off levels → Start recording
+
+**Charging:** Power-off is blocked. Long press levels are ignored.
+
+### E.4 Power-Off Flow
+
+1. Long press reaches Level 1 (> 2s hold) → Power-off screen displayed
+2. User releases button → Device enters ship mode (ultra-low power)
+3. If user releases before Level 1 → Action canceled, no power-off
+
+### E.5 State Change Notifications
+
+Button actions that change state send unsolicited notifications:
+
+| Action | Notification |
+|--------|-------------|
+| Start recording | `{"event":"state","state":"RECORDING",...}` |
+| Stop recording | `{"event":"state","state":"IDLE",...}` |
+| Add bookmark | `{"event":"mark","session":"...","mark_count":N}` |
 
 ## Appendix B: Example Sessions
 
