@@ -65,6 +65,7 @@ struct clip_context {
         bool dereverb_enabled;      /* Dereverberation enabled */
         uint8_t oled_brightness;    /* OLED brightness (0-255) */
         char wifi_password[9];      /* WiFi AP password (8 chars + NUL) */
+        char device_name[33];       /* User-defined device name (32 chars + NUL) */
     } config;
 
     /* Status */

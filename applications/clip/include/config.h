@@ -18,6 +18,7 @@
 #define CONFIG_KEY_DEREVERB      0x09
 #define CONFIG_KEY_BRIGHTNESS    0x0A
 #define CONFIG_KEY_WIFI_PASSWORD 0x0B
+#define CONFIG_KEY_DEVICE_NAME   0x0C
 
 
 /**
@@ -161,5 +162,20 @@ int config_set_wifi_password(const char *password);
  * @return Password string, or "12345678" if not set
  */
 const char *config_get_wifi_password(void);
+
+/**
+ * @brief Set device name
+ *
+ * @param name Device name string (1-32 chars, printable UTF-8)
+ * @return 0 on success, negative error code on failure
+ */
+int config_set_device_name(const char *name);
+
+/**
+ * @brief Get device name
+ *
+ * @return Device name string, or empty string if not set
+ */
+const char *config_get_device_name(void);
 
 #endif /* CLIP_CONFIG_H */

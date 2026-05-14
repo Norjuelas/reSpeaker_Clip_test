@@ -1395,7 +1395,55 @@ static int cmd_purge_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
     return create_json_response(true, NULL, data, response, len);
 }
 
-/* WIFI Command Handler - Control WiFi AP */
+/* NAME Command Handler - Set/Get device name */
+static int cmd_name_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
+{
+    if (ctx->type == AT_CMD_TYPE_SET || ctx->type == AT_CMD_TYPE_EXEC) {
+        if (!ctx->args || strlen(ctx->args) == 0) {
+            return create_json_response(false, "Missing name", NULL, response, len);
+        }
+
+        if (strncasecmp(ctx->args, "CLEAR", 5) == 0) {
+            config_set_device_name("");
+            return create_json_response(true, "Name cleared", NULL, response, len);
+        }
+
+        size_t name_len = strlen(ctx->args);
+
+        if (name_len > 32) {
+            return create_json_response(false, "Name too long (max 32)", NULL, response, len);
+        }
+
+        bool has_printable = false;
+        for (size_t i = 0; i < name_len; i++) {
+            if ((unsigned char)ctx->args[i] < 0x20) {
+                return create_json_response(false, "Invalid characters", NULL, response, len);
+            }
+            if ((unsigned char)ctx->args[i] >= 0x20) {
+                has_printable = true;
+            }
+        }
+
+        if (!has_printable) {
+            return create_json_response(false, "Name cannot be empty", NULL, response, len);
+        }
+
+        int err = config_set_device_name(ctx->args);
+        if (err) {
+            return create_json_response(false, "Save failed", NULL, response, len);
+        }
+
+        char data[40];
+        snprintf(data, sizeof(data), "{\"name\":\"%s\"}", ctx->args);
+        return create_json_response(true, NULL, data, response, len);
+    }
+
+    const char *name = config_get_device_name();
+    char data[40];
+    snprintf(data, sizeof(data), "{\"name\":\"%s\"}", name);
+    return create_json_response(true, NULL, data, response, len);
+}
+
 static int cmd_wifi_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
 {
     /*
@@ -1709,6 +1757,15 @@ int at_commands_register(void)
         .handler = cmd_wifi_handler,
     };
     err = at_server_register_cmd(&wifi_cmd);
+    if (err) return err;
+
+    /* NAME - Set/Get device name */
+    static const struct at_command name_cmd = {
+        .name = "NAME",
+        .flags = AT_CMD_SET | AT_CMD_QUERY,
+        .handler = cmd_name_handler,
+    };
+    err = at_server_register_cmd(&name_cmd);
     if (err) return err;
 
     LOG_INF("AT commands registered");
