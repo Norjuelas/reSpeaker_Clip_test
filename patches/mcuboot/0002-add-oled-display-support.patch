@@ -174,7 +174,7 @@ diff --git a/boot/zephyr/io_display.c b/boot/zephyr/io_display.c
 new file mode 100644
 --- /dev/null
 +++ b/boot/zephyr/io_display.c
-@@ -0,0 +1,566 @@
+@@ -0,0 +1,585 @@
 +/*
 + * OLED display helpers for MCUboot status messages.
 + * Uses Zephyr Display API to render text on CH1115 OLED.
@@ -187,6 +187,7 @@ new file mode 100644
 +#include <zephyr/device.h>
 +#include <zephyr/drivers/display.h>
 +#include <zephyr/drivers/gpio.h>
++#include <zephyr/drivers/i2c.h>
 +#include <zephyr/devicetree.h>
 +#include <stdio.h>
 +#include <string.h>
@@ -656,6 +657,23 @@ new file mode 100644
 +#define MOTOR_NODE DT_NODELABEL(gpio1)
 +#define MOTOR_PIN  6
 +
++/* NPM1300 PMIC I2C: enable BUCK1 (motor power) before GPIO can take effect */
++#define NPM1300_I2C_NODE DT_NODELABEL(i2c1)
++#define NPM1300_ADDR     0x6b
++/* BUCK base=0x04, EN SET offset=0x00, BUCK1 ON mask=0x04 */
++#define BUCK1_EN_SET_REG 0x04
++#define BUCK1_EN_SET_VAL 0x04
++
++static void pmic_enable_buck1(void)
++{
++	const struct device *i2c = DEVICE_DT_GET(NPM1300_I2C_NODE);
++	if (!device_is_ready(i2c)) {
++		return;
++	}
++
++	i2c_reg_write_byte(i2c, NPM1300_ADDR, BUCK1_EN_SET_REG, BUCK1_EN_SET_VAL);
++}
++
 +static void motor_on(void)
 +{
 +	const struct device *gpio1 = DEVICE_DT_GET(MOTOR_NODE);
@@ -678,11 +696,12 @@ new file mode 100644
 +		return;
 +	}
 +
-+	/* Configure motor GPIO */
++	/* Configure motor GPIO and enable PMIC BUCK1 for motor power */
 +	const struct device *gpio1 = DEVICE_DT_GET(MOTOR_NODE);
 +	if (device_is_ready(gpio1)) {
 +		gpio_pin_configure(gpio1, MOTOR_PIN, GPIO_OUTPUT_LOW);
 +	}
++	pmic_enable_buck1();
 +
 +	const char *text = "seeed studio";
 +	int num_chars = strlen(text);
