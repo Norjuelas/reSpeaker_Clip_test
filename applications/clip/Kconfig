@@ -238,6 +238,18 @@ config CLIP_UDP_CONNECTION_TIMEOUT_MS
 	default 30000
 
 # =============================================================================
+# WiFi Configuration
+# =============================================================================
+
+config CLIP_WIFI_TIMEOUT_MS
+	int "WiFi AP auto-off timeout (ms), 0 to disable"
+	default 180000
+	help
+	  Time in milliseconds before WiFi AP is automatically disabled.
+	  Timer starts after AP is enabled, restarts on client disconnect.
+	  Set to 0 to disable auto-off.
+
+# =============================================================================
 # Debug Configuration
 # =============================================================================
 

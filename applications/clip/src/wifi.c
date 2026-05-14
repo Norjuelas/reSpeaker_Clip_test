@@ -20,6 +20,7 @@
 #include "wifi_udp.h"
 #include "transport_udp.h"
 #include "config.h"
+#include "clip_event.h"
 
 
 #ifdef CONFIG_NRF70_SR_COEX
@@ -41,6 +42,29 @@ static bool wifi_ready;
 static struct net_mgmt_event_callback wifi_mgmt_cb;
 static K_SEM_DEFINE(wifi_ready_sem, 0, 1);
 static K_SEM_DEFINE(ap_enabled_sem, 0, 1);
+
+static void wifi_timeout_handler(struct k_work *work)
+{
+	ARG_UNUSED(work);
+	if (ap_running && !sta_connected) {
+		LOG_INF("WiFi timeout, auto-off");
+		clip_post_event(CLIP_EVENT_WIFI_OFF);
+	}
+}
+
+static K_WORK_DELAYABLE_DEFINE(wifi_timeout_work, wifi_timeout_handler);
+
+static void schedule_wifi_timeout(void)
+{
+	if (CONFIG_CLIP_WIFI_TIMEOUT_MS > 0) {
+		k_work_reschedule(&wifi_timeout_work, K_MSEC(CONFIG_CLIP_WIFI_TIMEOUT_MS));
+	}
+}
+
+static void cancel_wifi_timeout(void)
+{
+	k_work_cancel_delayable(&wifi_timeout_work);
+}
 
 #ifdef CONFIG_NRF70_SR_COEX
 static void wifi_coex_configure(void)
@@ -121,6 +145,7 @@ static void wifi_mgmt_event_handler(struct net_mgmt_event_callback *cb,
 				 sta_info->mac[3], sta_info->mac[4], sta_info->mac[5]);
 		LOG_INF("Station connected: %s", mac_string_buf);
 		sta_connected = true;
+		cancel_wifi_timeout();
 		transport_udp_update_active(false); /* Reset, waiting for new client */
 		break;
 	}
@@ -134,6 +159,7 @@ static void wifi_mgmt_event_handler(struct net_mgmt_event_callback *cb,
 				 sta_info->mac[3], sta_info->mac[4], sta_info->mac[5]);
 		LOG_INF("Station disconnected: %s", mac_string_buf);
 		sta_connected = false;
+		schedule_wifi_timeout();
 		transport_udp_update_active(false); /* Notify transport of disconnect */
 		break;
 	}
@@ -352,6 +378,9 @@ int wifi_on(void)
 		/* Continue anyway - UDP is optional */
 	}
 
+	/* Start auto-off timeout */
+	schedule_wifi_timeout();
+
 	LOG_INF("WiFi AP started: SSID=%s ch=%d IP=%s port=%d",
 			ap_ssid, WIFI_AP_CHANNEL, CONFIG_NET_CONFIG_MY_IPV4_ADDR, WIFI_AP_UDP_PORT);
 
@@ -362,6 +391,8 @@ int wifi_off(void)
 {
 	struct net_if *iface = net_if_get_first_wifi();
 	int ret;
+
+	cancel_wifi_timeout();
 
 	if (!iface)
 	{
