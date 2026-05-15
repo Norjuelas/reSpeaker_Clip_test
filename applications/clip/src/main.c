@@ -159,6 +159,12 @@ int clip_init(void)
         /* Continue anyway - battery is optional */
     }
 
+    /* Initialize haptic motor before display (boot animation uses it) */
+    err = haptic_init();
+    if (err) {
+        LOG_WRN("Haptic init failed: %d", err);
+    }
+
     /* Initialize display early (before slow BLE init) to light up screen */
     err = display_init();
     if (err) {
@@ -166,17 +172,14 @@ int clip_init(void)
         /* Continue anyway - display is optional */
     }
 
+    /* Start boot animation (runs in background while init continues) */
+    display_boot_animation_start();
+
     /* Initialize BLE (bt_enable is slow, display is already showing) */
     err = ble_init();
     if (err) {
         LOG_ERR("BLE init failed: %d", err);
         return err;
-    }
-
-    /* Initialize haptic motor */
-    err = haptic_init();
-    if (err) {
-        LOG_WRN("Haptic init failed: %d", err);
     }
 
     /* Initialize transport layer */

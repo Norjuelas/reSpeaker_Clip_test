@@ -171,6 +171,15 @@ void display_clear_untransferred(void);
 void display_check_untransferred(void);
 
 /**
+ * @brief Start boot animation in a background thread
+ *
+ * Plays "seeed studio" reveal animation while main init continues.
+ * After animation completes, starts normal UI (status bar).
+ * Must be called after display_init().
+ */
+void display_boot_animation_start(void);
+
+/**
  * @brief Update transfer status and refresh display immediately
  * @param transferring true if transfer is active, false when done
  */
