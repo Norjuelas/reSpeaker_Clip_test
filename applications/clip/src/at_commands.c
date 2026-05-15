@@ -26,6 +26,7 @@
 #include "wifi.h"
 #include "display.h"
 #include "haptic.h"
+#include "usb_cdc.h"
 
 LOG_MODULE_REGISTER(at_commands, CONFIG_CLIP_LOG_LEVEL);
 
@@ -1517,6 +1518,44 @@ static int cmd_wifi_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
     }
 }
 
+static int cmd_usb_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
+{
+    if (ctx->type == AT_CMD_TYPE_SET || ctx->type == AT_CMD_TYPE_EXEC) {
+	if (!ctx->args || strlen(ctx->args) == 0) {
+	    return create_json_response(false, "Missing argument (on/off)", NULL, response, len);
+	}
+
+	char arg[16];
+	strncpy(arg, ctx->args, sizeof(arg) - 1);
+	arg[sizeof(arg) - 1] = '\0';
+	for (char *p = arg; *p; p++) {
+	    if (*p >= 'A' && *p <= 'Z') {
+		*p = *p - 'A' + 'a';
+	    }
+	}
+
+	if (strcmp(arg, "on") == 0 || strcmp(arg, "1") == 0) {
+	    int err = usb_cdc_enable();
+	    if (err) {
+		return create_json_response(false, "Failed to enable USB", NULL, response, len);
+	    }
+	    return create_json_response(true, NULL, "{\"status\":\"on\"}", response, len);
+	} else if (strcmp(arg, "off") == 0 || strcmp(arg, "0") == 0) {
+	    int err = usb_cdc_disable();
+	    if (err) {
+		return create_json_response(false, "Failed to disable USB", NULL, response, len);
+	    }
+	    return create_json_response(true, NULL, "{\"status\":\"off\"}", response, len);
+	} else {
+	    return create_json_response(false, "Invalid argument (use on/off)", NULL, response, len);
+	}
+    } else {
+	return create_json_response(true, NULL,
+				   usb_cdc_is_enabled() ? "{\"status\":\"on\"}" : "{\"status\":\"off\"}",
+				   response, len);
+    }
+}
+
 /* Register all AT commands */
 int at_commands_register(void)
 {
@@ -1766,6 +1805,15 @@ int at_commands_register(void)
         .handler = cmd_name_handler,
     };
     err = at_server_register_cmd(&name_cmd);
+    if (err) return err;
+
+    /* USB - Control USB CDC+MSC */
+    static const struct at_command usb_cmd = {
+        .name = "USB",
+        .flags = AT_CMD_SET | AT_CMD_QUERY | AT_CMD_EXEC,
+        .handler = cmd_usb_handler,
+    };
+    err = at_server_register_cmd(&usb_cmd);
     if (err) return err;
 
     LOG_INF("AT commands registered");

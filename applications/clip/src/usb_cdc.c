@@ -116,16 +116,7 @@ static void usb_msg_cb(struct usbd_context *const ctx,
 {
 	LOG_INF("USB: %s", usbd_msg_type_string(msg->type));
 
-	if (usbd_can_detect_vbus(ctx)) {
-		if (msg->type == USBD_MSG_VBUS_READY) {
-			usbd_enable(ctx);
-			usb_active = true;
-		}
-		if (msg->type == USBD_MSG_VBUS_REMOVED) {
-			usbd_disable(ctx);
-			usb_active = false;
-		}
-	}
+	/* VBUS detection does not auto-enable USB; only AT+USB=on enables it */
 
 	if (msg->type == USBD_MSG_CDC_ACM_CONTROL_LINE_STATE) {
 		uint32_t dtr = 0U;
@@ -183,19 +174,44 @@ int usb_cdc_init(void)
 	/* Register message callback */
 	usbd_msg_register_cb(&clip_usbd, usb_msg_cb);
 
-	/* Enable USB (if no VBUS detection, enable directly) */
-	if (!usbd_can_detect_vbus(&clip_usbd)) {
-		err = usbd_enable(&clip_usbd);
-		if (err) {
-			LOG_ERR("usbd enable: %d", err);
-			return err;
-		}
-		usb_active = true;
-	}
-
 	/* Setup UART interrupt callback */
 	uart_irq_callback_set(cdc_dev, cdc_irq_handler);
 
-	LOG_INF("USB CDC+MSC ready");
+	/* USB starts disabled; use AT+USB=on to enable */
+	LOG_INF("USB CDC+MSC initialized (disabled)");
 	return 0;
+}
+
+int usb_cdc_enable(void)
+{
+	if (usb_active) {
+		return 0;
+	}
+
+	int err = usbd_enable(&clip_usbd);
+	if (err) {
+		LOG_ERR("usbd enable: %d", err);
+		return err;
+	}
+
+	usb_active = true;
+	LOG_INF("USB enabled");
+	return 0;
+}
+
+int usb_cdc_disable(void)
+{
+	if (!usb_active) {
+		return 0;
+	}
+
+	usbd_disable(&clip_usbd);
+	usb_active = false;
+	LOG_INF("USB disabled");
+	return 0;
+}
+
+bool usb_cdc_is_enabled(void)
+{
+	return usb_active;
 }
