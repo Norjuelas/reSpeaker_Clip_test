@@ -8,6 +8,7 @@
 #include <zephyr/device.h>
 #include <zephyr/storage/disk_access.h>
 #include <zephyr/fs/fs.h>
+#include <zephyr/drivers/regulator.h>
 #include <ff.h>
 #include <zephyr/logging/log.h>
 #include <string.h>
@@ -65,6 +66,13 @@ int storage_init(void)
 {
     int rc;
     struct fs_dirent entry;
+
+    /* Enable SD card power via NPM1300 LDO2 */
+    const struct device *ldo2 = DEVICE_DT_GET(DT_NODELABEL(npm1300_ldo2));
+    if (device_is_ready(ldo2)) {
+        regulator_enable(ldo2);
+        k_msleep(10);
+    }
 
     LOG_INF("SD init");
 
