@@ -40,7 +40,14 @@ K_MEM_SLAB_DEFINE_STATIC(audio_mem_slab, AUDIO_BLOCK_SIZE, 32, 4);
 /* DMIC device */
 static const struct device *const dmic_dev = DEVICE_DT_GET(DT_ALIAS(dmic0));
 static const struct device *mic_regulator =
-	DEVICE_DT_GET(DT_NODELABEL(mic_reg));
+	DEVICE_DT_GET(DT_NODELABEL(npm1300_ldo1));
+
+/* PDM_EN: P1.14 controls TXS0104E level shifter VCCB (mic signal path) */
+static const struct gpio_dt_spec pdm_en_gpio = {
+	.port = DEVICE_DT_GET(DT_NODELABEL(gpio1)),
+	.pin = 14,
+	.dt_flags = GPIO_OUTPUT | GPIO_ACTIVE_HIGH,
+};
 
 /* PCM stream configuration for DMIC */
 static struct pcm_stream_cfg audio_stream = {
@@ -1254,6 +1261,11 @@ static int16_t *process_pcm_frame(int16_t *stereo_input, int frame_size)
 
 static int mic_power_on(void)
 {
+    /* Enable PDM level shifter (TXS0104E VCCB) */
+    if (device_is_ready(pdm_en_gpio.port)) {
+        gpio_pin_configure_dt(&pdm_en_gpio, GPIO_OUTPUT_HIGH);
+    }
+    /* Enable mic 1.8V via NPM1300 LDO1 */
     if (mic_regulator) {
         int ret = regulator_enable(mic_regulator);
         if (ret) {
@@ -1266,12 +1278,17 @@ static int mic_power_on(void)
 
 static int mic_power_off(void)
 {
+    /* Disable mic 1.8V via NPM1300 LDO1 */
     if (mic_regulator) {
         int ret = regulator_disable(mic_regulator);
         if (ret) {
             LOG_WRN("Mic regulator disable failed: %d", ret);
             return ret;
         }
+    }
+    /* Disable PDM level shifter */
+    if (device_is_ready(pdm_en_gpio.port)) {
+        gpio_pin_set_dt(&pdm_en_gpio, 0);
     }
     return 0;
 }

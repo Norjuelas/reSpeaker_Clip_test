@@ -108,7 +108,10 @@
 };
 
 /* Disable regulators not needed in bootloader */
-&mic_reg {
+&npm1300_ldo1 {
+	status = "disabled";
+};
+&npm1300_ldo2 {
 	status = "disabled";
 };
 &oled_reg {
