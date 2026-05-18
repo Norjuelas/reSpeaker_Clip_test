@@ -1813,12 +1813,21 @@ static void draw_char_8x16_boot(uint8_t *buf, char c, int x, int y)
 
 static void display_start_ui(void)
 {
-	set_ui_state(UI_STATE_STATUS_BAR);
-	g_status_bar_start_ms = k_uptime_get();
-	render_status_bar(display_buffer);
-	flush_display();
-	k_work_schedule(&display_timeout_work, K_MSEC(DISPLAY_STATUS_TIMEOUT_MS));
-	LOG_INF("UI started: STATUS_BAR");
+	if (ble_is_bonded()) {
+		set_ui_state(UI_STATE_STATUS_BAR);
+		g_status_bar_start_ms = k_uptime_get();
+		render_status_bar(display_buffer);
+		flush_display();
+		k_work_schedule(&display_timeout_work, K_MSEC(DISPLAY_STATUS_TIMEOUT_MS));
+		LOG_INF("UI started: STATUS_BAR");
+	} else {
+		set_ui_state(UI_STATE_PAIRING_GUIDE);
+		render_pairing_guide(display_buffer);
+		flush_display();
+		k_work_schedule(&display_timeout_work,
+				K_MSEC(DISPLAY_PAIRING_GUIDE_TIMEOUT_MS));
+		LOG_INF("UI started: PAIRING_GUIDE");
+	}
 }
 
 static K_THREAD_STACK_DEFINE(boot_anim_stack, 1024);
