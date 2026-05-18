@@ -470,6 +470,13 @@ async def main():
         parser.print_help()
         return 0
 
+    def _make_device(address):
+        d = ClipDevice(address=address)
+        d.event_callback = lambda e: print(
+            f"[EVENT] {e.get('event', '?')}: {e.get('state', e.get('status', ''))}"
+        )
+        return d
+
     if args.command in ("status", "version", "list", "config", "delete",
                         "bookmark", "terminal"):
         if args.transport == "wifi":
@@ -477,7 +484,7 @@ async def main():
             async with WiFiDevice(args.host, args.port, args.timeout) as device:
                 return await globals()[f"cmd_{args.command}"](device, args)
         else:
-            device = ClipDevice(address=args.device)
+            device = _make_device(args.device)
             await device.connect()
             try:
                 return await globals()[f"cmd_{args.command}"](device, args)
@@ -488,7 +495,7 @@ async def main():
         if args.transport == "wifi":
             return await cmd_sync_wifi(args)
         else:
-            device = ClipDevice(address=args.device)
+            device = _make_device(args.device)
             await device.connect()
             try:
                 return await cmd_sync_ble(device, args)

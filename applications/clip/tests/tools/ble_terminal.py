@@ -20,9 +20,47 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from clip import ClipDevice, ClipCommands
 
 
+def _format_event(event: dict) -> str:
+    """Format event dict for terminal display."""
+    event_type = event.get('event', '')
+
+    if event_type == 'state':
+        state = event.get('state', '')
+        session = event.get('session', '')
+        duration = event.get('duration')
+        if duration is not None:
+            return f"[EVENT] State: {state} (session={session}, duration={duration}s)"
+        return f"[EVENT] State: {state} (session={session})"
+
+    elif event_type == 'mark':
+        session = event.get('session', '')
+        count = event.get('mark_count', 0)
+        return f"[EVENT] Bookmark added (session={session}, count={count})"
+
+    elif event_type == 'ble':
+        return f"[EVENT] BLE {event.get('status', '')}"
+
+    elif event_type == 'wifi':
+        return f"[EVENT] WiFi {event.get('status', '')}"
+
+    elif event_type == 'usb':
+        return f"[EVENT] USB {event.get('status', '')}"
+
+    return f"[EVENT] {json.dumps(event)}"
+
+
+def _event_callback(event: dict):
+    """Print events as they arrive (called from notification thread)."""
+    print(f"\n{_format_event(event)}")
+    print("clip> ", end="", flush=True)
+
+
 async def interactive_mode(device: ClipDevice):
     """Interactive terminal mode using the SDK."""
     commands = ClipCommands(device)
+
+    # Register event callback to display unsolicited events
+    device.event_callback = _event_callback
 
     print("\n" + "=" * 50)
     print("Clip BLE Terminal - Interactive Mode")

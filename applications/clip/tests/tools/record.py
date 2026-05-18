@@ -236,6 +236,11 @@ async def record_and_sync(
     commands = ClipCommands(device)
     sync = SessionSync(device)
 
+    # Display unsolicited events
+    device.event_callback = lambda e: print(
+        f"\n[EVENT] {e.get('event', '?')}: {e.get('state', e.get('status', ''))}"
+    )
+
     # Audio visualizer for waveform display
     visualizer = AudioVisualizer()
 
