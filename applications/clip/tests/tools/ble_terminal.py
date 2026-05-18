@@ -50,10 +50,9 @@ def _format_event(event: dict) -> str:
 
 
 def _event_callback(event: dict):
-    """Print events to stderr (unbuffered) to avoid input() blocking."""
-    msg = f"\n{_format_event(event)}\nclip> "
-    sys.stderr.write(msg)
-    sys.stderr.flush()
+    """Print events as they arrive (called from notification thread)."""
+    print(f"\n{_format_event(event)}")
+    print("clip> ", end="", flush=True)
 
 
 async def interactive_mode(device: ClipDevice):
