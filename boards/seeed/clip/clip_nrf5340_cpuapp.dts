@@ -38,7 +38,7 @@
 	rfsw_reg: regulator-rfsw {
 		compatible = "regulator-fixed";
 		regulator-name = "rfsw_vdd";
-		regulator-boot-on;
+		regulator-always-on;
 		enable-gpios = <&gpio0 29 GPIO_ACTIVE_HIGH>;
 		status = "okay";
 	};

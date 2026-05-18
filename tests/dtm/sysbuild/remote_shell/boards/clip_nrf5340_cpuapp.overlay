@@ -65,3 +65,12 @@
 &usbd {
 	status = "disabled";
 };
+
+/* RF switch: must be HIGH for BLE/WiFi RF path */
+&gpio0 {
+	rfsw_hog {
+		gpio-hog;
+		gpios = <29 GPIO_ACTIVE_HIGH>;
+		output-high;
+	};
+};
