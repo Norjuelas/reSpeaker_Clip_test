@@ -388,6 +388,8 @@ static void connected(struct bt_conn *conn, uint8_t err)
         LOG_INF("conn: %s (new)", addr);
     }
 
+    ble_notify_event("ble", "connected");
+
     /* Immediately require encryption. If no bond exists, this triggers
      * SMP pairing. If a bond exists, it triggers re-encryption with
      * the stored LTK. Devices that refuse will be disconnected in
@@ -428,6 +430,8 @@ static void disconnected(struct bt_conn *conn, uint8_t reason)
 
         /* Notify display that BLE disconnected */
         display_post_event(UI_EVENT_BLE_DISCONNECTED);
+
+        ble_notify_event("ble", "disconnected");
 
         /* Clean up any ongoing transfer via work queue to avoid stack overflow
          * in BLE RX thread context (transfer_cancel -> storage_set_synced_files
@@ -774,6 +778,23 @@ int ble_notify_mark(const char *session_id, int mark_count)
                    session_id, mark_count);
 
     LOG_INF("Event: mark session=%s count=%d", session_id, mark_count);
+    return ble_send(buf, len);
+}
+
+int ble_notify_event(const char *name, const char *status)
+{
+    char buf[96];
+    int len;
+
+    if (!ble_ctx.conn || !ble_ctx.notify_enabled) {
+        return -ENOTCONN;
+    }
+
+    len = snprintf(buf, sizeof(buf),
+                   "{\"event\":\"%s\",\"status\":\"%s\"}",
+                   name, status);
+
+    LOG_INF("Event: %s=%s", name, status);
     return ble_send(buf, len);
 }
 

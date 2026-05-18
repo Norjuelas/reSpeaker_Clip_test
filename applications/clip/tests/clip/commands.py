@@ -971,6 +971,7 @@ class ClipCommands:
             'agc': await self.get_agc(),
             'dereverb': await self.get_dereverb(),
             'auto_delete': await self.get_auto_delete(),
+            'brightness': await self.get_brightness(),
         }
 
     async def set_config_dict(self, config: Dict[str, Any], ignore_errors: bool = True) -> None:
@@ -989,7 +990,8 @@ class ClipCommands:
         """
         # Order matters: set mode before bitrate (bitrate range depends on mode)
         order = ['mode', 'bitrate', 'complexity', 'chunk_size',
-                 'noise_suppression', 'agc', 'dereverb', 'auto_delete']
+                 'noise_suppression', 'agc', 'dereverb', 'auto_delete',
+                 'brightness', 'name']
 
         for key in order:
             if key not in config:
@@ -1025,9 +1027,137 @@ class ClipCommands:
                         await self.set_auto_delete(days)
                     else:
                         await self.set_auto_delete(int(value))
+                elif key == 'brightness':
+                    await self.set_brightness(value)
+                elif key == 'name':
+                    await self.set_device_name(value)
             except (CommandError, ValueError) as e:
                 if not ignore_errors:
                     raise
                 # Silently skip invalid values during restore
                 # (e.g., bitrate out of range for current mode)
                 pass
+
+    # ==================== Device Info ====================
+
+    async def get_device_name(self) -> str:
+        """
+        Get BLE device name.
+
+        Returns:
+            Device name string
+        """
+        response = await self._send_and_check("AT+DEVICE?")
+        return response.get('device', response.get('name', ''))
+
+    async def set_device_name(self, name: str) -> bool:
+        """
+        Set BLE device name.
+
+        Args:
+            name: New device name (max 15 chars)
+
+        Returns:
+            True if successful
+        """
+        await self._send_and_check(f"AT+NAME={name}")
+        return True
+
+    # ==================== Display Commands ====================
+
+    async def get_brightness(self) -> int:
+        """
+        Get OLED brightness level.
+
+        Returns:
+            Brightness value (0-255)
+        """
+        response = await self._send_and_check("AT+BRIGHTNESS?")
+        data = response.get('data', {})
+        return data.get('value', response.get('value', 128))
+
+    async def set_brightness(self, brightness: int) -> bool:
+        """
+        Set OLED brightness.
+
+        Args:
+            brightness: Brightness value (0-255)
+
+        Returns:
+            True if successful
+        """
+        if not 0 <= brightness <= 255:
+            raise ValueError("Brightness must be 0-255")
+        await self._send_and_check(f"AT+BRIGHTNESS={brightness}")
+        return True
+
+    # ==================== WiFi Commands ====================
+
+    async def wifi_on(self) -> bool:
+        """
+        Enable WiFi AP mode.
+
+        Returns:
+            True if successful
+        """
+        await self._send_and_check("AT+WIFI=on")
+        return True
+
+    async def wifi_off(self) -> bool:
+        """
+        Disable WiFi AP mode.
+
+        Returns:
+            True if successful
+        """
+        await self._send_and_check("AT+WIFI=off")
+        return True
+
+    async def get_wifi_status(self) -> Dict[str, Any]:
+        """
+        Get WiFi status.
+
+        Returns:
+            Dict with WiFi status information
+        """
+        response = await self._send_and_check("AT+WIFI?")
+        data = response.get('data', {})
+        return {
+            'running': data.get('running', data.get('status') == 'on'),
+            'ssid': data.get('ssid', ''),
+            'clients': data.get('clients', 0),
+        }
+
+    # ==================== USB Commands ====================
+
+    async def usb_on(self) -> bool:
+        """
+        Enable USB CDC (serial) + MSC (SD card reader).
+
+        Returns:
+            True if successful
+        """
+        await self._send_and_check("AT+USB=on")
+        return True
+
+    async def usb_off(self) -> bool:
+        """
+        Disable USB CDC + MSC.
+
+        Returns:
+            True if successful
+        """
+        await self._send_and_check("AT+USB=off")
+        return True
+
+    async def get_usb_status(self) -> bool:
+        """
+        Get USB status.
+
+        Returns:
+            True if USB is enabled
+        """
+        response = await self._send_and_check("AT+USB?")
+        data = response.get('data', {})
+        status = data.get('status', response.get('value', 'off'))
+        return status == 'on'

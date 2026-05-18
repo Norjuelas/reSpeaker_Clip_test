@@ -15,6 +15,7 @@
 #include "audio.h"
 #include "at_server.h"
 #include "transport.h"
+#include "ble.h"
 
 LOG_MODULE_REGISTER(usb, CONFIG_CLIP_LOG_LEVEL);
 
@@ -44,6 +45,20 @@ static uint8_t rx_line_buf[CONFIG_CLIP_AT_MAX_CMD_LEN];
 static uint16_t rx_line_pos;
 
 static bool usb_active;
+static bool usb_vbus_present;
+
+/* Auto-disable timeout when USB enabled but no cable connected */
+#define USB_NO_VBUS_TIMEOUT_MS (10 * 60 * 1000) /* 10 minutes */
+static struct k_work_delayable usb_timeout_work;
+
+static void usb_timeout_handler(struct k_work *work)
+{
+	if (usb_active && !usb_vbus_present) {
+		LOG_INF("USB auto-disable: no VBUS for 10min");
+		usb_cdc_disable();
+		ble_notify_event("usb", "off");
+	}
+}
 
 struct usbd_context *usb_cdc_get_usbd(void)
 {
@@ -116,9 +131,18 @@ static void usb_msg_cb(struct usbd_context *const ctx,
 {
 	LOG_INF("USB: %s", usbd_msg_type_string(msg->type));
 
-	/* VBUS detection does not auto-enable USB; only AT+USB=on enables it */
-
-	if (msg->type == USBD_MSG_CDC_ACM_CONTROL_LINE_STATE) {
+	if (msg->type == USBD_MSG_VBUS_READY) {
+		usb_vbus_present = true;
+		/* VBUS present: cancel auto-disable timeout */
+		k_work_cancel_delayable(&usb_timeout_work);
+	} else if (msg->type == USBD_MSG_VBUS_REMOVED) {
+		usb_vbus_present = false;
+		/* VBUS removed: auto-disable USB immediately */
+		if (usb_active) {
+			usb_cdc_disable();
+			ble_notify_event("usb", "off");
+		}
+	} else if (msg->type == USBD_MSG_CDC_ACM_CONTROL_LINE_STATE) {
 		uint32_t dtr = 0U;
 
 		uart_line_ctrl_get(msg->dev, UART_LINE_CTRL_DTR, &dtr);
@@ -177,6 +201,9 @@ int usb_cdc_init(void)
 	/* Setup UART interrupt callback */
 	uart_irq_callback_set(cdc_dev, cdc_irq_handler);
 
+	/* Setup auto-disable work */
+	k_work_init_delayable(&usb_timeout_work, usb_timeout_handler);
+
 	/* USB starts disabled; use AT+USB=on to enable */
 	LOG_INF("USB CDC+MSC initialized (disabled)");
 	return 0;
@@ -196,6 +223,14 @@ int usb_cdc_enable(void)
 
 	usb_active = true;
 	LOG_INF("USB enabled");
+
+	ble_notify_event("usb", "on");
+
+	/* Start auto-disable timeout if no VBUS */
+	if (!usb_vbus_present) {
+		k_work_schedule(&usb_timeout_work, K_MSEC(USB_NO_VBUS_TIMEOUT_MS));
+	}
+
 	return 0;
 }
 
@@ -205,6 +240,7 @@ int usb_cdc_disable(void)
 		return 0;
 	}
 
+	k_work_cancel_delayable(&usb_timeout_work);
 	usbd_disable(&clip_usbd);
 	usb_active = false;
 	LOG_INF("USB disabled");

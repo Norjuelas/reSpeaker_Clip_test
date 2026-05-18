@@ -77,8 +77,13 @@ class ClipDevice:
         # Event loop reference for thread-safe queue puts
         self._loop = None
 
-        # Optional callback for unsolicited events (e.g. state_change)
+        # Optional callback for unsolicited events (e.g. state_change, wifi, usb, ble)
         # Signature: callback(event: dict) -> None
+        # Events: {"event":"state","state":"RECORDING",...}
+        #         {"event":"mark","session":"...","mark_count":N}
+        #         {"event":"ble","status":"connected"|"disconnected"}
+        #         {"event":"wifi","status":"on"|"off"}
+        #         {"event":"usb","status":"on"|"off"}
         self.event_callback = None
 
         # File transfer state
@@ -258,21 +263,18 @@ class ClipDevice:
                 if self._debug:
                     print(f"[send_command] Received response: {response_data[:100]}")
 
-                # Parse JSON to check if it's a state_change event
+                # Parse JSON to check if it's an event notification
                 try:
                     response = json.loads(response_data)
 
-                    # Check if this is a state_change event notification
-                    # These are auto-generated notifications, not command responses
-                    if isinstance(response, dict):
-                        # Check for nested event in data
-                        if 'data' in response and isinstance(response['data'], dict):
-                            if response['data'].get('event') == 'state_change':
-                                if self.event_callback:
-                                    self.event_callback(response)
-                                elif self._debug:
-                                    print(f"[send_command] Filtering out state_change event, waiting for actual response")
-                                continue  # Skip this and wait for next response
+                    # Check if this is an unsolicited event notification
+                    # Events have an "event" key at top level
+                    if isinstance(response, dict) and 'event' in response:
+                        if self.event_callback:
+                            self.event_callback(response)
+                        elif self._debug:
+                            print(f"[send_command] Event: {response}, waiting for command response")
+                        continue  # Skip events, wait for actual command response
 
                     # Not a state_change event, this is the actual response
                     return response
@@ -582,10 +584,6 @@ class ClipDevice:
     async def cancel(self):
         """Cancel the current transfer."""
         self._canceled = True
-
-    # Placeholder methods
-    async def start_notifications(self, callback):
-        pass
 
     async def get_file_data(self) -> bytes:
         return b''

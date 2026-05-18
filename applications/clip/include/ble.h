@@ -231,4 +231,15 @@ int ble_notify_state_change(const char *state, const char *session_id, int durat
  */
 int ble_notify_mark(const char *session_id, int mark_count);
 
+/**
+ * @brief Notify a generic event via BLE
+ *
+ * Sends JSON event: {"event":"<name>","status":"<status>"}
+ *
+ * @param name Event name (e.g. "usb", "wifi", "ble")
+ * @param status Status string (e.g. "on", "off", "connected", "disconnected")
+ * @return 0 on success, negative error code on failure
+ */
+int ble_notify_event(const char *name, const char *status);
+
 #endif /* CLIP_BLE_H */

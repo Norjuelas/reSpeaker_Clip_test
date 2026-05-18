@@ -21,6 +21,7 @@
 #include "transport_udp.h"
 #include "config.h"
 #include "clip_event.h"
+#include "ble.h"
 
 
 #ifdef CONFIG_NRF70_SR_COEX
@@ -263,7 +264,9 @@ static int wifi_enable_ap(struct net_if *iface)
 			continue;
 		}
 
-		return 0;
+	ble_notify_event("wifi", "off");
+
+	return 0;
 	}
 
 	return -ETIMEDOUT;
@@ -383,6 +386,8 @@ int wifi_on(void)
 
 	LOG_INF("WiFi AP started: SSID=%s ch=%d IP=%s port=%d",
 			ap_ssid, WIFI_AP_CHANNEL, CONFIG_NET_CONFIG_MY_IPV4_ADDR, WIFI_AP_UDP_PORT);
+
+	ble_notify_event("wifi", "on");
 
 	return 0;
 }
