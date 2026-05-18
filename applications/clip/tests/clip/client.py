@@ -320,7 +320,16 @@ class ClipDevice:
             try:
                 parsed = json.loads(response_str)
 
-                # Successfully parsed complete JSON (non-event response)
+                # Check if this is an unsolicited event - dispatch immediately
+                if isinstance(parsed, dict) and 'event' in parsed:
+                    if self._debug:
+                        print(f"[Notification] Event: {response_str[:80]}")
+                    self._response_buffer.clear()
+                    if self.event_callback:
+                        self.event_callback(parsed)
+                    return
+
+                # Command response - queue for send_command to pick up
                 if self._debug:
                     print(f"[Notification] Complete response, queuing to event loop")
                 self._response_buffer.clear()
@@ -346,12 +355,19 @@ class ClipDevice:
                     # Try to parse from current position
                     parsed = json.loads(remaining)
 
-                    # Success - queue this response
+                    # Success - check if event or command response
                     processed_count += 1
-                    if self._debug:
-                        print(f"[Notification] Complete response #{processed_count}, queuing")
 
-                    if self._loop and not self._loop.is_closed() and self._response_queue:
+                    if isinstance(parsed, dict) and 'event' in parsed:
+                        # Unsolicited event - dispatch immediately
+                        if self._debug:
+                            print(f"[Notification] Event #{processed_count}")
+                        if self.event_callback:
+                            self.event_callback(parsed)
+                    elif self._loop and not self._loop.is_closed() and self._response_queue:
+                        # Command response - queue for send_command
+                        if self._debug:
+                            print(f"[Notification] Complete response #{processed_count}, queuing")
                         self._loop.call_soon_threadsafe(
                             self._response_queue.put_nowait,
                             remaining
@@ -415,13 +431,20 @@ class ClipDevice:
                             complete_json = remaining[:end_idx]
 
                             # Verify it's valid
-                            json.loads(complete_json)
+                            parsed = json.loads(complete_json)
 
-                            # Queue it
                             processed_count += 1
-                            print(f"[Notification] Complete response #{processed_count}, queuing")
 
-                            if self._loop and not self._loop.is_closed() and self._response_queue:
+                            if isinstance(parsed, dict) and 'event' in parsed:
+                                # Event - dispatch immediately
+                                if self._debug:
+                                    print(f"[Notification] Event #{processed_count}")
+                                if self.event_callback:
+                                    self.event_callback(parsed)
+                            elif self._loop and not self._loop.is_closed() and self._response_queue:
+                                # Command response - queue
+                                if self._debug:
+                                    print(f"[Notification] Complete response #{processed_count}, queuing")
                                 self._loop.call_soon_threadsafe(
                                     self._response_queue.put_nowait,
                                     complete_json

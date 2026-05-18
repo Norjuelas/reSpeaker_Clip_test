@@ -264,8 +264,6 @@ static int wifi_enable_ap(struct net_if *iface)
 			continue;
 		}
 
-	ble_notify_event("wifi", "off");
-
 	return 0;
 	}
 
@@ -399,6 +397,10 @@ int wifi_off(void)
 
 	cancel_wifi_timeout();
 
+	if (!ap_running) {
+		return 0;
+	}
+
 	if (!iface)
 	{
 		return -ENODEV;
@@ -437,6 +439,8 @@ int wifi_off(void)
 			LOG_INF("WiFi interface down");
 		}
 	}
+
+	ble_notify_event("wifi", "off");
 
 	return 0;
 }
