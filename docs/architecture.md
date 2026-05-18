@@ -50,7 +50,7 @@ The reSpeaker Clip is an embedded audio recording device built on Zephyr RTOS, r
 |                   Application Layer                      |
 |  +-------------+  +-------------+  +-----------------+  |
 |  | Event       |  | AT Server   |  | Button          |  |
-|  | Dispatcher  |  | (26 cmds)   |  | Handler         |  |
+|  | Dispatcher  |  | (29 cmds)   |  | Handler         |  |
 |  +-------------+  +-------------+  +-----------------+  |
 +---------------------------------------------------------+
 |                    Service Layer                         |
@@ -106,7 +106,7 @@ The reSpeaker Clip is an embedded audio recording device built on Zephyr RTOS, r
 |  | AT Server     |  | Transport      |  | Transfer    |  |
 |  | (dedicated    |  | Abstraction    |  | Manager     |  |
 |  |  thread)      |  | Layer          |  | (dedicated  |  |
-|  | 26 commands   |  | BLE | UDP      |  |  thread)    |  |
+|  | 29 commands   |  | BLE | UDP      |  |  thread)    |  |
 |  +---------------+  +----------------+  +-------------+  |
 |                                                         |
 |  +---------------------------------------------------+ |
@@ -261,7 +261,7 @@ struct at_command {
 };
 ```
 
-**Registered Commands (26):**
+**Registered Commands (29):**
 
 | Command | Operations | Description |
 |---------|-----------|-------------|
@@ -291,7 +291,9 @@ struct at_command {
 | PURGE | EXEC | Purge old sessions by auto-delete policy |
 | PURGEABLE | QUERY | Get count of purgeable sessions |
 | FORMAT | EXEC | Format SD card |
-| WIFI | QUERY | Get WiFi info (SSID, IP, status) |
+| WIFI | SET, QUERY | Start/stop WiFi AP, query status |
+| USB | SET, QUERY | Enable/disable USB CDC, query status (default: off) |
+| NAME | SET, QUERY | Set/get custom BLE device name |
 
 **Response Format**: JSON over the originating transport.
 ```json
@@ -417,6 +419,14 @@ Bitrate and complexity are Kconfig per-mode constants, not runtime configurable:
 
 **Bookmarks**: Binary format (`marks.bin`) with 4-byte magic "MRK1", 4-byte count, then entries.
 
+**SD Card Log Persistence**: Warning and error level logs are persisted to the SD card for field debugging.
+- Enabled by `CONFIG_LOG_BACKEND_FS=y`
+- Log directory: `/SD:/LOG/`
+- Log files: `log.000001` ... `log.000010` (prefix `log.`, 64KB per file, max 10 files)
+- Circular overwrite: oldest file is replaced when limit is reached
+- Log level: `LOG_LEVEL_WRN` (warnings and errors only, to minimize write wear)
+- Backend is activated after SD card mount in `clip_init()`
+
 ### 3.7 Transfer (transfer.c)
 
 **Purpose**: File-level transfer over BLE or UDP with retransmit support.
@@ -462,9 +472,24 @@ enum transfer_state {
 
 **Manual Start**: WiFi radio is NOT started at boot (`CONFIG_NRF_WIFI_IF_AUTO_START=n`). `wifi_on()` brings up the interface and starts the AP. `wifi_off()` stops AP and powers off radio. This saves ~30mA when WiFi is not in use.
 
+**WiFi Auto-Off**: WiFi AP automatically disables after a configurable timeout (`CONFIG_CLIP_WIFI_TIMEOUT_MS`, default 180000ms = 3 minutes). The timeout timer starts when WiFi is enabled and restarts on client disconnect. Set to 0 to disable auto-off. This prevents unnecessary power drain when WiFi is left on but unused.
+
 **BLE/WiFi Coexistence**: `CONFIG_NRF70_SR_COEX=y` with PTA configuration for 5GHz band.
 
-### 3.9 UDP Server (wifi_udp.c)
+### 3.8a USB CDC Security (usb_cdc.c)
+
+**Purpose**: USB CDC serial interface with security controls for production use.
+
+**Default State**: USB CDC is **disabled** at boot. This prevents unauthorized serial console access in the field.
+
+**Control**: The `AT+USB` command enables/disables USB CDC:
+- `AT+USB=on`: Enable USB CDC, serial console becomes available
+- `AT+USB=off`: Disable USB CDC
+- `AT+USB?`: Query current USB CDC status (returns `{"status":"on"}` or `{"status":"off"}`)
+
+**Auto-Off**: USB CDC automatically disables when the USB cable is physically disconnected. This prevents the interface from remaining enabled after debugging sessions.
+
+**Security Rationale**: In production, the USB CDC console exposes AT commands and log output. By defaulting to disabled and requiring explicit BLE-enabled activation, the attack surface is reduced for end-user deployments.
 
 **Purpose**: Receive AT commands and ACK frames from WiFi clients.
 
@@ -509,6 +534,25 @@ enum transfer_state {
 - Audio Visualization: Notify (packed energy level data)
 
 **Pairing**: BLE SMP with bonding, 1 max paired device, encrypted connection.
+
+### 3.11a BLE Event Notifications
+
+**Purpose**: Push real-time state and status events to the connected BLE client via the Response characteristic (notify).
+
+Event notifications are JSON objects sent over the BLE GATT Response characteristic whenever the device state changes or a significant event occurs. The mobile app can subscribe to these notifications to update its UI without polling.
+
+**Event Types:**
+
+| Event | Format | Trigger |
+|-------|--------|---------|
+| State change | `{"event":"state","state":"RECORDING","session":"..."}` | Recording start/stop/pause/resume |
+| State change (with duration) | `{"event":"state","state":"IDLE","session":"...","duration":120}` | Recording stop (includes duration in seconds) |
+| Bookmark added | `{"event":"mark","session":"...","mark_count":3}` | Bookmark added during recording |
+| BLE status | `{"event":"ble","status":"connected"}` / `"disconnected"` | BLE connection change |
+| WiFi status | `{"event":"wifi","status":"on"}` / `"off"` | WiFi AP enabled/disabled |
+| USB status | `{"event":"usb","status":"on"}` / `"off"` | USB CDC enabled/disabled |
+
+**Implementation**: Events are dispatched immediately from the event processing context (not deferred). `ble_notify_state_change()` handles state transitions, `ble_notify_event()` handles status events (BLE/WiFi/USB). Both use the same GATT notify mechanism on the Response characteristic.
 
 ### 3.12 Battery Monitor (battery.c)
 
@@ -870,6 +914,7 @@ Managed independently by the transfer subsystem. Does not affect device state di
 | CLIP_UDP_HEARTBEAT_INTERVAL_MS | 5000 | UDP heartbeat interval |
 | CLIP_UDP_CONNECTION_TIMEOUT_MS | 30000 | UDP connection timeout |
 | CLIP_STORAGE_CHUNK_SIZE | 4096 | Storage write buffer size |
+| CLIP_WIFI_TIMEOUT_MS | 180000 | WiFi AP auto-off timeout (ms), 0 to disable |
 
 ### 8.2 Runtime Configuration (Zephyr Settings on LittleFS)
 
@@ -904,9 +949,11 @@ Managed independently by the transfer subsystem. Does not affect device state di
 
 | Partition | Size | Purpose |
 |-----------|------|---------|
-| MCUboot | 64 KB | Secure bootloader |
-| Secure image | 256 KB | Application firmware |
-| Non-secure image | 192 KB | Network core + WiFi |
+| MCUboot | 84 KB | Secure bootloader |
+| Secure image (slot0) | 268 KB | Application firmware (secure) |
+| Non-secure image (slot0_ns) | 192 KB | Network core + WiFi |
+| OTA slot 1 (slot1) | 256 KB | OTA update staging (secure) |
+| OTA slot 1 NS (slot1_ns) | 192 KB | OTA update staging (non-secure) |
 | External SPI flash (lfs-storage) | ~6.8 MB | LittleFS (settings, OTA patches) |
 
 ## 10. Hardware Interfaces

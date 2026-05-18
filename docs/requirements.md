@@ -146,6 +146,8 @@ ReSpeaker Clip is a portable Bluetooth recording device that provides high-quali
 
 **FR-2.1.5**: The system shall handle SD card write errors gracefully (close file, continue recording without storage)
 
+**FR-2.1.6**: The system shall persist warning and error level logs to the SD card for field debugging (`CONFIG_LOG_BACKEND_FS=y`, stored in `/SD:/LOG/`, WRN+ERR level only, 64KB files x10 max, circular overwrite)
+
 #### 3.2.2 Session Organization
 
 **FR-2.2.1**: The system shall create session directories named `YYYYMMDDHHMMSS` (14 digits)
@@ -211,6 +213,10 @@ ReSpeaker Clip is a portable Bluetooth recording device that provides high-quali
 
 **FR-3.2.7**: The system shall support audio visualization data via BLE (7-byte packed energy level history, sent every ~200ms)
 
+**FR-3.2.8**: The system shall send BLE event notifications for real-time state monitoring. Events shall include: state changes (IDLE/RECORDING/PAUSED with session ID and duration), bookmark additions (session ID, mark count), and status events (BLE connected/disconnected, WiFi on/off, USB on/off). Events are JSON objects sent via GATT notify on the Response characteristic.
+
+**FR-3.2.9**: BLE event notifications shall be dispatched immediately when events occur (not deferred), enabling the mobile app to update its UI without polling.
+
 #### 3.3.3 WiFi UDP Communication
 
 **FR-3.3.1**: The system shall support WiFi AP mode via nRF7002 (SSID: `ClipAP_XXXX`, password: `12345678`)
@@ -224,6 +230,8 @@ ReSpeaker Clip is a portable Bluetooth recording device that provides high-quali
 **FR-3.3.5**: Frame types: DATA (0x01), FILE_ACK (0x03), FILE_START (0x10), FILE_END (0x11), TRANSFER_DONE (0x12), AT_RESP (0x20), HEARTBEAT (0x30)
 
 **FR-3.3.6**: WiFi shall be started manually (not auto-start) to save power when not in use
+
+**FR-3.3.6a**: WiFi AP shall automatically disable after a configurable timeout (`CONFIG_CLIP_WIFI_TIMEOUT_MS`, default 3 minutes) to prevent unnecessary power drain when left enabled but unused. Timer restarts on client disconnect. Set to 0 to disable.
 
 **FR-3.3.7**: WiFi driver shall use WiFi/BLE coexistence (MPSL_CX + NRF70_SR_COEX)
 
@@ -251,9 +259,7 @@ ReSpeaker Clip is a portable Bluetooth recording device that provides high-quali
 | `AT+DEVICE` | QUERY/EXEC | Get device name |
 | `AT+VERSION` | EXEC | Get firmware version |
 | `AT+TIME` | SET/GET/EXEC | Set time (Unix timestamp) or get current time (ISO 8601) |
-| `AT+MODE` | SET/GET/EXEC | Set/get recording mode (normal/enhanced) |
-| `AT+NOISE` | SET/GET/EXEC | Set/get noise suppression level (0-60 dB) |
-| `AT+DEREVERB` | SET/GET/EXEC | Set/get dereverberation (on/off) |
+| `AT+MODE` | SET/GET/EXEC | Set/get recording mode (normal/enhanced/stereo/merge) |
 | `AT+AUTODEL` | SET/GET/EXEC | Set/get auto-delete policy (off/0-30 days) |
 | `AT+BRIGHTNESS` | SET/GET/EXEC | Set/get OLED brightness (0-255) |
 | `AT+POWEROFF` | EXEC | Shutdown device |
@@ -274,6 +280,8 @@ ReSpeaker Clip is a portable Bluetooth recording device that provides high-quali
 | `AT+PURGEABLE` | EXEC | List fully synced sessions eligible for cleanup |
 | `AT+FORMAT` | EXEC | Format SD card (delete all data) |
 | `AT+WIFI` | SET/GET/EXEC | Start/stop WiFi AP, query status |
+| `AT+USB` | SET/GET | Enable/disable USB CDC (default: off, auto-off on disconnect) |
+| `AT+NAME` | SET/GET | Set/get custom BLE device name |
 
 #### 3.3.6 File Transfer Protocol
 
@@ -506,6 +514,8 @@ ERROR           RECORDING   -        -        -        -        -        -      
 
 **NFR-3.5**: Factory reset shall clear all sensitive data (config, SD card, BLE bonds)
 
+**NFR-3.6**: USB CDC serial interface shall be disabled by default. It shall only be enabled via the `AT+USB=on` command over BLE, and shall automatically disable when the USB cable is physically disconnected. This prevents unauthorized serial console access in production devices.
+
 ### 5.4 Compatibility Requirements
 
 **NFR-4.1**: The system shall be compatible with BLE 5.0+ central devices
@@ -523,6 +533,8 @@ ERROR           RECORDING   -        -        -        -        -        -      
 **NFR-5.1**: The system shall support firmware updates via BLE (MCUmgr SMP OTA DFU, dual-image)
 
 **NFR-5.2**: The system shall log errors for debugging (configurable log level via Kconfig)
+
+**NFR-5.2a**: The system shall persist warning and error level logs to the SD card (`/SD:/LOG/`) for field debugging. Logs are stored in rotating files (64KB each, max 10 files) with circular overwrite. This enables post-mortem analysis of issues that occur in the field without requiring a live serial connection.
 
 **NFR-5.3**: The system shall provide version information via AT+VERSION
 
@@ -542,9 +554,11 @@ ERROR           RECORDING   -        -        -        -        -        -      
 
 ### 6.2 Memory Constraints
 
-**HC-2.1**: Secure Flash: 256KB for application image
+**HC-2.1**: Secure Flash: 268KB for application image (slot0, after 84KB MCUboot bootloader)
 
-**HC-2.2**: Non-secure Flash: 192KB available
+**HC-2.2**: Non-secure Flash: 192KB available (network core + WiFi)
+
+**HC-2.2a**: OTA slot: 256KB secure + 192KB non-secure for firmware update staging
 
 **HC-2.3**: External SPI Flash: 64MB total (PY25Q64H), ~6.8MB LittleFS for settings
 
@@ -563,6 +577,8 @@ ERROR           RECORDING   -        -        -        -        -        -      
 - Idle: < 10mA
 - Transfer: < 40mA
 - Sleep: < 1mA
+
+**HC-3.5**: WiFi AP shall auto-disable after 3 minutes of inactivity (`CONFIG_CLIP_WIFI_TIMEOUT_MS=180000`) to maintain idle power targets when WiFi is left on but unused.
 
 ### 6.4 Peripheral Utilization
 

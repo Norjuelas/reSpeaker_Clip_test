@@ -186,14 +186,13 @@ Execute an operation or retrieve status:
 - `AT+FACTORY` - Factory reset
 - `AT+REBOOT` - Reboot device
 - `AT+WIFI` - Start WiFi AP (equivalent to `AT+WIFI=on`)
+- `AT+USB` - Enable USB CDC+MSC
 
 #### SET Commands (With Parameters)
 Format: `AT+XX=<value>`
 
 Set configuration or execute with parameters:
-- `AT+MODE=<normal|enhanced>` - Set recording mode
-- `AT+NOISE=<0-60>` - Set noise suppression level
-- `AT+DEREVERB=<on|off>` - Enable/disable dereverberation
+- `AT+MODE=<normal|enhanced|stereo|merge>` - Set recording mode
 - `AT+AUTODEL=<off|0|1-30>` - Set auto-delete policy
 - `AT+BRIGHTNESS=<0-255>` - Set OLED brightness
 - `AT+TIME=<unix_ts>` - Set system time
@@ -206,6 +205,7 @@ Set configuration or execute with parameters:
 - `AT+MARKS=<session>` - Get session bookmarks
 - `AT+DOWNLOAD=<session/file>` - Download file
 - `AT+WIFI=<on|off>` - Start/stop WiFi AP
+- `AT+USB=<on|off>` - Enable/disable USB CDC+MSC
 
 #### GET Commands (Query)
 Format: `AT+XX?`
@@ -214,13 +214,12 @@ Query current configuration:
 - `AT+DEVICE?` - Get device name
 - `AT+NAME?` - Get user-defined device name
 - `AT+MODE?` - Get current mode
-- `AT+NOISE?` - Get noise suppression level
-- `AT+DEREVERB?` - Get dereverberation setting
 - `AT+AUTODEL?` - Get auto-delete policy
 - `AT+BRIGHTNESS?` - Get OLED brightness
 - `AT+TIME?` - Get current time
 - `AT+PAIR?` - Get pairing status
 - `AT+WIFI?` - Get WiFi AP status
+- `AT+USB?` - Get USB status
 
 ### 3.2 JSON Message Format
 
@@ -349,7 +348,7 @@ AT+VERSION
 ```json
 {
   "ok": true,
-  "firmware": "1.0.0",
+  "firmware": "0.0.1",
   "hardware": "1.0",
   "sdk": "3.2.1",
   "build": "2024-02-03"
@@ -1010,67 +1009,6 @@ Bitrate and complexity are fixed per mode and configured at build time via Kconf
 
 ---
 
-##### AT+NOISE - Noise Suppression
-
-Configure SpeexDSP noise suppression.
-
-**Request (Set):**
-```
-AT+NOISE=40
-```
-
-**Request (Get):**
-```
-AT+NOISE?
-```
-
-**Response:**
-```json
-{
-  "ok": true,
-  "value": 40
-}
-```
-
-**Valid Range:** 0 - 60 dB
-**Default:** 0 (off)
-
----
-
-##### AT+DEREVERB - Dereverberation
-
-Configure SpeexDSP dereverberation.
-
-**Request (Set):**
-```
-AT+DEREVERB=on
-```
-
-**Request (Get):**
-```
-AT+DEREVERB?
-```
-
-**Response (Set):**
-```json
-{
-  "ok": true,
-  "data": {"dereverb": "on"}
-}
-```
-
-**Response (Get):**
-```json
-{
-  "ok": true,
-  "data": {"dereverb": "off"}
-}
-```
-
-**Parameters:** `<on|off>` (or `1|0`)
-
----
-
 ##### AT+BRIGHTNESS - OLED Brightness
 
 Get or set the OLED display brightness (contrast). The value is saved to NVS and applied automatically on every boot.
@@ -1253,6 +1191,58 @@ AT+WIFI?
 **Constraints:**
 - Cannot start WiFi while recording
 - Cannot start recording while WiFi is active
+
+**Auto-off:** WiFi AP automatically stops after 3 minutes if no client connects.
+
+---
+
+##### AT+USB - USB CDC+MSC Control
+
+Enable or disable USB CDC (serial console) and MSC (mass storage / SD card access).
+
+**Request (Enable):**
+```
+AT+USB=on
+```
+
+**Request (Disable):**
+```
+AT+USB=off
+```
+
+**Request (Query):**
+```
+AT+USB?
+```
+
+**Response (Enable/Disable):**
+```json
+{
+  "ok": true,
+  "data": {"status": "on"}
+}
+```
+
+**Response (Query):**
+```json
+{
+  "ok": true,
+  "data": {"status": "on"}
+}
+```
+
+or
+
+```json
+{
+  "ok": true,
+  "data": {"status": "off"}
+}
+```
+
+**Auto-disable behavior:**
+- USB automatically disables on cable unplug
+- USB automatically disables after 10 minutes without a USB cable connected
 
 ---
 
@@ -2013,6 +2003,57 @@ Real-time audio energy data is sent via the Audio Visualization characteristic (
 }
 ```
 
+### 7.4 BLE Event Notifications
+
+Events are pushed to the app via the Response Send characteristic (`6E400003`) as JSON objects. All events contain an `"event"` key, which distinguishes them from AT command responses (which use `"ok"` as the top-level key without `"event"`).
+
+**General Format:**
+```json
+{"event":"<type>","status":"<value>"}
+```
+
+#### Event Types
+
+| Event Type | Status Values | Description |
+|------------|---------------|-------------|
+| `ble` | `connected`, `disconnected` | BLE connection state change |
+| `wifi` | `on`, `off` | WiFi AP started or stopped |
+| `usb` | `on`, `off` | USB CDC+MSC enabled or disabled |
+
+**Examples:**
+
+BLE connected:
+```json
+{"event":"ble","status":"connected"}
+```
+
+BLE disconnected:
+```json
+{"event":"ble","status":"disconnected"}
+```
+
+WiFi AP started:
+```json
+{"event":"wifi","status":"on"}
+```
+
+WiFi AP stopped (manual or auto-off):
+```json
+{"event":"wifi","status":"off"}
+```
+
+USB enabled:
+```json
+{"event":"usb","status":"on"}
+```
+
+USB disabled (manual or auto-disable):
+```json
+{"event":"usb","status":"off"}
+```
+
+**Client handling:** When receiving a JSON message on the Response Send characteristic, check for the `"event"` key. If present, the message is an event notification rather than a command response.
+
 ## 8. Error Codes
 
 ### 8.1 Error Response Format
@@ -2283,9 +2324,8 @@ To prevent BLE congestion:
 | AT+FORMAT | EXEC | Format SD card | 3.3.7 |
 | AT+POWEROFF | EXEC | Power off device | 3.3.7 |
 | AT+WIFI | EXEC/GET/SET | WiFi AP control | 3.3.7 |
+| AT+USB | GET/SET | USB CDC+MSC control | 3.3.7 |
 | AT+MODE | GET/SET | Recording mode | 3.3.7 |
-| AT+NOISE | GET/SET | Noise suppression | 3.3.7 |
-| AT+DEREVERB | GET/SET | Dereverberation | 3.3.7 |
 | AT+BRIGHTNESS | GET/SET | OLED brightness | 3.3.7 |
 | AT+PAIR | GET/SET | BLE pairing | 3.3.7 |
 | AT+FACTORY | SET | Factory reset | 3.3.7 |

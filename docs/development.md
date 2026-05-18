@@ -1,6 +1,6 @@
 # reSpeaker Clip - Development Log
 
-## Current State (2026-04-17)
+## Current State (2026-05-18)
 
 ### Implemented Features
 
@@ -11,14 +11,18 @@
 | SpeexDSP Processing | Noise suppression, dereverberation (no AGC - FIXED_POINT limitation) |
 | Audio Modes | Normal (stereo, 16kbps/ch, complexity 0), Enhanced (mono, 32kbps, complexity 1) |
 | SD Card Storage | FAT32, session directories under /REC/ |
+| SD Card Log Persistence | LOG_BACKEND_FS, /SD:/LOG/, WRN+ERR only, 64KB files x10 max |
 | Session Metadata | session.json, files.lst, marks.bin |
 | Bookmark System | Binary marks.bin with notes |
-| BLE GATT Service | Command, Response, File Data characteristics |
-| AT Command Protocol | 26 commands |
+| BLE GATT Service | Command, Response, File Data, Event characteristics |
+| BLE Event Notifications | State changes, marks, BLE/WiFi/USB events via notify |
+| AT Command Protocol | 29 commands |
 | File Transfer (BLE) | Pause/resume/cancel, session-level resume |
 | File Transfer (UDP) | Fire-and-forget with per-file CRC32, file-level retransmit |
 | Transport Abstraction | BLE + UDP backends via transport.h |
 | WiFi AP Mode | SSID: ClipAP_XXXX, Password: 12345678, IP: 192.168.4.1, Port: 8089 |
+| WiFi Auto-Off | 3 min timeout (CONFIG_CLIP_WIFI_TIMEOUT_MS=180000) |
+| USB CDC Security | Disabled by default, AT+USB control, auto-off on disconnect |
 | NVS Configuration | 5 settings persist: mode, noise, autodel, dereverb, brightness |
 | Battery Monitoring | NPM1300 PMIC + nRF Fuel Gauge (SoC smoothing) |
 | Button Handler | Custom input driver: long-press record, short-press bookmark, single-click status |
@@ -33,8 +37,9 @@
 | WiFi Client Detection | WiFi AP client connected icon in status bar |
 | Session Sorting | AT+LIST sessions sorted newest-first via shared cache |
 | Transfer Cancel | Thread-safe cancel via volatile flag (no race with transfer thread) |
+| Device Naming | AT+NAME for custom BLE device name |
 
-### AT Commands (26)
+### AT Commands (29)
 
 | Command | Type | Purpose |
 |---------|------|---------|
@@ -59,12 +64,12 @@
 | AT+POWEROFF | EXEC | Power off (ship mode) |
 | AT+WIFI | EXEC/GET/SET | WiFi AP control |
 | AT+MODE | GET/SET | Recording mode |
-| AT+NOISE | GET/SET | Noise suppression |
-| AT+DEREVERB | GET/SET | Dereverberation |
 | AT+BRIGHTNESS | GET/SET | OLED brightness |
 | AT+PAIR | GET/SET | BLE pairing |
 | AT+FACTORY | SET | Factory reset |
 | AT+REBOOT | EXEC | Reboot |
+| AT+USB | GET/SET | USB CDC control (default: off, auto-off on disconnect) |
+| AT+NAME | GET/SET | Custom BLE device name |
 
 ### Thread Architecture
 
@@ -78,8 +83,8 @@
 
 ### Memory Usage
 
-- FLASH: ~79 KB (secure app image)
-- RAM: ~302 KB (total system)
+- FLASH: ~915 KB (app core, secure + non-secure image)
+- RAM: ~445 KB (total system SRAM, secure + non-secure + shared)
 
 ### Recording Modes
 
@@ -115,6 +120,19 @@ minicom -D /dev/ttyACM0 -b 115200
 ---
 
 ## Change History
+
+### 2026-05-18 - v0.0.1 Release
+
+- Version reset to 0.0.1 for initial release
+- SD card log persistence: LOG_BACKEND_FS writes WRN+ERR logs to /SD:/LOG/, 64KB files x10 max, circular overwrite
+- USB CDC security: disabled by default, controlled via AT+USB command, auto-disables on USB disconnect
+- BLE event notifications: state changes (recording/idle/paused), bookmark marks, BLE/WiFi/USB status events sent as JSON via GATT notify
+- WiFi auto-off: 3 minute timeout (CONFIG_CLIP_WIFI_TIMEOUT_MS=180000), timer resets on client disconnect
+- BLE security: LE Secure Connections pairing, encrypted link required
+- Partition resize: mcuboot 96KB -> 84KB, app core slot0 940KB (268KB secure + 192KB non-secure + 256KB OTA slot + 192KB OTA non-secure)
+- AT+NAME command: custom BLE device name, stored in NVS
+- AT+USB command: enable/disable USB CDC, query status
+- Memory: app core ~915KB FLASH, ~445KB RAM
 
 ### 2026-04-17 - UI Overhaul and Bug Fixes (v2.0.5)
 
