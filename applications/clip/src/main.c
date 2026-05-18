@@ -6,6 +6,8 @@
 
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
+#include <zephyr/logging/log_backend.h>
+#include <zephyr/logging/log_ctrl.h>
 #include <app_version.h>
 #include <zephyr/sys/util.h>
 #include <zephyr/sys/mem_stats.h>
@@ -232,6 +234,18 @@ int clip_init(void)
     } else {
         /* SD card mounted - check for unsynced sessions */
         display_check_untransferred();
+
+#ifdef CONFIG_LOG_BACKEND_FS
+        /* FS backend: only save WRN and ERR to SD card */
+        const struct log_backend *fs_be = log_backend_get_by_name("log_backend_fs");
+        if (fs_be) {
+            uint32_t src_cnt = log_src_cnt_get(0);
+            for (uint32_t i = 0; i < src_cnt; i++) {
+                log_filter_set(fs_be, 0, i, LOG_LEVEL_WRN);
+            }
+            LOG_WRN("FS log backend active (WRN+ERR only)");
+        }
+#endif
     }
 
     /* Initialize USB CDC ACM + MSC (serial port + SD card drive) */

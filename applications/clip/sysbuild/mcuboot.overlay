@@ -40,7 +40,7 @@
 	};
 };
 
-/* I2C1 and NPM1300 for motor haptic */
+/* I2C1 and NPM1300 for SD card power (LDO2 only, no motor) */
 &i2c1 {
 	status = "okay";
 	/delete-property/ zephyr,pm-device-runtime-auto;
@@ -53,7 +53,7 @@
 	status = "okay";
 };
 &npm1300_buck1 {
-	status = "okay";
+	status = "disabled";
 };
 &npm1300_gpio {
 	status = "disabled";
@@ -65,7 +65,7 @@
 	status = "disabled";
 };
 &npm1300_ldo2 {
-	status = "disabled";
+	status = "okay";
 };
 &npm1300_charger {
 	status = "disabled";
@@ -108,12 +108,6 @@
 };
 
 /* Disable regulators not needed in bootloader */
-&npm1300_ldo1 {
-	status = "disabled";
-};
-&npm1300_ldo2 {
-	status = "disabled";
-};
 &oled_reg {
 	status = "okay";
 };

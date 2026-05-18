@@ -3,10 +3,9 @@
 # WiFi firmware stored in internal flash (not ext flash)
 #
 # Internal flash layout (1MB = 1024KB total):
-#   0x000000 - 0x017fff : mcuboot (96KB)
-#   0x018000 - 0xfffff  : mcuboot_primary / app (928KB = 0xe7000)
-#   storage partition removed - 16KB reclaimed from settings_storage
-#   96 + 928 = 1024KB (full 1MB utilized)
+#   0x000000 - 0x014fff : mcuboot (84KB)
+#   0x015000 - 0xfffff  : mcuboot_primary / app (940KB = 0xeb000)
+#   84 + 940 = 1024KB (full 1MB utilized)
 #
 # External flash layout:
 #   0x000000 - 0x0effff : mcuboot_secondary (app OTA slot, 960KB=15x64KB, 64KB-aligned)
@@ -18,17 +17,17 @@
 # ============================================================
 mcuboot:
   address: 0x0
-  size: 0x18000
+  size: 0x15000
   region: flash_primary
 
 mcuboot_pad:
-  address: 0x18000
+  address: 0x15000
   size: 0x200
   region: flash_primary
 
 app:
-  address: 0x18200
-  size: 0xe7e00
+  address: 0x15200
+  size: 0xeae00
   region: flash_primary
 
 mcuboot_primary:
@@ -36,16 +35,16 @@ mcuboot_primary:
   - mcuboot_pad
   - app
   span: *id001
-  address: 0x18000
-  size: 0xe7000
+  address: 0x15000
+  size: 0xeb000
   region: flash_primary
 
 mcuboot_primary_app:
   orig_span: &id002
   - app
   span: *id002
-  address: 0x18200
-  size: 0xe7e00
+  address: 0x15200
+  size: 0xeae00
   region: flash_primary
 
 # ============================================================
