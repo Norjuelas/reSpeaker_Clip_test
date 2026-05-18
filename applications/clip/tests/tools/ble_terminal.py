@@ -12,6 +12,7 @@ Usage:
 import asyncio
 import json
 import sys
+import threading
 from pathlib import Path
 
 # Add parent directory to path for imports
@@ -49,18 +50,18 @@ def _format_event(event: dict) -> str:
     return f"[EVENT] {json.dumps(event)}"
 
 
-def _event_callback(event: dict):
-    """Print events to stderr (unbuffered) to avoid input() blocking."""
-    msg = f"\n{_format_event(event)}\nclip> "
-    sys.stderr.write(msg)
-    sys.stderr.flush()
-
-
 async def interactive_mode(device: ClipDevice):
     """Interactive terminal mode using the SDK."""
     commands = ClipCommands(device)
 
-    # Register event callback to display unsolicited events
+    # Event queue: callback thread -> async loop
+    event_queue = asyncio.Queue()
+
+    def _event_callback(event: dict):
+        """Queue events for display in async loop."""
+        if device._loop and not device._loop.is_closed():
+            device._loop.call_soon_threadsafe(event_queue.put_nowait, event)
+
     device.event_callback = _event_callback
 
     print("\n" + "=" * 50)
@@ -86,54 +87,63 @@ async def interactive_mode(device: ClipDevice):
     except Exception as e:
         print(f"Error: {e}")
 
-    while True:
+    loop = asyncio.get_event_loop()
+    stopped = False
+
+    while not stopped:
+        # Read input in executor so async loop stays free
+        print("clip> ", end="", flush=True)
+
         try:
-            cmd = input("clip> ").strip()
-
-            if not cmd:
-                continue
-
-            # Handle exit commands
-            if cmd.lower() in ['quit', 'exit', 'q']:
-                print("Exiting...")
-                break
-
-            # Handle aliases
-            cmd_upper = cmd.upper()
-            if cmd_upper == "START":
-                cmd = "AT+START"
-            elif cmd_upper == "STOP":
-                cmd = "AT+STOP"
-            elif cmd_upper == "PAUSE":
-                cmd = "AT+PAUSE"
-            elif cmd_upper == "RESUME":
-                cmd = "AT+RESUME"
-            elif cmd_upper == "MARK":
-                cmd = "AT+MARK"
-            elif cmd_upper in ["GSTAT", "STATUS"]:
-                cmd = "AT+GSTAT"
-            elif cmd_upper == "VERSION":
-                cmd = "AT+VERSION"
-
-            # Add AT prefix if not present
-            if not cmd.upper().startswith("AT+") and not cmd.upper().startswith("AT "):
-                cmd = "AT+" + cmd
-
-            # Send command via SDK
-            print(f"> {cmd}")
-            try:
-                resp = await device.send_command(cmd)
-                print(f"< {json.dumps(resp, indent=2)}")
-            except Exception as e:
-                print(f"Error: {e}")
-
-        except EOFError:
-            print("\nExiting...")
+            cmd = await loop.run_in_executor(None, sys.stdin.readline)
+        except Exception:
             break
-        except KeyboardInterrupt:
-            print("\nUse 'quit' to exit")
+
+        if not cmd:  # EOF
+            break
+        cmd = cmd.strip()
+
+        if not cmd:
+            continue
+
+        # Handle exit commands
+        if cmd.lower() in ['quit', 'exit', 'q']:
+            print("Exiting...")
+            break
+
+        # Handle aliases
+        cmd_upper = cmd.upper()
+        if cmd_upper == "START":
+            cmd = "AT+START"
+        elif cmd_upper == "STOP":
+            cmd = "AT+STOP"
+        elif cmd_upper == "PAUSE":
+            cmd = "AT+PAUSE"
+        elif cmd_upper == "RESUME":
+            cmd = "AT+RESUME"
+        elif cmd_upper == "MARK":
+            cmd = "AT+MARK"
+        elif cmd_upper in ["GSTAT", "STATUS"]:
+            cmd = "AT+GSTAT"
+        elif cmd_upper == "VERSION":
+            cmd = "AT+VERSION"
+
+        # Add AT prefix if not present
+        if not cmd.upper().startswith("AT+") and not cmd.upper().startswith("AT "):
+            cmd = "AT+" + cmd
+
+        # Send command
+        print(f"> {cmd}")
+        try:
+            resp = await device.send_command(cmd)
+            print(f"< {json.dumps(resp, indent=2)}")
         except Exception as e:
             print(f"Error: {e}")
+
+        # Drain queued events after each command
+        while not event_queue.empty():
+            event = event_queue.get_nowait()
+            print(_format_event(event))
 
 
 async def main():
