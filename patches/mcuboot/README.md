@@ -10,6 +10,7 @@ cd ~/ncs/v3.2.1/bootloader/mcuboot
 git apply /path/to/ReSpeaker_Clip/patches/mcuboot/0001-require-vbus-for-gpio-serial-recovery.patch
 git apply /path/to/ReSpeaker_Clip/patches/mcuboot/0002-add-oled-display-support.patch
 git apply /path/to/ReSpeaker_Clip/patches/mcuboot/0003-add-serial-upload-progress-hook.patch
+git apply /path/to/ReSpeaker_Clip/patches/mcuboot/0004-add-custom-mcumgr-commands.patch
 ```
 
 To verify a patch is already applied:
@@ -119,3 +120,21 @@ Adds a weak callback `boot_serial_upload_progress_hook(img_index, curr_off, img_
 - Called after `curr_off += img_chunk_len + rem_bytes` (per-chunk progress)
 - Called after upload completes (100%)
 - Override in `main.c` provides display updates via `io_display_show_progress()`
+
+---
+
+## 0004-add-custom-mcumgr-commands.patch
+
+**Files**: `boot/zephyr/CMakeLists.txt`, `boot/zephyr/boot_serial_extension_clip.c` (new)
+
+### Summary
+
+Adds custom mcumgr commands for ReSpeaker Clip factory reset via serial recovery:
+- **Erase SD card** (group 64 / PERUSER, command 0): Writes zeros to first sector to destroy FAT filesystem
+- **Erase LFS partition** (group 64 / PERUSER, command 1): Erases first 64KB of LFS partition on external flash to destroy BLE bonds and settings
+
+### Requirements
+
+- `CONFIG_ENABLE_MGMT_PERUSER=y`
+- `CONFIG_DISK_ACCESS=y`, `CONFIG_SPI_SDHC=y` (for SD card erase)
+- NPM1300 LDO2 enabled in overlay (for SD card power)
