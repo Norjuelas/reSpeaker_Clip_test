@@ -21,27 +21,27 @@
 
 		boot_partition: partition@0 {
 			label = "mcuboot";
-			reg = <0x00000000 DT_SIZE_K(84)>;
+			reg = <0x00000000 DT_SIZE_K(88)>;
 		};
 
-		slot0_partition: partition@15000 {
+		slot0_partition: partition@16000 {
 			label = "image-0";
-			reg = <0x00015000 DT_SIZE_K(268)>;
+			reg = <0x00016000 DT_SIZE_K(264)>;
 		};
 
-		slot0_ns_partition: partition@59000 {
+		slot0_ns_partition: partition@58000 {
 			label = "image-0-nonsecure";
-			reg = <0x00059000 DT_SIZE_K(192)>;
+			reg = <0x00058000 DT_SIZE_K(192)>;
 		};
 
-		slot1_partition: partition@89000 {
+		slot1_partition: partition@88000 {
 			label = "image-1";
-			reg = <0x00089000 DT_SIZE_K(256)>;
+			reg = <0x00088000 DT_SIZE_K(256)>;
 		};
 
-		slot1_ns_partition: partition@c9000 {
+		slot1_ns_partition: partition@c8000 {
 			label = "image-1-nonsecure";
-			reg = <0x000c9000 DT_SIZE_K(192)>;
+			reg = <0x000c8000 DT_SIZE_K(192)>;
 		};
 
 	};
