@@ -31,6 +31,7 @@ static uint8_t chunk_buffer[CONFIG_CLIP_TRANSFER_CHUNK_SIZE];
 static struct k_thread transfer_thread_data;
 static k_tid_t transfer_thread_id;
 static K_SEM_DEFINE(transfer_trigger_sem, 0, 1);
+static K_MUTEX_DEFINE(transfer_cleanup_mutex);
 static volatile bool transfer_thread_running = false;
 static volatile bool transfer_thread_waiting = false;
 static volatile bool transfer_thread_ready = false;
@@ -135,8 +136,8 @@ int transfer_start(const char *session_id, const char *filename, struct transpor
         }
 
         if (++retry_count > 20) {
-            LOG_WRN("xfer cleanup timeout");
-            transfer_cleanup();
+            LOG_WRN("xfer cleanup timeout, forcing idle");
+            current_transfer.state = TRANSFER_STATE_IDLE;
             break;
         }
         k_sleep(K_MSEC(100));
@@ -270,8 +271,8 @@ int transfer_resume_from(const char *session_id, const char *start_file, struct 
         }
 
         if (++retry_count > 50) {
-            LOG_WRN("xfer cleanup timeout");
-            transfer_cleanup();
+            LOG_WRN("xfer cleanup timeout, forcing idle");
+            current_transfer.state = TRANSFER_STATE_IDLE;
             break;
         }
         k_sleep(K_MSEC(100));
@@ -379,6 +380,8 @@ int transfer_cancel(void)
     LOG_INF("xfer canceled");
     atomic_set(&transfer_cancel_requested, 1);
     atomic_set(&transfer_pause_requested, 0);
+    /* Force state to IDLE so send loop exits even if thread is mid-iteration */
+    current_transfer.state = TRANSFER_STATE_IDLE;
 
     return 0;
 }
@@ -909,6 +912,10 @@ wait_for_write:
                 current_transfer.current_file[0] = '\0';
                 return -ENOTCONN;
             }
+            if (atomic_get(&transfer_cancel_requested)) {
+                LOG_INF("xfer canceled while waiting for write");
+                return -ECANCELED;
+            }
             /* Use semaphore with timeout instead of busy polling */
             struct k_sem *file_closed_sem = storage_get_file_closed_sem();
             if (file_closed_sem) {
@@ -1131,6 +1138,8 @@ static void send_transfer_complete_once(const char *session_id, int file_count)
 
 static void transfer_cleanup(void)
 {
+    k_mutex_lock(&transfer_cleanup_mutex, K_FOREVER);
+
     /* Restore display icon from transfer to arrow */
     display_set_transferring(false);
 
@@ -1161,5 +1170,7 @@ static void transfer_cleanup(void)
     atomic_set(&transfer_pause_requested, 0);
     atomic_set(&transfer_cancel_requested, 0);
     atomic_set(&transfer_complete_sent, 0);
+
+    k_mutex_unlock(&transfer_cleanup_mutex);
 }
   

@@ -126,10 +126,11 @@ class FileTransfer:
             timeout,
         )
 
-        # Merge files
-        if result["files"]:
+        # Merge files (use all local .opus files to handle resume correctly)
+        local_opus = list(output_dir.glob("*.opus"))
+        if local_opus:
             merged_path = output_dir / f"{session_id}.opus"
-            await self._merge_opus_files(result["files"], merged_path)
+            await self._merge_all_opus_files(output_dir, merged_path)
             result["merged_file"] = str(merged_path)
 
         # Add session.json path to result (already saved at start)
@@ -316,6 +317,13 @@ class FileTransfer:
                 if file_path.exists():
                     outfile.write(file_path.read_bytes())
 
+    async def _merge_all_opus_files(self, output_dir: Path, output_path: Path) -> None:
+        """Merge all .opus files in output_dir (for resume: includes pre-existing files)."""
+        opus_files = sorted(output_dir.glob("*.opus"), key=lambda f: f.name)
+        with open(output_path, "wb") as outfile:
+            for f in opus_files:
+                outfile.write(f.read_bytes())
+
     async def cancel(self) -> None:
         """Cancel the current transfer."""
         self._canceled = True
@@ -414,7 +422,7 @@ class SessionSync(FileTransfer):
                 result["merged_file"] = str(merged_path)
             else:
                 # Need to merge files even if already synced
-                await self._merge_opus_files(result["files"], merged_path)
+                await self._merge_all_opus_files(output_dir, merged_path)
                 if merged_path.exists():
                     result["merged_file"] = str(merged_path)
             # Delete from device if requested (even for already-synced sessions)
