@@ -100,6 +100,15 @@ int config_set_time_ymd(uint16_t year, uint8_t month, uint8_t day,
                         uint8_t hour, uint8_t min, uint8_t sec);
 
 /**
+ * @brief Sync time baseline using current compensated time
+ *
+ * Recalculates current time from uptime compensation, then writes
+ * it back as the new baseline. Call periodically (e.g. on recording
+ * stop) to prevent long-term drift in the uptime-based clock.
+ */
+void config_sync_time(void);
+
+/**
  * @brief Set recording mode
  *
  * @param mode Recording mode

@@ -588,6 +588,9 @@ static int audio_stop_recording_internal(void)
         LOG_WRN("Failed to close storage session: %d", ret);
     }
 
+    /* Sync time baseline so reboot doesn't lose accumulated uptime */
+    config_sync_time();
+
     /* Power off microphone to save power */
     mic_power_off();
 

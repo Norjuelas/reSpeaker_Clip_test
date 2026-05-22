@@ -482,6 +482,37 @@ int config_set_time_ymd(uint16_t year, uint8_t month, uint8_t day,
     return settings_save_one(SETTING_TIME_UNIX, &unix_time, sizeof(unix_time));
 }
 
+void config_sync_time(void)
+{
+    struct clip_context *ctx = clip_get_context();
+
+    if (!ctx->time.valid) {
+        return;
+    }
+
+    int64_t unix_time;
+    if (config_get_time(&unix_time) != 0) {
+        return;
+    }
+
+    time_t t = (time_t)unix_time;
+    struct tm tm;
+    gmtime_r(&t, &tm);
+
+    ctx->time.year = tm.tm_year + 1900;
+    ctx->time.month = tm.tm_mon + 1;
+    ctx->time.day = tm.tm_mday;
+    ctx->time.hour = tm.tm_hour;
+    ctx->time.min = tm.tm_min;
+    ctx->time.sec = tm.tm_sec;
+    ctx->time.base_uptime_ms = k_uptime_get();
+
+    settings_save_one(SETTING_TIME_UNIX, &unix_time, sizeof(unix_time));
+    LOG_INF("Time synced: %04u-%02u-%02u %02u:%02u:%02u",
+            ctx->time.year, ctx->time.month, ctx->time.day,
+            ctx->time.hour, ctx->time.min, ctx->time.sec);
+}
+
 int config_set_mode(enum recording_mode mode)
 {
     return config_set(CONFIG_KEY_MODE, &mode, sizeof(mode));
