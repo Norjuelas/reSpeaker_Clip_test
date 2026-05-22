@@ -26,6 +26,8 @@
 #include "ble.h"
 #include "wifi.h"
 #include "storage.h"
+#include "usb_cdc.h"
+#include "config.h"
 
 LOG_MODULE_REGISTER(clip_event, CONFIG_CLIP_LOG_LEVEL);
 
@@ -360,6 +362,16 @@ void clip_event_process(void)
         if (current == CLIP_STATE_WIFI_SYNC && item.event == CLIP_EVENT_START) {
             LOG_INF("Recording blocked: WiFi active");
             display_post_event(UI_EVENT_WIFI_BLOCKED);
+            if (item.result) {
+                item.result->result = CLIP_EVENT_INVALID;
+            }
+            goto notify;
+        }
+
+        /* Special case: recording blocked while USB MSC active */
+        if (usb_cdc_is_enabled() && item.event == CLIP_EVENT_START) {
+            LOG_INF("Recording blocked: USB MSC active");
+            display_post_event(UI_EVENT_USB_BLOCKED);
             if (item.result) {
                 item.result->result = CLIP_EVENT_INVALID;
             }

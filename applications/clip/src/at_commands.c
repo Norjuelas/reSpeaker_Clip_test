@@ -698,6 +698,10 @@ static int cmd_start_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
                 return create_json_response(false, "WiFi active, cannot record",
                                            NULL, response, len);
             }
+            if (usb_cdc_is_enabled()) {
+                return create_json_response(false, "USB MSC active, disable USB first",
+                                           NULL, response, len);
+            }
             return create_json_response(false, "Already recording or invalid state",
                                        NULL, response, len);
         }
@@ -1536,7 +1540,15 @@ static int cmd_usb_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
 
 	if (strcmp(arg, "on") == 0 || strcmp(arg, "1") == 0) {
 	    int err = usb_cdc_enable();
-	    if (err) {
+	    if (err == -EBUSY) {
+		const char *reason = "Busy";
+		if (audio_is_recording()) {
+		    reason = "Recording in progress, stop recording first";
+		} else if (transfer_is_active()) {
+		    reason = "Transfer in progress, cancel transfer first";
+		}
+		return create_json_response(false, reason, NULL, response, len);
+	    } else if (err) {
 		return create_json_response(false, "Failed to enable USB", NULL, response, len);
 	    }
 	    return create_json_response(true, NULL, "{\"status\":\"on\"}", response, len);

@@ -16,6 +16,7 @@
 #include "at_server.h"
 #include "transport.h"
 #include "ble.h"
+#include "transfer.h"
 
 LOG_MODULE_REGISTER(usb, CONFIG_CLIP_LOG_LEVEL);
 
@@ -215,9 +216,23 @@ int usb_cdc_enable(void)
 		return 0;
 	}
 
+	if (audio_is_recording()) {
+		LOG_WRN("Cannot enable USB: recording in progress");
+		return -EBUSY;
+	}
+
+	if (transfer_is_active()) {
+		LOG_WRN("Cannot enable USB: transfer in progress");
+		return -EBUSY;
+	}
+
+	/* Unmount SD card so host has exclusive access */
+	storage_cleanup();
+
 	int err = usbd_enable(&clip_usbd);
 	if (err) {
 		LOG_ERR("usbd enable: %d", err);
+		storage_remount();
 		return err;
 	}
 
@@ -244,6 +259,9 @@ int usb_cdc_disable(void)
 	usbd_disable(&clip_usbd);
 	usb_active = false;
 	LOG_INF("USB disabled");
+
+	/* Remount SD card for app use */
+	storage_remount();
 	return 0;
 }
 

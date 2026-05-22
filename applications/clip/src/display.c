@@ -1174,7 +1174,8 @@ static void handle_event(enum ui_event event)
 		if (g_ui_state == UI_STATE_STATUS_BAR ||
 		    g_ui_state == UI_STATE_USB_CONNECTED ||
 		    g_ui_state == UI_STATE_LOW_BATTERY ||
-		    g_ui_state == UI_STATE_WIFI_BLOCKED) {
+		    g_ui_state == UI_STATE_WIFI_BLOCKED ||
+		    g_ui_state == UI_STATE_USB_BLOCKED) {
 			if (g_ota_active) {
 				set_ui_state(UI_STATE_OTA_PROGRESS);
 			} else if (g_error_active) {
@@ -1250,6 +1251,12 @@ static void handle_event(enum ui_event event)
 	case UI_EVENT_WIFI_BLOCKED:
 		k_work_cancel_delayable(&display_timeout_work);
 		set_ui_state(UI_STATE_WIFI_BLOCKED);
+		k_work_schedule(&display_timeout_work, K_MSEC(2000));
+		break;
+
+	case UI_EVENT_USB_BLOCKED:
+		k_work_cancel_delayable(&display_timeout_work);
+		set_ui_state(UI_STATE_USB_BLOCKED);
 		k_work_schedule(&display_timeout_work, K_MSEC(2000));
 		break;
 
@@ -1464,6 +1471,17 @@ static void render_current_state(void)
 		draw_string_6x12(display_buffer, "!", 40, y - 4);
 		int msg_x = (OLED_WIDTH - (int)strlen("WiFi Busy") * 6 + 1) / 2;
 		draw_string_6x12(display_buffer, "WiFi Busy", msg_x, y + 12);
+		flush_display();
+		break;
+	}
+
+	case UI_STATE_USB_BLOCKED: /* USB MSC active, cannot record */
+	{
+		clear_screen(display_buffer);
+		int y = (OLED_HEIGHT - 24) / 2;
+		draw_string_6x12(display_buffer, "!", 40, y - 4);
+		int msg_x = (OLED_WIDTH - (int)strlen("USB Busy") * 6 + 1) / 2;
+		draw_string_6x12(display_buffer, "USB Busy", msg_x, y + 12);
 		flush_display();
 		break;
 	}

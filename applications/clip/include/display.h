@@ -40,6 +40,7 @@ enum ui_state {
 	UI_STATE_ERROR,                /**< Error message display */
 	UI_STATE_LOW_BATTERY,          /**< Low battery warning */
 	UI_STATE_WIFI_BLOCKED,         /**< WiFi active, cannot record */
+	UI_STATE_USB_BLOCKED,          /**< USB MSC active, cannot record */
 };
 
 /* =============================================================================
@@ -67,6 +68,7 @@ enum ui_event {
 	UI_EVENT_LOW_BATTERY,          /**< Low battery warning */
 	UI_EVENT_BLE_DISCONNECTED,     /**< BLE disconnected */
 	UI_EVENT_WIFI_BLOCKED,         /**< WiFi active, cannot record */
+	UI_EVENT_USB_BLOCKED,          /**< USB MSC active, cannot record */
 	UI_EVENT_ANIM_TICK,            /**< Animation frame tick (internal) */
 };
 
