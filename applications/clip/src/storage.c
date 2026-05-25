@@ -52,6 +52,9 @@ static char writing_filename[STORAGE_FILENAME_MAX_LEN] = {0};
 /* Semaphore to signal when a file is closed and ready for transfer */
 static K_SEM_DEFINE(file_closed_sem, 0, 1);
 
+/* Mutex to serialize session.json read-modify-write across threads */
+static K_MUTEX_DEFINE(session_json_mutex);
+
 /* Internal functions */
 static int update_free_space(void);
 static int create_marks_file(const char *path);
@@ -61,6 +64,35 @@ static int create_session_json(const char *path, const char *session_id,
 static int update_session_json(const char *session_id, uint32_t duration_sec,
                                uint32_t chunk_count, uint64_t session_bytes);
 static int flush_write_buffer(void);
+static void delete_dir_contents(const char *dir_path);
+
+/* Group subdirectory helpers */
+static inline uint32_t chunk_to_group(uint32_t chunk_index)
+{
+	return (chunk_index - 1) / CONFIG_CLIP_STORAGE_FILES_PER_GROUP;
+}
+
+static bool session_has_groups(const char *session_id)
+{
+	char path[128];
+	struct fs_dirent entry;
+
+	snprintf(path, sizeof(path), "%s/%s/0", STORAGE_BASE_PATH, session_id);
+	return (fs_stat(path, &entry) == 0 && entry.type == FS_DIR_ENTRY_DIR);
+}
+
+static void build_chunk_path(char *buf, size_t size, const char *session_id,
+			     uint32_t chunk_index, bool uses_groups)
+{
+	if (uses_groups) {
+		uint32_t group = chunk_to_group(chunk_index);
+		snprintf(buf, size, "%s/%s/%u/%04u.opus",
+			 STORAGE_BASE_PATH, session_id, group, chunk_index);
+	} else {
+		snprintf(buf, size, "%s/%s/%04u.opus",
+			 STORAGE_BASE_PATH, session_id, chunk_index);
+	}
+}
 
 int storage_init(void)
 {
@@ -229,6 +261,13 @@ int storage_create_session(const char *session_id, uint8_t channels,
     /* Create session.json */
     create_session_json(dir_path, session_id, channels, sample_rate, mode);
 
+    /* Create initial group 0 subdirectory */
+    {
+        char group_path[160];
+        snprintf(group_path, sizeof(group_path), "%s/0", dir_path);
+        fs_mkdir(group_path);
+    }
+
     /* Store current session */
     strncpy(current_session_id, session_id, sizeof(current_session_id) - 1);
     current_session_id[sizeof(current_session_id) - 1] = '\0';
@@ -280,9 +319,24 @@ int storage_write_chunk(const char *session_id, uint32_t chunk_index,
         return 0;
     }
 
-    /* Generate chunk filename: 0001.opus, 0002.opus, ... */
-    snprintf(filepath, sizeof(filepath), "%s/%s/%04u.opus",
-             STORAGE_BASE_PATH, session_id, chunk_index);
+    /* Generate chunk filename with group subdirectory */
+    {
+        uint32_t group = chunk_to_group(chunk_index);
+        char group_path[160];
+
+        snprintf(group_path, sizeof(group_path), "%s/%s/%u",
+                 STORAGE_BASE_PATH, session_id, group);
+
+        /* Create group directory if needed */
+        struct fs_dirent gentry;
+        if (fs_stat(group_path, &gentry) != 0 ||
+            gentry.type != FS_DIR_ENTRY_DIR) {
+            fs_mkdir(group_path);
+        }
+
+        snprintf(filepath, sizeof(filepath), "%s/%s/%u/%04u.opus",
+                 STORAGE_BASE_PATH, session_id, group, chunk_index);
+    }
 
     /* Open file for writing */
     fs_file_t_init(&file);
@@ -362,8 +416,28 @@ int storage_create_file(struct storage_file *file, const char *session_id, uint3
 
     /* Generate filename: 0001.opus (4-digit format) */
     snprintf(filename, sizeof(filename), "%04u.opus", chunk_index);
-    snprintf(filepath, sizeof(filepath), "%s/%s/%s",
-             STORAGE_BASE_PATH, session_id, filename);
+
+    /* Calculate group and build path with group subdirectory */
+    uint32_t group = chunk_to_group(chunk_index);
+    snprintf(filepath, sizeof(filepath), "%s/%s/%u",
+             STORAGE_BASE_PATH, session_id, group);
+
+    /* Create group directory if it doesn't exist */
+    {
+        struct fs_dirent group_entry;
+        if (fs_stat(filepath, &group_entry) != 0 ||
+            group_entry.type != FS_DIR_ENTRY_DIR) {
+            rc = fs_mkdir(filepath);
+            if (rc != 0 && rc != -EEXIST) {
+                LOG_ERR("Failed to create group directory: %d", rc);
+                return rc;
+            }
+        }
+    }
+
+    /* Full file path */
+    snprintf(filepath, sizeof(filepath), "%s/%s/%u/%s",
+             STORAGE_BASE_PATH, session_id, group, filename);
     strncpy(file->filename, filename, sizeof(file->filename) - 1);
 
     /* Open file */
@@ -514,9 +588,9 @@ int storage_read_chunk(const char *session_id, uint32_t chunk_index,
         return -EINVAL;
     }
 
-    /* Generate chunk filename */
-    snprintf(filepath, sizeof(filepath), "%s/%s/%04u.opus",
-             STORAGE_BASE_PATH, session_id, chunk_index);
+    /* Generate chunk filename (detect format for backward compatibility) */
+    build_chunk_path(filepath, sizeof(filepath), session_id, chunk_index,
+                     session_has_groups(session_id));
 
     /* Open file for reading */
     fs_file_t_init(&file);
@@ -550,9 +624,9 @@ int storage_delete_chunk(const char *session_id, uint32_t chunk_index)
         return -EINVAL;
     }
 
-    /* Generate chunk filename */
-    snprintf(filepath, sizeof(filepath), "%s/%s/%04u.opus",
-             STORAGE_BASE_PATH, session_id, chunk_index);
+    /* Generate chunk filename (detect format for backward compatibility) */
+    build_chunk_path(filepath, sizeof(filepath), session_id, chunk_index,
+                     session_has_groups(session_id));
 
     rc = fs_unlink(filepath);
     if (rc != 0)
@@ -1043,10 +1117,18 @@ int storage_get_session_info(const char *session_id, struct storage_session_info
         }
     }
 
-    /* Scan directory for actual file count and total size.
-     * This is more reliable than session.json which may be stale
-     * if the device powered off without closing the session.
+    /* Detect group format */
+    info->uses_groups = session_has_groups(session_id);
+
+    /* If session.json had valid file data, trust it and skip the scan.
+     * Directory scan is only needed when session.json is missing or stale
+     * (e.g., power loss during recording).
      */
+    if (info->file_count > 0) {
+        return 0;
+    }
+
+    /* Fall back: scan directory for actual file count and total size. */
     {
         char dir_path[128];
         struct fs_dir_t dirp;
@@ -1056,7 +1138,6 @@ int storage_get_session_info(const char *session_id, struct storage_session_info
                  STORAGE_BASE_PATH, session_id);
         fs_dir_t_init(&dirp);
         if (fs_opendir(&dirp, dir_path) != 0) {
-            /* Session directory does not exist */
             return -ENOENT;
         }
 
@@ -1071,6 +1152,29 @@ int storage_get_session_info(const char *session_id, struct storage_session_info
             {
                 file_count++;
                 actual_bytes += (uint64_t)entry.size;
+            }
+            else if (entry.type == FS_DIR_ENTRY_DIR &&
+                     entry.name[0] != '.')
+            {
+                /* Group subdirectory — scan for .opus files */
+                char subdir[160];
+                struct fs_dir_t sub_dirp;
+                struct fs_dirent sub_entry;
+
+                snprintf(subdir, sizeof(subdir), "%s/%s/%s",
+                         STORAGE_BASE_PATH, session_id, entry.name);
+                fs_dir_t_init(&sub_dirp);
+                if (fs_opendir(&sub_dirp, subdir) == 0) {
+                    while (fs_readdir(&sub_dirp, &sub_entry) == 0 &&
+                           sub_entry.name[0] != '\0') {
+                        size_t slen = strlen(sub_entry.name);
+                        if (slen == 9 && strcmp(sub_entry.name + 4, ".opus") == 0) {
+                            file_count++;
+                            actual_bytes += (uint64_t)sub_entry.size;
+                        }
+                    }
+                    fs_closedir(&sub_dirp);
+                }
             }
         }
         fs_closedir(&dirp);
@@ -1118,9 +1222,12 @@ int storage_list_chunks(const char *session_id, uint32_t *chunks, int max_chunks
         return -EINVAL;
     }
 
+    bool use_groups = session_has_groups(session_id);
+
     /* Open session directory */
     snprintf(dir_path, sizeof(dir_path), "%s/%s", STORAGE_BASE_PATH, session_id);
-    LOG_DBG("Listing chunks in: %s (max=%d, skip=%d)", dir_path, max_chunks, skip);
+    LOG_DBG("Listing chunks in: %s (max=%d, skip=%d, groups=%d)",
+            dir_path, max_chunks, skip, use_groups);
 
     fs_dir_t_init(&dirp);
     rc = fs_opendir(&dirp, dir_path);
@@ -1139,7 +1246,36 @@ int storage_list_chunks(const char *session_id, uint32_t *chunks, int max_chunks
             break;
         }
 
-        /* Check if it's a .opus file with 4-digit prefix (0001.opus) */
+        if (use_groups && entry.type == FS_DIR_ENTRY_DIR &&
+            entry.name[0] != '.')
+        {
+            /* Scan group subdirectory for .opus files */
+            char subdir[160];
+            struct fs_dir_t sub_dirp;
+            struct fs_dirent sub_entry;
+
+            snprintf(subdir, sizeof(subdir), "%s/%s", dir_path, entry.name);
+            fs_dir_t_init(&sub_dirp);
+            if (fs_opendir(&sub_dirp, subdir) == 0) {
+                while (count < max_chunks &&
+                       fs_readdir(&sub_dirp, &sub_entry) == 0 &&
+                       sub_entry.name[0] != '\0') {
+                    size_t slen = strlen(sub_entry.name);
+                    if (slen == 9 && strcmp(sub_entry.name + 4, ".opus") == 0) {
+                        if (skipped < skip) {
+                            skipped++;
+                            continue;
+                        }
+                        chunks[count] = (uint32_t)atoi(sub_entry.name);
+                        count++;
+                    }
+                }
+                fs_closedir(&sub_dirp);
+            }
+            continue;
+        }
+
+        /* Flat format: check if it's a .opus file with 4-digit prefix */
         size_t len = strlen(entry.name);
         if (len == 9 && strcmp(entry.name + 4, ".opus") == 0)
         {
@@ -1168,8 +1304,6 @@ int storage_delete_session(const char *session_id)
         return -EINVAL;
     }
     char dir_path[128];
-    struct fs_dir_t dirp;
-    struct fs_dirent entry;
     int rc;
 
     if (!sd_mounted || !session_id)
@@ -1185,30 +1319,11 @@ int storage_delete_session(const char *session_id)
 
     /* Open session directory */
     snprintf(dir_path, sizeof(dir_path), "%s/%s", STORAGE_BASE_PATH, session_id);
-    fs_dir_t_init(&dirp);
-    rc = fs_opendir(&dirp, dir_path);
-    if (rc != 0)
-    {
-        return rc;
-    }
 
-    /* Delete all files in directory */
-    while (true)
-    {
-        rc = fs_readdir(&dirp, &entry);
-        if (rc != 0 || entry.name[0] == '\0')
-        {
-            break;
-        }
+    /* Recursively delete all contents (files and group subdirectories) */
+    delete_dir_contents(dir_path);
 
-        char filepath[192];
-        snprintf(filepath, sizeof(filepath), "%s/%s", dir_path, entry.name);
-        fs_unlink(filepath);
-    }
-
-    fs_closedir(&dirp);
-
-    /* Remove directory */
+    /* Remove session directory */
     rc = fs_unlink(dir_path);
     if (rc != 0)
     {
@@ -1267,6 +1382,31 @@ int storage_format_card(void)
 }
 
 /* Internal functions */
+
+static void delete_dir_contents(const char *dir_path)
+{
+    struct fs_dir_t dirp;
+    struct fs_dirent entry;
+
+    fs_dir_t_init(&dirp);
+    if (fs_opendir(&dirp, dir_path) != 0) {
+        return;
+    }
+
+    while (fs_readdir(&dirp, &entry) == 0 && entry.name[0] != '\0') {
+        char filepath[192];
+        snprintf(filepath, sizeof(filepath), "%s/%s", dir_path, entry.name);
+
+        if (entry.type == FS_DIR_ENTRY_DIR && entry.name[0] != '.') {
+            delete_dir_contents(filepath);
+            fs_unlink(filepath);
+        } else {
+            fs_unlink(filepath);
+        }
+    }
+
+    fs_closedir(&dirp);
+}
 
 static int update_free_space(void)
 {
@@ -1399,6 +1539,8 @@ static int update_session_json(const char *session_id, uint32_t duration_sec,
     snprintf(json_path, sizeof(json_path), "%s/%s/session.json",
              STORAGE_BASE_PATH, session_id);
 
+    k_mutex_lock(&session_json_mutex, K_FOREVER);
+
     /* Read existing JSON to preserve other fields including synced */
     fs_file_t_init(&file);
     char synced_str[16] = "0"; /* Default: no files synced */
@@ -1449,17 +1591,13 @@ static int update_session_json(const char *session_id, uint32_t duration_sec,
         }
     }
 
-    /* Write updated JSON with all fields, set recording to false
-     * Keep synced count unchanged - only transfer should update it.
-     * Use FS_O_CREATE | FS_O_WRITE without FS_O_TRUNC to avoid race:
-     * concurrent readers may see an empty file if truncate happens before write.
-     * The new content is written at offset 0, overwriting the old data.
-     */
+    /* Write updated JSON with all fields, set recording to false */
     fs_file_t_init(&file);
     rc = fs_open(&file, json_path, FS_O_CREATE | FS_O_WRITE);
     if (rc != 0)
     {
         LOG_ERR("Failed to open session.json for update: %d", rc);
+        k_mutex_unlock(&session_json_mutex);
         return rc;
     }
 
@@ -1483,6 +1621,7 @@ static int update_session_json(const char *session_id, uint32_t duration_sec,
     {
         LOG_ERR("Failed to format session.json");
         fs_close(&file);
+        k_mutex_unlock(&session_json_mutex);
         return -ENOMEM;
     }
 
@@ -1491,10 +1630,12 @@ static int update_session_json(const char *session_id, uint32_t duration_sec,
     {
         LOG_ERR("Failed to write session.json: %zd != %d", written, len);
         fs_close(&file);
+        k_mutex_unlock(&session_json_mutex);
         return -EIO;
     }
 
     fs_close(&file);
+    k_mutex_unlock(&session_json_mutex);
     LOG_DBG("Updated session.json");
 
     return 0;
@@ -1897,4 +2038,14 @@ bool storage_get_writing_file(char *out_session, char *out_filename,
     }
 
     return is_writing;
+}
+
+void storage_session_json_lock(void)
+{
+    k_mutex_lock(&session_json_mutex, K_FOREVER);
+}
+
+void storage_session_json_unlock(void)
+{
+    k_mutex_unlock(&session_json_mutex);
 }

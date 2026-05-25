@@ -47,6 +47,7 @@ struct transfer_info {
     uint32_t first_file_num;       /* First file number (e.g., 1 for 0001.opus) */
     uint32_t last_file_num;        /* Last file number (e.g., 2000 for 2000.opus) */
     bool continuous;               /* Continuous mode: session is being recorded */
+    bool uses_groups;              /* true if session uses group subdirectories */
 };
 
 /**

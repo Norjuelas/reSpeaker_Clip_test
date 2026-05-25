@@ -62,6 +62,22 @@ static void send_file_ready_event(const char *session_id, const char *filename, 
 static int send_file_complete_event(const char *filename);
 static void send_transfer_complete_once(const char *session_id, int file_count);
 static void generate_filename(uint32_t file_num, char *filename);
+static void build_transfer_path(char *buf, size_t size, const char *session_id,
+				const char *filename, uint32_t file_num);
+
+/**
+ * @brief Build file path for transfer, using group subdirectory if applicable
+ */
+static void build_transfer_path(char *buf, size_t size, const char *session_id,
+				const char *filename, uint32_t file_num)
+{
+	if (current_transfer.uses_groups) {
+		uint32_t group = (file_num - 1) / CONFIG_CLIP_STORAGE_FILES_PER_GROUP;
+		snprintf(buf, size, "/SD:/REC/%s/%u/%s", session_id, group, filename);
+	} else {
+		snprintf(buf, size, "/SD:/REC/%s/%s", session_id, filename);
+	}
+}
 
 /**
  * @brief Generate filename from file number
@@ -196,6 +212,7 @@ int transfer_start(const char *session_id, const char *filename, struct transpor
     memset(&current_transfer, 0, sizeof(current_transfer));
     memset(last_transferred_file, 0, sizeof(last_transferred_file));
     current_transfer.state = TRANSFER_STATE_TRANSMITTING;
+    current_transfer.uses_groups = session_info.uses_groups;
 
     /* Show transfer icon on display immediately */
     display_set_transferring(true);
@@ -207,8 +224,10 @@ int transfer_start(const char *session_id, const char *filename, struct transpor
         /* Transfer single file */
         char filepath[128];
         struct fs_dirent entry;
+        uint32_t file_num = (uint32_t)atoi(filename);
 
-        snprintf(filepath, sizeof(filepath), "/SD:/REC/%s/%s", session_id, filename);
+        build_transfer_path(filepath, sizeof(filepath), session_id, filename,
+                            file_num > 0 ? file_num : 1);
         if (fs_stat(filepath, &entry) != 0) {
             LOG_ERR("File not found: %s", filepath);
             return -ENOENT;
@@ -237,6 +256,11 @@ int transfer_start(const char *session_id, const char *filename, struct transpor
         const char *recording_session = audio_get_session_id();
         current_transfer.continuous = (recording_session != NULL &&
                                        strcmp(recording_session, session_id) == 0);
+
+        /* For continuous mode, total files unknown until recording stops */
+        if (current_transfer.continuous) {
+            current_transfer.total_files = 0;
+        }
 
         LOG_INF("xfer: %s (%u files, %s)",
                 session_id, current_transfer.total_files,
@@ -342,6 +366,7 @@ int transfer_resume_from(const char *session_id, const char *start_file, struct 
     current_transfer.total_bytes = session_info.total_bytes;
     current_transfer.first_file_num = 1;
     current_transfer.last_file_num = session_info.file_count;
+    current_transfer.uses_groups = session_info.uses_groups;
 
     /* Check if this session is currently being recorded (continuous mode) */
     const char *recording_session = audio_get_session_id();
@@ -454,11 +479,14 @@ int transfer_set_synced_files(const char *session_id, uint32_t count)
 
     snprintf(filepath, sizeof(filepath), "/SD:/REC/%s/session.json", session_id);
 
+    storage_session_json_lock();
+
     /* Read existing session.json */
     fs_file_t_init(&file);
     ret = fs_open(&file, filepath, FS_O_READ);
     if (ret != 0) {
         LOG_ERR("Failed to open session.json: %d", ret);
+        storage_session_json_unlock();
         return ret;
     }
 
@@ -467,6 +495,7 @@ int transfer_set_synced_files(const char *session_id, uint32_t count)
 
     if (bytes_read < 0) {
         LOG_ERR("Failed to read session.json: %zd", bytes_read);
+        storage_session_json_unlock();
         return bytes_read;
     }
     json_buf[bytes_read] = '\0';
@@ -520,6 +549,7 @@ int transfer_set_synced_files(const char *session_id, uint32_t count)
     ret = fs_open(&file, filepath, FS_O_WRITE);
     if (ret != 0) {
         LOG_ERR("Failed to open session.json for writing: %d", ret);
+        storage_session_json_unlock();
         return ret;
     }
 
@@ -528,10 +558,12 @@ int transfer_set_synced_files(const char *session_id, uint32_t count)
 
     if (bytes_written < 0) {
         LOG_ERR("Failed to write session.json: %zd", bytes_written);
+        storage_session_json_unlock();
         return bytes_written;
     }
 
     LOG_DBG("Updated synced count: %u for session %s", count, session_id);
+    storage_session_json_unlock();
     return 0;
 }
 
@@ -825,8 +857,11 @@ static int transfer_next_file(void)
 
     /* If specific filename is set, use it directly */
     if (current_transfer.current_file[0] != '\0') {
-        snprintf(filepath, sizeof(filepath), "/SD:/REC/%s/%s",
-                 current_transfer.session_id, current_transfer.current_file);
+        uint32_t file_num = (uint32_t)atoi(current_transfer.current_file);
+        build_transfer_path(filepath, sizeof(filepath),
+                            current_transfer.session_id,
+                            current_transfer.current_file,
+                            file_num > 0 ? file_num : 1);
         goto open_file;
     }
 
@@ -842,8 +877,9 @@ static int transfer_next_file(void)
          * - Detect recording stop to end transfer
          */
         generate_filename(file_num, current_transfer.current_file);
-        snprintf(filepath, sizeof(filepath), "/SD:/REC/%s/%s",
-                 current_transfer.session_id, current_transfer.current_file);
+        build_transfer_path(filepath, sizeof(filepath),
+                            current_transfer.session_id,
+                            current_transfer.current_file, file_num);
 
         /* Check if file exists */
         if (fs_stat(filepath, &entry) != 0) {
@@ -860,10 +896,12 @@ static int transfer_next_file(void)
                 if (!audio_is_recording() && wait_count > 4) {
                     /* Check if next file exists (skip missing files) */
                     uint32_t next_num = file_num + 1;
+                    char next_name[16];
                     char next_filepath[128];
-                    generate_filename(next_num, next_filepath);
-                    snprintf(next_filepath, sizeof(next_filepath), "/SD:/REC/%s/%s",
-                             current_transfer.session_id, next_filepath);
+                    generate_filename(next_num, next_name);
+                    build_transfer_path(next_filepath, sizeof(next_filepath),
+                                        current_transfer.session_id,
+                                        next_name, next_num);
                     if (fs_stat(next_filepath, &entry) == 0) {
                         LOG_WRN("File missing: %s, skipping", current_transfer.current_file);
                         current_transfer.file_index = file_num;
@@ -933,8 +971,9 @@ wait_for_write:
          * - No waiting for writes
          */
         generate_filename(file_num, current_transfer.current_file);
-        snprintf(filepath, sizeof(filepath), "/SD:/REC/%s/%s",
-                 current_transfer.session_id, current_transfer.current_file);
+        build_transfer_path(filepath, sizeof(filepath),
+                            current_transfer.session_id,
+                            current_transfer.current_file, file_num);
 
         /* Check if file exists */
         if (fs_stat(filepath, &entry) != 0) {
@@ -1113,64 +1152,59 @@ static int send_file_complete_event(const char *filename)
 
 static void send_transfer_complete_once(const char *session_id, int file_count)
 {
-    if (atomic_get(&transfer_complete_sent)) {
-        LOG_DBG("transfer_complete already sent, skipping duplicate");
-        return;
-    }
+	if (atomic_get(&transfer_complete_sent)) {
+		LOG_DBG("transfer_complete already sent, skipping duplicate");
+		return;
+	}
 
-    if (!session_id || session_id[0] == '\0') {
-        LOG_WRN("Cannot send transfer_complete: empty session_id");
-        return;
-    }
+	if (!session_id || session_id[0] == '\0') {
+		LOG_WRN("Cannot send transfer_complete: empty session_id");
+		return;
+	}
 
-    /* Save synced count to session.json */
-    if (current_transfer.synced_files > 0) {
-        transfer_set_synced_files(session_id, current_transfer.synced_files);
-    }
+	/* Save synced count to session.json */
+	if (current_transfer.synced_files > 0) {
+		transfer_set_synced_files(session_id, current_transfer.synced_files);
+	}
 
-    if (current_transport && current_transport->ops && current_transport->ops->send_transfer_done) {
-        current_transport->ops->send_transfer_done(session_id, file_count);
-    }
+	if (current_transport && current_transport->ops && current_transport->ops->send_transfer_done) {
+		current_transport->ops->send_transfer_done(session_id, file_count);
+	}
 
-    LOG_INF("xfer done: %s files=%d", session_id, file_count);
-    atomic_set(&transfer_complete_sent, 1);
+	LOG_INF("xfer done: %s files=%d", session_id, file_count);
+	atomic_set(&transfer_complete_sent, 1);
 }
 
 static void transfer_cleanup(void)
 {
-    k_mutex_lock(&transfer_cleanup_mutex, K_FOREVER);
+	k_mutex_lock(&transfer_cleanup_mutex, K_FOREVER);
 
-    /* Restore display icon from transfer to arrow */
-    display_set_transferring(false);
+	/* Restore display icon from transfer to arrow */
+	display_set_transferring(false);
 
-    clip_cpu_boost_release();
+	clip_cpu_boost_release();
 
-    if (transfer_file_open) {
-        fs_close(&transfer_file);
-        transfer_file_open = false;
-    }
+	if (transfer_file_open) {
+		fs_close(&transfer_file);
+		transfer_file_open = false;
+	}
 
-    /* Save synced count to session.json if any files were transferred */
-    if (current_transfer.synced_files > 0 && current_transfer.session_id[0] != '\0') {
-        transfer_set_synced_files(current_transfer.session_id, current_transfer.synced_files);
-        LOG_DBG("Saved synced count: %u for session %s",
-                current_transfer.synced_files, current_transfer.session_id);
-    }
+	/* synced count already saved in send_transfer_complete_once() */
 
-    /* Reset state */
-    current_transfer.state = TRANSFER_STATE_IDLE;
-    memset(&current_transfer.current_file, 0, sizeof(current_transfer.current_file));
-    memset(current_transfer.session_id, 0, sizeof(current_transfer.session_id));
-    current_transfer.file_index = 0;
-    current_transfer.total_files = 0;
-    current_transfer.synced_files = 0;
-    current_transfer.bytes_transferred = 0;
-    current_transfer.total_bytes = 0;
-    current_transfer.progress_percent = 0;
-    atomic_set(&transfer_pause_requested, 0);
-    atomic_set(&transfer_cancel_requested, 0);
-    atomic_set(&transfer_complete_sent, 0);
+	/* Reset state */
+	current_transfer.state = TRANSFER_STATE_IDLE;
+	memset(&current_transfer.current_file, 0, sizeof(current_transfer.current_file));
+	memset(current_transfer.session_id, 0, sizeof(current_transfer.session_id));
+	current_transfer.file_index = 0;
+	current_transfer.total_files = 0;
+	current_transfer.synced_files = 0;
+	current_transfer.bytes_transferred = 0;
+	current_transfer.total_bytes = 0;
+	current_transfer.progress_percent = 0;
+	atomic_set(&transfer_pause_requested, 0);
+	atomic_set(&transfer_cancel_requested, 0);
+	atomic_set(&transfer_complete_sent, 0);
 
-    k_mutex_unlock(&transfer_cleanup_mutex);
+	k_mutex_unlock(&transfer_cleanup_mutex);
 }
   

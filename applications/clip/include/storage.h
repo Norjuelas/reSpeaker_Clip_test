@@ -48,6 +48,7 @@ struct storage_session_info {
     uint8_t channels;          /* 1=mono, 2=stereo */
     uint8_t sample_rate_khz;   /* Sample rate in kHz (e.g., 16 for 16000Hz) */
     char mode[16];             /* "normal" or "enhanced" */
+    bool uses_groups;          /* true if files are in group subdirectories */
 };
 
 /**
@@ -357,5 +358,18 @@ struct k_sem *storage_get_file_closed_sem(void);
  */
 bool storage_get_writing_file(char *out_session, char *out_filename,
                               size_t session_size, size_t filename_size);
+
+/**
+ * @brief Lock session.json for atomic read-modify-write
+ *
+ * Prevents race between audio thread (update_session_json) and
+ * transfer thread (transfer_set_synced_files).
+ */
+void storage_session_json_lock(void);
+
+/**
+ * @brief Unlock session.json
+ */
+void storage_session_json_unlock(void);
 
 #endif /* STORAGE_H */

@@ -80,8 +80,8 @@ static const struct bt_le_adv_param adv_param_fast =
 /* Slow advertising: for reconnection after bonding (1000-1200ms) */
 static const struct bt_le_adv_param adv_param_slow =
     BT_LE_ADV_PARAM_INIT(BT_LE_ADV_OPT_CONN,
-                         BT_GAP_ADV_SLOW_INT_MIN,
-                         BT_GAP_ADV_SLOW_INT_MAX, NULL);
+                         BT_GAP_ADV_FAST_INT_MIN_1,
+                         BT_GAP_ADV_FAST_INT_MAX_1, NULL);
 
 #define ADV_FAST_TIMEOUT_MS 30000   /* Switch to slow advertising after 30s */
 #define BLE_INACTIVITY_TIMEOUT_MS (5 * 60 * 1000)  /* 5 minutes */

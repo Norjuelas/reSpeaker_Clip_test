@@ -1643,8 +1643,8 @@ void display_set_transferring(bool transferring)
 	g_status.transferring = transferring;
 
 	if (!transferring) {
-		/* Transfer finished - recheck if any unsynced sessions remain */
-		g_has_untransferred = storage_has_unsynced_sessions();
+		/* Transfer finished - skip unsynced check for now (debug) */
+		g_has_untransferred = false;
 	}
 
 	if (g_ui_state == UI_STATE_STATUS_BAR) {

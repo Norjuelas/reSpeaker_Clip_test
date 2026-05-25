@@ -167,6 +167,15 @@ config CLIP_STORAGE_CHUNK_SIZE
 	int "Storage chunk buffer size (bytes)"
 	default 4096
 
+config CLIP_STORAGE_FILES_PER_GROUP
+	int "Number of files per group subdirectory"
+	default 100
+	help
+	  Maximum number of audio files stored in each group subdirectory.
+	  When a session has many files, they are organized into
+	  subdirectories (0, 1, 2...) to maintain FAT filesystem performance.
+	  Group = (file_index - 1) / FILES_PER_GROUP.
+
 # =============================================================================
 # Audio Segment Configuration
 # =============================================================================
