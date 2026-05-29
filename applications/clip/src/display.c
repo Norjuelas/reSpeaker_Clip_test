@@ -1298,9 +1298,18 @@ static void render_current_state(void)
 		fast_anim_step();
 		render_recording_wave(display_buffer);
 		flush_display();
-		/* After 5s, transition to DOT with animation */
 		if (k_uptime_get() - g_rec_wave_start_ms >= DISPLAY_REC_WAVE_TIMEOUT_MS) {
 			set_ui_state(UI_STATE_REC_DOT);
+			/* Render dot animation inline — the queue may be full
+			 * of stale ANIM_TICKs, so we can't rely on the next
+			 * loop iteration to render the dot.
+			 */
+			for (int f = 0; f < DOT_CIRCLE_ANIM_FRAMES; f++) {
+				render_dot_circle(display_buffer, f);
+				flush_display();
+				k_sleep(K_MSEC(35));
+			}
+			g_dot_animation_played = true;
 		}
 		break;
 
@@ -1530,6 +1539,18 @@ static void display_thread_fn(void *p1, void *p2, void *p3)
 		if (k_msgq_get(&display_event_queue, &event, wait) == 0) {
 			LOG_DBG("Display event: %d", event);
 			handle_event(event);
+
+			/* Drain stale ANIM_TICKs to prevent queue overflow */
+			if (event == UI_EVENT_ANIM_TICK) {
+				enum ui_event discard;
+				while (k_msgq_get(&display_event_queue,
+						  &discard, K_NO_WAIT) == 0) {
+					if (discard != UI_EVENT_ANIM_TICK) {
+						handle_event(discard);
+					}
+				}
+			}
+
 			render_current_state();
 		} else {
 			render_current_state();
