@@ -31,8 +31,10 @@ LOG_MODULE_REGISTER(wifi, LOG_LEVEL_INF);
 
 #define WIFI_AP_SSID_PREFIX "ClipTest_"
 #define WIFI_AP_PASSWORD "12345678"
-#define WIFI_AP_CHANNEL 36
+#define WIFI_AP_CHANNEL_DEFAULT 36
 #define WIFI_AP_REG_DOMAIN "US"
+
+static uint8_t ap_channel = WIFI_AP_CHANNEL_DEFAULT;
 
 #define IPERF_PORT 5001
 #define IPERF_PACKET_SIZE 1400
@@ -164,10 +166,10 @@ static int wifi_enable_ap(struct net_if *iface)
 	req.ssid_length = strlen(ap_ssid);
 	req.psk = (const uint8_t *)WIFI_AP_PASSWORD;
 	req.psk_length = strlen(WIFI_AP_PASSWORD);
-	req.channel = WIFI_AP_CHANNEL;
+	req.channel = ap_channel;
 	req.security = WIFI_SECURITY_TYPE_PSK;
 	req.mfp = WIFI_MFP_OPTIONAL;
-	req.band = WIFI_FREQ_BAND_5_GHZ;
+	req.band = (ap_channel <= 13) ? WIFI_FREQ_BAND_2_4_GHZ : WIFI_FREQ_BAND_5_GHZ;
 
 	for (int attempt = 0; attempt <= WIFI_AP_ENABLE_RETRIES; attempt++) {
 		k_sem_reset(&ap_enabled_sem);
@@ -250,8 +252,10 @@ static int do_wifi_ap_start(void)
 	wifi_coex_configure();
 #endif
 
-	printk("[WiFi] AP started: SSID=%s ch=%d IP=%s\n",
-	       ap_ssid, WIFI_AP_CHANNEL, CONFIG_NET_CONFIG_MY_IPV4_ADDR);
+	printk("[WiFi] AP started: SSID=%s ch=%d (%s) IP=%s\n",
+	       ap_ssid, ap_channel,
+	       ap_channel <= 13 ? "2.4GHz" : "5GHz",
+	       CONFIG_NET_CONFIG_MY_IPV4_ADDR);
 	printk("[WiFi] Password: %s\n", WIFI_AP_PASSWORD);
 	return 0;
 }
@@ -274,8 +278,14 @@ static int do_wifi_ap_stop(void)
 
 static int cmd_wifi_on(const struct shell *sh, size_t argc, char **argv)
 {
-	ARG_UNUSED(argc);
-	ARG_UNUSED(argv);
+	if (argc >= 2) {
+		int ch = atoi(argv[1]);
+		if (ch < 1 || (ch > 13 && ch < 36) || ch > 165) {
+			shell_print(sh, "Invalid channel (2.4G: 1-13, 5G: 36-165)");
+			return -EINVAL;
+		}
+		ap_channel = (uint8_t)ch;
+	}
 	return do_wifi_ap_start();
 }
 
@@ -293,11 +303,12 @@ static int cmd_wifi_status(const struct shell *sh, size_t argc, char **argv)
 	if (ap_started) {
 		shell_print(sh, "  SSID: %s", ap_ssid);
 		shell_print(sh, "  Password: %s", WIFI_AP_PASSWORD);
-		shell_print(sh, "  Channel: %d (5GHz)", WIFI_AP_CHANNEL);
+		shell_print(sh, "  Channel: %d (%s)", ap_channel,
+			    ap_channel <= 13 ? "2.4GHz" : "5GHz");
 		shell_print(sh, "  IP: 192.168.4.1");
 	} else {
 		shell_print(sh, "  State: Stopped");
-		shell_print(sh, "  Use 'wifi on' to start AP");
+		shell_print(sh, "  Use 'wifi on [channel]' to start AP");
 	}
 
 	return 0;
@@ -492,7 +503,7 @@ static int cmd_udp_test(const struct shell *sh, size_t argc, char **argv)
 }
 
 SHELL_STATIC_SUBCMD_SET_CREATE(sub_wifi,
-	SHELL_CMD(on, NULL, "Start WiFi AP", cmd_wifi_on),
+	SHELL_CMD(on, NULL, "Start WiFi AP [channel] (2.4G:1-13,5G:36-165)", cmd_wifi_on),
 	SHELL_CMD(off, NULL, "Stop WiFi AP", cmd_wifi_off),
 	SHELL_CMD(scan, NULL, "Scan for networks [band: 0=all, 1=2.4G, 2=5G]", cmd_wifi_scan),
 	SHELL_CMD(status, NULL, "Show WiFi AP status", cmd_wifi_status),
