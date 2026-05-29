@@ -20,6 +20,7 @@
 #include "transfer.h"
 #include "display.h"
 #include "config.h"
+#include "clip_event.h"
 
 LOG_MODULE_REGISTER(ble, CONFIG_CLIP_LOG_LEVEL);
 
@@ -430,6 +431,9 @@ static void disconnected(struct bt_conn *conn, uint8_t reason)
 
         /* Notify display that BLE disconnected */
         display_post_event(UI_EVENT_BLE_DISCONNECTED);
+
+        /* Cancel OTA if in progress */
+        clip_event_ota_cancel();
 
         ble_notify_event("ble", "disconnected");
 

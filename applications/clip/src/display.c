@@ -1242,7 +1242,12 @@ static void handle_event(enum ui_event event)
 
 	case UI_EVENT_BLE_DISCONNECTED:
 		g_status.ble_connected = false;
-		if (g_ui_state == UI_STATE_STATUS_BAR) {
+		if (g_ota_active) {
+			g_ota_active = false;
+			set_ui_state(UI_STATE_STATUS_BAR);
+			k_work_schedule(&display_timeout_work,
+					K_MSEC(DISPLAY_STATUS_TIMEOUT_MS));
+		} else if (g_ui_state == UI_STATE_STATUS_BAR) {
 			render_status_bar(display_buffer);
 			flush_display();
 		}

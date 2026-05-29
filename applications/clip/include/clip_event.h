@@ -92,4 +92,9 @@ void clip_event_wait(k_timeout_t timeout);
  */
 void clip_event_process(void);
 
+/**
+ * @brief Cancel ongoing OTA (e.g., on BLE disconnect)
+ */
+void clip_event_ota_cancel(void);
+
 #endif /* CLIP_EVENT_H */

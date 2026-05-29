@@ -243,6 +243,14 @@ static enum mgmt_cb_return mcumgr_dfu_cb(uint32_t event, enum mgmt_cb_return pre
     return MGMT_CB_OK;
 }
 
+void clip_event_ota_cancel(void)
+{
+    if (ota_in_progress) {
+        ota_in_progress = false;
+        clip_post_event(CLIP_EVENT_OTA_DONE);
+    }
+}
+
 static struct mgmt_callback mcumgr_dfu_cb_handler = {
     .callback = mcumgr_dfu_cb,
     .event_id = MGMT_EVT_OP_IMG_MGMT_DFU_STARTED | MGMT_EVT_OP_IMG_MGMT_DFU_CHUNK |
