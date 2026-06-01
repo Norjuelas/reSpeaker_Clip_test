@@ -1,0 +1,22 @@
+/*
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Switch nRF5340 internal regulators from the SDK default LDO to DCDC.
+ * The Clip board has 10µH inductors (L1, L2) wired for DCDC support.
+ * Without this, suspend current is ~500-600 µA higher than the datasheet.
+ *
+ * Disable the nRF7002 WiFi node so its driver and the MPSL coexistence
+ * service (which would otherwise keep HFXO running) are not pulled in.
+ */
+
+&vregmain {
+	regulator-initial-mode = <NRF5X_REG_MODE_DCDC>;
+};
+
+&vregradio {
+	regulator-initial-mode = <NRF5X_REG_MODE_DCDC>;
+};
+
+&wlan0 {
+	status = "disabled";
+};

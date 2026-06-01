@@ -1,0 +1,14 @@
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+# Sysbuild config — required for nRF5340 Bluetooth controller.
+# Builds the cpunet child image with the BT HCI IPC firmware so the
+# application core (cpuapp) can talk to the BLE controller over IPC.
+
+source "${ZEPHYR_BASE}/share/sysbuild/Kconfig"
+
+config NRF_DEFAULT_IPC_RADIO
+	default y
+
+config NETCORE_IPC_RADIO_BT_HCI_IPC
+	default y
