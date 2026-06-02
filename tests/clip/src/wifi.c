@@ -16,6 +16,7 @@
 #include <zephyr/net/socket.h>
 #include <zephyr/net/zperf.h>
 #include <zephyr/net/dhcpv4_server.h>
+#include <net/wifi_ready.h>
 #include <zephyr/shell/shell.h>
 #include <zephyr/drivers/hwinfo.h>
 #include <stdio.h>
@@ -26,6 +27,8 @@
 #ifdef CONFIG_NRF70_SR_COEX
 #include <coex.h>
 #endif
+
+#include <nrfx_clock.h>
 
 LOG_MODULE_REGISTER(wifi, LOG_LEVEL_INF);
 
@@ -46,11 +49,22 @@ static bool ap_started;
 static char ap_ssid[32] = "ClipTest_XXXX";
 static struct net_mgmt_event_callback wifi_mgmt_cb;
 static K_SEM_DEFINE(ap_enabled_sem, 0, 1);
+static bool wifi_ready;
+static K_SEM_DEFINE(wifi_ready_sem, 0, 1);
 
 /* Scan state */
 static K_SEM_DEFINE(scan_done_sem, 0, 1);
 static struct wifi_scan_result scan_results[10];
 static int scan_result_count;
+
+static void wifi_ready_callback(bool ready)
+{
+	printk("[WiFi] driver %s\n", ready ? "ready" : "unready");
+	wifi_ready = ready;
+	if (ready) {
+		k_sem_give(&wifi_ready_sem);
+	}
+}
 
 static void generate_ap_ssid(void)
 {
@@ -213,6 +227,31 @@ static int do_wifi_ap_start(void)
 		return -ENODEV;
 	}
 
+	/* Drop CPU to 64MHz during WiFi start operation */
+	nrfx_clock_divider_set(NRF_CLOCK_DOMAIN_HFCLK, NRF_CLOCK_HFCLK_DIV_2);
+	printk("[WiFi] CPU -> 64MHz for start\n");
+
+	/* Bring up interface (required when CONFIG_NRF_WIFI_IF_AUTO_START=n) */
+	if (!net_if_is_admin_up(iface)) {
+		printk("[WiFi] Bringing up interface...\n");
+		ret = net_if_up(iface);
+		if (ret) {
+			printk("[WiFi] net_if_up failed: %d\n", ret);
+			goto restore_clock;
+		}
+
+		/* Wait for WiFi driver ready */
+		if (!wifi_ready) {
+			ret = k_sem_take(&wifi_ready_sem, K_SECONDS(3));
+			if (ret) {
+				printk("[WiFi] driver ready timeout\n");
+				net_if_down(iface);
+				ret = -ETIMEDOUT;
+				goto restore_clock;
+			}
+		}
+	}
+
 	/* Set regulatory domain */
 	wifi_set_reg_domain(iface);
 
@@ -220,7 +259,7 @@ static int do_wifi_ap_start(void)
 	ret = wifi_enable_ap(iface);
 	if (ret) {
 		ap_started = false;
-		return ret;
+		goto restore_clock;
 	}
 
 	/* Configure static IP */
@@ -257,22 +296,58 @@ static int do_wifi_ap_start(void)
 	       ap_channel <= 13 ? "2.4GHz" : "5GHz",
 	       CONFIG_NET_CONFIG_MY_IPV4_ADDR);
 	printk("[WiFi] Password: %s\n", WIFI_AP_PASSWORD);
-	return 0;
+	ret = 0;
+
+restore_clock:
+	/* Restore CPU to 128MHz */
+	nrfx_clock_divider_set(NRF_CLOCK_DOMAIN_HFCLK, NRF_CLOCK_HFCLK_DIV_1);
+	printk("[WiFi] CPU -> 128MHz\n");
+	return ret;
 }
 
 static int do_wifi_ap_stop(void)
 {
 	struct net_if *iface = net_if_get_first_wifi();
+	int ret;
 
-	if (!iface || !ap_started) {
-		printk("AP not running\n");
-		return 0;
+	if (!iface) {
+		printk("No WiFi interface\n");
+		return -ENODEV;
 	}
 
-	net_dhcpv4_server_stop(iface);
-	net_mgmt(NET_REQUEST_WIFI_AP_DISABLE, iface, NULL, 0);
-	ap_started = false;
-	printk("[WiFi] AP stopped\n");
+	/* Drop CPU to 64MHz during WiFi stop operation */
+	nrfx_clock_divider_set(NRF_CLOCK_DOMAIN_HFCLK, NRF_CLOCK_HFCLK_DIV_2);
+	printk("[WiFi] CPU -> 64MHz for stop\n");
+
+	if (ap_started) {
+		net_dhcpv4_server_stop(iface);
+		net_mgmt(NET_REQUEST_WIFI_AP_DISABLE, iface, NULL, 0);
+		ap_started = false;
+		printk("[WiFi] AP stopped\n");
+	}
+
+	/* Reset WiFi ready state for next wifi_on */
+	wifi_ready = false;
+	k_sem_reset(&wifi_ready_sem);
+
+#ifdef CONFIG_NRF70_SR_COEX
+	nrf_wifi_coex_hw_reset();
+#endif
+
+	/* Power down interface to save power */
+	if (net_if_is_admin_up(iface)) {
+		ret = net_if_down(iface);
+		if (ret) {
+			printk("[WiFi] net_if_down failed: %d\n", ret);
+		} else {
+			printk("[WiFi] interface down\n");
+		}
+	}
+
+	/* Restore CPU to 128MHz */
+	nrfx_clock_divider_set(NRF_CLOCK_DOMAIN_HFCLK, NRF_CLOCK_HFCLK_DIV_1);
+	printk("[WiFi] CPU -> 128MHz\n");
+
 	return 0;
 }
 
@@ -517,6 +592,10 @@ SHELL_CMD_REGISTER(iperf, NULL, "UDP iperf throughput test [server_ip] [duration
 
 int wifi_init_and_connect(void)
 {
+	struct net_if *iface;
+	wifi_ready_callback_t cb;
+	int ret;
+
 	/* Generate AP SSID from chip ID */
 	generate_ap_ssid();
 
@@ -528,7 +607,17 @@ int wifi_init_and_connect(void)
 				     NET_EVENT_WIFI_AP_STA_DISCONNECTED);
 	net_mgmt_add_event_callback(&wifi_mgmt_cb);
 
-	printk("WiFi initialized (AP mode, auto-start)\n");
+	/* Register WiFi ready callback */
+	iface = net_if_get_first_wifi();
+	if (iface) {
+		cb.wifi_ready_cb = wifi_ready_callback;
+		ret = register_wifi_ready_callback(cb, iface);
+		if (ret) {
+			printk("[WiFi] ready callback registration failed: %d\n", ret);
+		}
+	}
+
+	printk("WiFi initialized (AP mode, manual start)\n");
 	printk("  SSID will be: %s\n", ap_ssid);
 	printk("  Use 'wifi on' to start AP\n");
 
