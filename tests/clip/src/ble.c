@@ -6,8 +6,10 @@
 
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
+#include <zephyr/shell/shell.h>
 #include <zephyr/bluetooth/bluetooth.h>
 #include <zephyr/bluetooth/hci.h>
+#include <zephyr/bluetooth/hci_vs.h>
 #include <zephyr/bluetooth/conn.h>
 #include <zephyr/bluetooth/uuid.h>
 #include <zephyr/bluetooth/gatt.h>
@@ -296,3 +298,63 @@ int ble_init(void)
 
 	return 0;
 }
+
+/* BLE TX power shell command: set (dBm) for advertising and connections */
+static int cmd_ble_txpower(const struct shell *sh, size_t argc, char **argv)
+{
+	struct net_buf *buf, *rsp;
+	struct bt_hci_cp_vs_write_tx_power_level *cp;
+	struct bt_hci_rp_vs_write_tx_power_level *rp;
+
+	if (argc < 2) {
+		shell_print(sh, "Usage: ble_txpower <dBm>");
+		shell_print(sh, "nRF5340: -40, -20, -16, -12, -8, -4, 0, 3, 4, 5, 6, 7, 8");
+		return -EINVAL;
+	}
+
+	int8_t power = (int8_t)atoi(argv[1]);
+
+	/* Set TX power for advertising (handle_type=0, handle=0) */
+	buf = bt_hci_cmd_create(BT_HCI_OP_VS_WRITE_TX_POWER_LEVEL, sizeof(*cp));
+	if (!buf) {
+		shell_error(sh, "Failed to create HCI cmd");
+		return -ENOMEM;
+	}
+	cp = net_buf_add(buf, sizeof(*cp));
+	cp->handle_type = BT_HCI_VS_LL_HANDLE_TYPE_ADV;
+	cp->handle = 0;
+	cp->tx_power_level = power;
+
+	int ret = bt_hci_cmd_send_sync(BT_HCI_OP_VS_WRITE_TX_POWER_LEVEL, buf, &rsp);
+
+	if (ret) {
+		shell_error(sh, "Set TX power failed: %d", ret);
+		return ret;
+	}
+	rp = (void *)rsp->data;
+	shell_print(sh, "BLE TX power: requested %d dBm, selected %d dBm",
+		    power, rp->selected_tx_power);
+	net_buf_unref(rsp);
+
+	/* Also set for active connection if any */
+	if (current_conn) {
+		uint16_t conn_handle = bt_conn_index(current_conn);
+
+		buf = bt_hci_cmd_create(BT_HCI_OP_VS_WRITE_TX_POWER_LEVEL, sizeof(*cp));
+		if (buf) {
+			cp = net_buf_add(buf, sizeof(*cp));
+			cp->handle_type = BT_HCI_VS_LL_HANDLE_TYPE_CONN;
+			cp->handle = conn_handle;
+			cp->tx_power_level = power;
+			bt_hci_cmd_send_sync(BT_HCI_OP_VS_WRITE_TX_POWER_LEVEL, buf, &rsp);
+			rp = (void *)rsp->data;
+			shell_print(sh, "Conn TX power: selected %d dBm", rp->selected_tx_power);
+			net_buf_unref(rsp);
+		}
+	}
+
+	return 0;
+}
+
+SHELL_CMD_REGISTER(ble_txpower, NULL,
+		   "Set BLE TX power (dBm)", cmd_ble_txpower);
