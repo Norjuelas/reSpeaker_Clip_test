@@ -20,3 +20,13 @@
 &wlan0 {
 	status = "disabled";
 };
+
+/*
+ * Add pull-down to SPI4 sleep pinctrl so suspended pins don't float
+ * and leak through the SD card's ESD diodes.
+ */
+&spi4_sleep {
+	group1 {
+		bias-pull-down;
+	};
+};

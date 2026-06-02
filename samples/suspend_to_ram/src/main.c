@@ -4,9 +4,6 @@
  * PM_STATE_SUSPEND_TO_RAM test for ReSpeaker Clip (nRF5340) with the
  * peripheral rails turned off. No nRF7002 / MPSL / WiFi / BT stack.
  *
- * Network core forced off; nPM1300 LDO1/LDO2 disabled and BUCK2 forced
- * to PFM; OLED/RFSW load switches held LOW.
- *
  * Tests SD card mount/unmount/poweroff in a loop every 30s to verify
  * current returns to ~250µA after each cycle.
  *
@@ -16,6 +13,7 @@
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/pm/pm.h>
+#include <zephyr/pm/device.h>
 #include <zephyr/drivers/gpio.h>
 #include <zephyr/drivers/regulator.h>
 #include <zephyr/sys/__assert.h>
@@ -24,30 +22,19 @@
 #include <zephyr/dt-bindings/regulator/npm13xx.h>
 #include <zephyr/storage/disk_access.h>
 #include <zephyr/fs/fs.h>
-#include <zephyr/pm/device.h>
 #include <ff.h>
-#include <hal/nrf_reset.h>
 
 LOG_MODULE_REGISTER(suspend_to_ram, LOG_LEVEL_INF);
 
 #define SUSPEND_INDICATE_PIN 27
-#define RFSW_EN_PIN  29  /* gpio0.29 - rfsw_reg (RF switch) */
-#define OLED_EN_PIN   8  /* gpio1.8  - oled_reg (OLED panel VDD) */
-
-/* SPI4 pins: SCK=0.6, MOSI=0.8, MISO=0.7, CS=0.9 */
-#define SPI4_SCK  6
-#define SPI4_MISO 7
-#define SPI4_MOSI 8
-#define SPI4_CS   9
+#define SPI4_CS_PIN          9  /* gpio0.9 - SD card CS (active-low) */
 
 static const struct device *gpio0 = DEVICE_DT_GET(DT_NODELABEL(gpio0));
 static const struct device *gpio1 = DEVICE_DT_GET(DT_NODELABEL(gpio1));
 static const struct device *buck2 = DEVICE_DT_GET(DT_NODELABEL(npm1300_buck2));
 static const struct device *ldo1  = DEVICE_DT_GET(DT_NODELABEL(npm1300_ldo1));
 static const struct device *ldo2  = DEVICE_DT_GET(DT_NODELABEL(npm1300_ldo2));
-
-static const struct device *sdhc_dev = DEVICE_DT_GET(DT_NODELABEL(sdhc0));
-static const struct device *spi4_dev = DEVICE_DT_GET(DT_NODELABEL(spi4));
+static const struct device *spi4  = DEVICE_DT_GET(DT_NODELABEL(spi4));
 
 static FATFS fat_fs;
 static struct fs_mount_t mp = {
@@ -55,7 +42,6 @@ static struct fs_mount_t mp = {
 	.fs_data = &fat_fs,
 	.mnt_point = "/SD:",
 };
-static bool sd_suspended;
 
 static void on_pm_state_entry(enum pm_state state)
 {
@@ -75,17 +61,34 @@ static struct pm_notifier notifier = {
 	.state_exit = on_pm_state_exit,
 };
 
-static void disconnect_spi4_pins(void)
+/*
+ * Suspend SPI4 so pinctrl applies the sleep state (pins disconnected +
+ * pulled down). Also park CS as input+pull-down to prevent leakage
+ * through the unpowered SD card's ESD diodes.
+ */
+static void spi4_suspend(void)
 {
-	gpio_pin_configure(gpio0, SPI4_SCK,  GPIO_INPUT | GPIO_PULL_DOWN);
-	gpio_pin_configure(gpio0, SPI4_MISO, GPIO_INPUT | GPIO_PULL_DOWN);
-	gpio_pin_configure(gpio0, SPI4_MOSI, GPIO_INPUT | GPIO_PULL_DOWN);
-	gpio_pin_configure(gpio0, SPI4_CS,   GPIO_INPUT | GPIO_PULL_DOWN);
+	gpio_pin_configure(gpio0, SPI4_CS_PIN, GPIO_INPUT | GPIO_PULL_DOWN);
+	pm_device_action_run(spi4, PM_DEVICE_ACTION_SUSPEND);
+	LOG_INF("SPI4 suspended (sleep pinctrl)");
+}
+
+/*
+ * Resume SPI4 so pinctrl restores the default state (SCK/MOSI/MISO
+ * back in SPIM function). Restore CS as output with GPIO_ACTIVE_LOW
+ * preserved — physical HIGH = deselected.
+ */
+static void spi4_resume(void)
+{
+	pm_device_action_run(spi4, PM_DEVICE_ACTION_RESUME);
+	gpio_pin_configure(gpio0, SPI4_CS_PIN,
+			   GPIO_OUTPUT_HIGH | GPIO_ACTIVE_LOW);
+	LOG_INF("SPI4 resumed (default pinctrl)");
 }
 
 static void shutdown_peripheral_rails(void)
 {
-	gpio_pin_configure(gpio1, OLED_EN_PIN, GPIO_OUTPUT_LOW);
+	gpio_pin_configure(gpio1, 8, GPIO_OUTPUT_LOW); /* OLED_EN */
 
 	if (device_is_ready(ldo1)) {
 		regulator_disable(ldo1);
@@ -104,6 +107,8 @@ static void shutdown_peripheral_rails(void)
 			LOG_INF("BUCK2 set to PFM");
 		}
 	}
+
+	spi4_suspend();
 }
 
 static int test_sd_card(void)
@@ -111,30 +116,18 @@ static int test_sd_card(void)
 	int rc;
 	struct fs_statvfs stat;
 
-	/* Resume devices if they were previously suspended */
-	if (sd_suspended) {
-		if (device_is_ready(spi4_dev)) {
-			pm_device_action_run(spi4_dev, PM_DEVICE_ACTION_RESUME);
-			LOG_INF("SPI4 resumed");
-		}
-		if (device_is_ready(sdhc_dev)) {
-			pm_device_action_run(sdhc_dev, PM_DEVICE_ACTION_RESUME);
-			LOG_INF("SDHC resumed");
-		}
-		sd_suspended = false;
-	}
-
-	/* Reset FATFS object for fresh mount */
 	memset(&fat_fs, 0, sizeof(fat_fs));
 
-	/* Power on SD card via LDO2 */
+	/* Power on SD card */
 	if (device_is_ready(ldo2)) {
 		regulator_enable(ldo2);
-		k_msleep(50);
+		k_msleep(100);
 		LOG_INF("LDO2 (SD) enabled");
 	}
 
-	/* Init disk */
+	/* Restore SPI4 pins to SPI function */
+	spi4_resume();
+
 	rc = disk_access_init("SD");
 	if (rc) {
 		LOG_ERR("disk_access_init failed: %d", rc);
@@ -142,7 +135,6 @@ static int test_sd_card(void)
 	}
 	LOG_INF("SD disk initialized");
 
-	/* Mount filesystem */
 	rc = fs_mount(&mp);
 	if (rc) {
 		LOG_ERR("fs_mount failed: %d", rc);
@@ -150,14 +142,12 @@ static int test_sd_card(void)
 	}
 	LOG_INF("SD mounted");
 
-	/* Check free space */
 	rc = fs_statvfs("/SD:", &stat);
 	if (rc == 0) {
 		LOG_INF("SD: %u MB free",
 			(unsigned)(stat.f_bfree * stat.f_bsize / (1024 * 1024)));
 	}
 
-	/* Write a test file */
 	struct fs_file_t file;
 
 	fs_file_t_init(&file);
@@ -168,7 +158,6 @@ static int test_sd_card(void)
 		LOG_INF("Test file written");
 	}
 
-	/* Unmount filesystem */
 	rc = fs_unmount(&mp);
 	if (rc) {
 		LOG_ERR("fs_unmount failed: %d", rc);
@@ -176,29 +165,18 @@ static int test_sd_card(void)
 	}
 	LOG_INF("SD unmounted");
 
-	/* Force SDHC and SPI4 into suspend */
-	if (device_is_ready(sdhc_dev)) {
-		pm_device_action_run(sdhc_dev, PM_DEVICE_ACTION_SUSPEND);
-		LOG_INF("SDHC suspended");
-	}
-	if (device_is_ready(spi4_dev)) {
-		pm_device_action_run(spi4_dev, PM_DEVICE_ACTION_SUSPEND);
-		LOG_INF("SPI4 suspended");
-	}
-	sd_suspended = true;
+	disk_access_ioctl("SD", DISK_IOCTL_CTRL_DEINIT, NULL);
+	LOG_INF("SD disk deinitialized");
 
 	k_msleep(100);
 
 power_off:
-	/* Power off SD card via LDO2 */
 	if (device_is_ready(ldo2)) {
 		regulator_disable(ldo2);
 		LOG_INF("LDO2 (SD) disabled");
 	}
 
-	/* Disconnect SPI4 pins to prevent leakage */
-	disconnect_spi4_pins();
-	LOG_INF("SPI4 pins disconnected");
+	spi4_suspend();
 
 	LOG_INF("SD card cycle complete");
 	return rc;
@@ -239,7 +217,6 @@ int main(void)
 		return -1;
 	}
 
-	/* Shut down all peripheral rails */
 	shutdown_peripheral_rails();
 
 	pm_notifier_register(&notifier);
