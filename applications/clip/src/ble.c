@@ -303,6 +303,13 @@ static void adv_timeout_handler(struct k_work *work)
 		return;
 	}
 
+	/* Only switch to slow advertising when idle */
+	enum clip_state state = clip_event_get_state();
+	if (state != CLIP_STATE_IDLE) {
+		k_work_reschedule(&adv_timeout_work, K_MSEC(ADV_FAST_TIMEOUT_MS));
+		return;
+	}
+
 	LOG_INF("slow adv");
 	is_fast_adv = false;
 	bt_le_adv_stop();
