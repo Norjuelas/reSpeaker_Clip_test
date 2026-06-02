@@ -88,7 +88,7 @@ static void spi4_resume(void)
 
 static void shutdown_peripheral_rails(void)
 {
-	gpio_pin_configure(gpio1, 8, GPIO_OUTPUT_LOW); /* OLED_EN */
+	/* OLED_EN kept ON for display test */
 
 	if (device_is_ready(ldo1)) {
 		regulator_disable(ldo1);
@@ -99,13 +99,8 @@ static void shutdown_peripheral_rails(void)
 		LOG_INF("LDO2 (SD) disabled");
 	}
 	if (device_is_ready(buck2)) {
-		int ret = regulator_set_mode(buck2, NPM13XX_BUCK_MODE_PFM);
-
-		if (ret) {
-			LOG_WRN("BUCK2 PFM mode failed: %d", ret);
-		} else {
-			LOG_INF("BUCK2 set to PFM");
-		}
+		/* PFM skipped for baseline test */
+		LOG_INF("BUCK2 PFM skipped");
 	}
 
 	spi4_suspend();
