@@ -365,7 +365,7 @@ int battery_init(void)
 		return -ENODEV;
 	}
 
-	LOG_INF("Battery: HSZ 362123, fuel gauge %s", nrf_fuel_gauge_version);
+	LOG_INF("Battery: 240mAh, fuel gauge %s", nrf_fuel_gauge_version);
 
 	/* Read initial sensor values */
 	ret = read_sensors(&init_params.v0, &init_params.i0, &init_params.t0, &chg_status);
