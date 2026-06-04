@@ -333,6 +333,10 @@ int wifi_on(void)
 			}
 		}
 
+#ifdef CONFIG_NRF70_SR_COEX
+		/* Configure coexistence early so WiFi/BLE share radio properly */
+		wifi_coex_configure();
+#endif
 	}
 
 	/* Set regulatory domain */
@@ -366,11 +370,6 @@ int wifi_on(void)
 
 	/* Start DHCP server */
 	wifi_start_dhcp_server(iface);
-
-#ifdef CONFIG_NRF70_SR_COEX
-	/* Configure WiFi/BLE coexistence after DHCP is ready */
-	wifi_coex_configure();
-#endif
 
 	/* Start UDP server */
 	ret = wifi_udp_start();
