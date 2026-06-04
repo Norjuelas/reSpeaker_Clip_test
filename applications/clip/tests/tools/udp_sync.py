@@ -50,6 +50,10 @@ def main():
                        help="Skip OGG conversion")
     parser.add_argument("--resync", "-r", action="store_true",
                        help="Re-download even if already synced locally")
+    parser.add_argument("--cancel", action="store_true",
+                       help="Send AT+CANCEL command (stops active transfer)")
+    parser.add_argument("--cancel-after", type=float, metavar="SECONDS",
+                       help="Auto-cancel download after N seconds (use with --session)")
     args = parser.parse_args()
 
     sync = WiFiSync(args.host, args.port, args.timeout)
@@ -57,6 +61,11 @@ def main():
         sys.exit(1)
 
     try:
+        if args.cancel:
+            result = sync._send_at_command("CANCEL")
+            print(f"CANCEL: {result}")
+            sys.exit(0 if result.get("ok") else 1)
+
         if args.session:
             sessions_to_sync = [{"id": args.session}]
         elif args.all_sessions:
@@ -103,6 +112,7 @@ def main():
                 convert_ogg=not args.no_ogg,
                 start_file=args.file,
                 delete_after=args.delete,
+                cancel_after=args.cancel_after,
             ):
                 ok += 1
             else:

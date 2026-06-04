@@ -66,6 +66,8 @@ struct clip_context {
         uint8_t oled_brightness;    /* OLED brightness (0-255) */
         char wifi_password[9];      /* WiFi AP password (8 chars + NUL) */
         char device_name[33];       /* User-defined device name (32 chars + NUL) */
+        uint8_t wifi_channel;       /* WiFi AP channel (default 36) */
+        char wifi_reg_domain[3];    /* WiFi regulatory domain (2 chars + NUL, default "US") */
     } config;
 
     /* Status */

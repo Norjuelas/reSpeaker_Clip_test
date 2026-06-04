@@ -1522,6 +1522,60 @@ static int cmd_wifi_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
     }
 }
 
+static int cmd_wificfg_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
+{
+    if (ctx->type == AT_CMD_TYPE_SET || ctx->type == AT_CMD_TYPE_EXEC) {
+        if (!ctx->args || strlen(ctx->args) == 0) {
+            return create_json_response(false, "Missing argument (format: channel:CC)", NULL, response, len);
+        }
+
+        /* Parse channel:CC (e.g., "36:US" or "149:CN") */
+        char args[32];
+        strncpy(args, ctx->args, sizeof(args) - 1);
+        args[sizeof(args) - 1] = '\0';
+
+        char *colon = strchr(args, ':');
+        if (!colon || colon == args || strlen(colon + 1) != 2) {
+            return create_json_response(false, "Invalid format (use: channel:CC, e.g. 36:US)",
+                                       NULL, response, len);
+        }
+
+        *colon = '\0';
+        int channel = atoi(args);
+        char *reg_domain = colon + 1;
+
+        /* Validate channel (5GHz: 36-165) */
+        if (channel < 36 || channel > 165) {
+            return create_json_response(false, "Channel must be 36-165 (5GHz)", NULL, response, len);
+        }
+
+        /* Validate reg_domain (2 uppercase letters) */
+        for (int i = 0; i < 2; i++) {
+            if (reg_domain[i] < 'A' || reg_domain[i] > 'Z') {
+                if (reg_domain[i] >= 'a' && reg_domain[i] <= 'z') {
+                    reg_domain[i] = reg_domain[i] - 'a' + 'A';
+                } else {
+                    return create_json_response(false, "Reg domain must be 2-letter country code",
+                                               NULL, response, len);
+                }
+            }
+        }
+
+        config_set_wifi_channel((uint8_t)channel);
+        config_set_wifi_reg_domain(reg_domain);
+
+        char data[64];
+        snprintf(data, sizeof(data), "{\"channel\":%d,\"reg_domain\":\"%s\"}", channel, reg_domain);
+        return create_json_response(true, "Saved (apply on next WiFi start)", data, response, len);
+    } else {
+        /* Query */
+        char data[64];
+        snprintf(data, sizeof(data), "{\"channel\":%u,\"reg_domain\":\"%s\"}",
+                 config_get_wifi_channel(), config_get_wifi_reg_domain());
+        return create_json_response(true, NULL, data, response, len);
+    }
+}
+
 static int cmd_usb_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
 {
     if (ctx->type == AT_CMD_TYPE_SET || ctx->type == AT_CMD_TYPE_EXEC) {
@@ -1808,6 +1862,15 @@ int at_commands_register(void)
         .handler = cmd_wifi_handler,
     };
     err = at_server_register_cmd(&wifi_cmd);
+    if (err) return err;
+
+    /* WIFICFG - WiFi AP channel/regulatory domain */
+    static const struct at_command wificfg_cmd = {
+        .name = "WIFICFG",
+        .flags = AT_CMD_SET | AT_CMD_QUERY,
+        .handler = cmd_wificfg_handler,
+    };
+    err = at_server_register_cmd(&wificfg_cmd);
     if (err) return err;
 
     /* NAME - Set/Get device name */

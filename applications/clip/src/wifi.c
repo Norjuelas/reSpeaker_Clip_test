@@ -20,6 +20,7 @@
 #include "wifi_udp.h"
 #include "transport_udp.h"
 #include "config.h"
+#include "config.h"
 #include "clip_event.h"
 #include "ble.h"
 
@@ -216,7 +217,7 @@ static int wifi_set_reg_domain(struct net_if *iface)
 	int ret;
 
 	regd.oper = WIFI_MGMT_SET;
-	strncpy(regd.country_code, WIFI_AP_REG_DOMAIN, WIFI_COUNTRY_CODE_LEN + 1);
+	strncpy(regd.country_code, config_get_wifi_reg_domain(), WIFI_COUNTRY_CODE_LEN + 1);
 
 	ret = net_mgmt(NET_REQUEST_WIFI_REG_DOMAIN, iface, &regd, sizeof(regd));
 	if (ret)
@@ -239,7 +240,7 @@ static int wifi_enable_ap(struct net_if *iface)
 	req.ssid_length = strlen(ap_ssid);
 	req.psk = (const uint8_t *)config_get_wifi_password();
 	req.psk_length = strlen(config_get_wifi_password());
-	req.channel = WIFI_AP_CHANNEL;
+	req.channel = config_get_wifi_channel();
 	req.security = WIFI_SECURITY_TYPE_PSK;
 	req.mfp = WIFI_MFP_OPTIONAL;
 	req.band = WIFI_FREQ_BAND_5_GHZ;

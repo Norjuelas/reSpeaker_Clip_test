@@ -19,6 +19,8 @@
 #define CONFIG_KEY_BRIGHTNESS    0x0A
 #define CONFIG_KEY_WIFI_PASSWORD 0x0B
 #define CONFIG_KEY_DEVICE_NAME   0x0C
+#define CONFIG_KEY_WIFI_CHANNEL  0x0D
+#define CONFIG_KEY_WIFI_REG_DOMAIN 0x0E
 
 
 /**
@@ -186,5 +188,35 @@ int config_set_device_name(const char *name);
  * @return Device name string, or empty string if not set
  */
 const char *config_get_device_name(void);
+
+/**
+ * @brief Set WiFi AP channel
+ *
+ * @param channel Channel number (5GHz: 36-165)
+ * @return 0 on success, negative error code on failure
+ */
+int config_set_wifi_channel(uint8_t channel);
+
+/**
+ * @brief Get WiFi AP channel
+ *
+ * @return Channel number
+ */
+uint8_t config_get_wifi_channel(void);
+
+/**
+ * @brief Set WiFi regulatory domain
+ *
+ * @param reg_domain 2-letter country code
+ * @return 0 on success, negative error code on failure
+ */
+int config_set_wifi_reg_domain(const char *reg_domain);
+
+/**
+ * @brief Get WiFi regulatory domain
+ *
+ * @return 2-letter country code string
+ */
+const char *config_get_wifi_reg_domain(void);
 
 #endif /* CLIP_CONFIG_H */

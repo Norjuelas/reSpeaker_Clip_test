@@ -11,6 +11,7 @@ Usage:
 import asyncio
 import sys
 import time
+import threading
 from pathlib import Path
 
 # Add parent directory to path for imports
@@ -210,7 +211,42 @@ Examples:
                 except Exception:
                     print(f"  {s.id}: Starting sync ({s.files} files)")
 
-            print(f"\nStarting sync...")
+            print(f"\nStarting sync... (Press 'c' to cancel)")
+
+            # Key monitor for all-sessions mode
+            all_cancel = threading.Event()
+
+            def _all_key_monitor():
+                if not sys.stdin.isatty():
+                    return
+                try:
+                    import msvcrt
+                    while not all_cancel.is_set():
+                        if msvcrt.kbhit():
+                            ch = msvcrt.getch().decode('utf-8', errors='replace')
+                            if ch == 'c':
+                                all_cancel.set()
+                                break
+                        import time as _time; _time.sleep(0.1)
+                except ImportError:
+                    import tty, termios
+                    fd = sys.stdin.fileno()
+                    old = termios.tcgetattr(fd)
+                    try:
+                        tty.setcbreak(fd)
+                        while not all_cancel.is_set():
+                            try:
+                                ch = sys.stdin.read(1)
+                                if ch == 'c':
+                                    all_cancel.set()
+                                    break
+                            except Exception:
+                                break
+                    finally:
+                        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+
+            _all_key_thread = threading.Thread(target=_all_key_monitor, daemon=True)
+            _all_key_thread.start()
 
             # Sync sessions one by one with individual progress bars
             results = []
@@ -264,15 +300,35 @@ Examples:
                         print(f"  [{file_count:3d}] {filename}: {format_bytes(total_size)}")
 
                 session_dir = args.output / device_dir_name / session.id
-                result = await sync.sync(
-                    session.id,
-                    session_dir,
-                    delete_after=args.delete,
-                    continuous=False,
-                    force=args.resync,
-                    progress_callback=session_progress_callback,
+                sync_task = asyncio.create_task(
+                    sync.sync(
+                        session.id,
+                        session_dir,
+                        delete_after=args.delete,
+                        continuous=False,
+                        force=args.resync,
+                        progress_callback=session_progress_callback,
+                    )
                 )
-                results.append(result)
+                result = None
+                while not sync_task.done():
+                    if all_cancel.is_set():
+                        print(f"\n  Canceling transfer...")
+                        try:
+                            await sync.cancel()
+                        except Exception:
+                            pass
+                        break
+                    await asyncio.sleep(0.2)
+                try:
+                    if sync_task.done():
+                        result = sync_task.result()
+                except Exception:
+                    result = None
+                if all_cancel.is_set():
+                    break
+                if result:
+                    results.append(result)
 
                 if session_pbar is not None:
                     session_pbar.close()
@@ -377,9 +433,9 @@ Examples:
 
         if continuous:
             print("  (Recording in progress - will sync files as they are created)")
-            print("  (Press Ctrl+C to stop)")
         else:
             print("  (Waiting for files to transfer...)")
+        print("  Press 'c' to cancel, Ctrl+C to stop")
         if HAS_TQDM:
             print("  (Progress bar with transfer rate)")
         else:
@@ -388,6 +444,7 @@ Examples:
 
         sync_start = time.time()
         stop_event = asyncio.Event()
+        cancel_by_key = False  # Track if cancel was triggered by 'c' key
 
         def signal_handler(sig, frame):
             print("\n\nStopping...")
@@ -398,6 +455,46 @@ Examples:
             signal.signal(signal.SIGINT, signal_handler)
         except ValueError:
             pass
+
+        # Key monitor: press 'c' to cancel transfer
+        loop = asyncio.get_running_loop()
+
+        def _key_monitor():
+            nonlocal cancel_by_key
+            if not sys.stdin.isatty():
+                return
+            try:
+                import msvcrt
+                # Windows
+                while not stop_event.is_set():
+                    if msvcrt.kbhit():
+                        ch = msvcrt.getch().decode('utf-8', errors='replace')
+                        if ch == 'c':
+                            cancel_by_key = True
+                            loop.call_soon_threadsafe(stop_event.set)
+                            break
+                    import time as _time; _time.sleep(0.1)
+            except ImportError:
+                # Linux/Mac
+                import tty, termios
+                fd = sys.stdin.fileno()
+                old = termios.tcgetattr(fd)
+                try:
+                    tty.setcbreak(fd)
+                    while not stop_event.is_set():
+                        try:
+                            ch = sys.stdin.read(1)
+                            if ch == 'c':
+                                cancel_by_key = True
+                                loop.call_soon_threadsafe(stop_event.set)
+                                break
+                        except Exception:
+                            break
+                finally:
+                    termios.tcsetattr(fd, termios.TCSADRAIN, old)
+
+        key_thread = threading.Thread(target=_key_monitor, daemon=True)
+        key_thread.start()
 
         # tqdm progress bar (if available)
         pbar = None
@@ -481,10 +578,13 @@ Examples:
         while not sync_task.done():
             try:
                 await asyncio.wait_for(stop_event.wait(), timeout=0.1)
-                # User pressed Ctrl+C
+                # User pressed 'c' or Ctrl+C
                 if pbar is not None:
                     pbar.close()
-                print("\nStopping sync...")
+                if cancel_by_key:
+                    print("\nCanceling transfer...")
+                else:
+                    print("\nStopping sync...")
                 await sync.cancel()
                 break
             except asyncio.TimeoutError:

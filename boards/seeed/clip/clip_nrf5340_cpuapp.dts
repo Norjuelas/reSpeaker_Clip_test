@@ -188,9 +188,9 @@
 		};
 		npm1300_charger: charger {
 			compatible = "nordic,npm1300-charger";
-			term-microvolt = <4150000>;
-			term-warm-microvolt = <4000000>;
-			current-microamp = <150000>;
+			term-microvolt = <4200000>;
+			term-warm-microvolt = <4100000>;
+			current-microamp = <220000>;
 			dischg-limit-microamp = <1000000>;
 			vbus-limit-microamp = <500000>;
 			thermistor-ohms = <10000>;

@@ -228,7 +228,7 @@ static void process_command(struct at_queue_item *item)
         return;
     }
 
-    LOG_DBG("AT command: %s type=%d args=%s", cmd_name, cmd_type, args);
+    LOG_INF("AT command: %s type=%d args=%s", cmd_name, cmd_type, args);
 
     /* Find command handler */
     struct at_cmd_ctx ctx = {

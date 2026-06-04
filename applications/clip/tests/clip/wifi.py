@@ -395,6 +395,7 @@ class WiFiSync:
         start_file: Optional[str] = None,
         delete_after: bool = False,
         progress_callback: Optional[Callable] = None,
+        cancel_after: Optional[float] = None,
     ) -> bool:
         """
         Download a session via UDP.
@@ -407,6 +408,7 @@ class WiFiSync:
             delete_after: Delete session from device after successful download
             progress_callback: Optional callback(filename, file_count, total_bytes,
                           current_file_bytes, current_file_total)
+            cancel_after: If set, auto-cancel download after N seconds
 
         Returns:
             True if any files were received
@@ -484,6 +486,68 @@ class WiFiSync:
         file_crc = 0
         last_pbar_size = 0
         received_bytes = 0  # Cumulative bytes received across all files
+
+        # Cancel support: 'c' key or --cancel-after timer
+        cancel_triggered = threading.Event()
+
+        def _cancel_download():
+            if cancel_triggered.is_set():
+                return
+            cancel_triggered.set()
+            print(f"\n  Canceling transfer...")
+            try:
+                self.sock.sendto(b"AT+CANCEL\n", (self.host, self.port))
+            except Exception:
+                pass
+
+        def _key_monitor():
+            """Watch for 'c' keypress to cancel download (cross-platform)."""
+            import sys as _sys
+            if not _sys.stdin.isatty():
+                return
+            try:
+                import msvcrt
+                # Windows
+                while not cancel_triggered.is_set() and self._connected:
+                    if msvcrt.kbhit():
+                        ch = msvcrt.getch().decode('utf-8', errors='replace')
+                        if ch == 'c':
+                            _cancel_download()
+                            break
+                    cancel_triggered.wait(0.1)
+            except ImportError:
+                # Linux/Mac
+                import tty, termios
+                fd = _sys.stdin.fileno()
+                old = termios.tcgetattr(fd)
+                try:
+                    tty.setcbreak(fd)
+                    while not cancel_triggered.is_set() and self._connected:
+                        try:
+                            ch = _sys.stdin.read(1)
+                            if ch == 'c':
+                                _cancel_download()
+                                break
+                        except Exception:
+                            break
+                finally:
+                    termios.tcsetattr(fd, termios.TCSADRAIN, old)
+
+        key_thread = threading.Thread(target=_key_monitor, daemon=True)
+        key_thread.start()
+
+        cancel_timer = None
+        if cancel_after is not None:
+            def _cancel_after_timeout():
+                _cancel_download()
+            cancel_timer = threading.Timer(cancel_after, _cancel_after_timeout)
+            cancel_timer.daemon = True
+            cancel_timer.start()
+
+        if cancel_after is not None:
+            print(f"  Press 'c' or wait {cancel_after}s to cancel")
+        else:
+            print(f"  Press 'c' to cancel")
 
         try:
             while True:
@@ -635,6 +699,8 @@ class WiFiSync:
         except Exception as e:
             print(f"  Error: {e}")
         finally:
+            if cancel_timer is not None:
+                cancel_timer.cancel()
             if pbar is not None:
                 pbar.close()
 

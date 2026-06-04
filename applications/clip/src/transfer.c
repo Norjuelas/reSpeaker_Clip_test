@@ -31,10 +31,20 @@ static uint8_t chunk_buffer[CONFIG_CLIP_TRANSFER_CHUNK_SIZE];
 static struct k_thread transfer_thread_data;
 static k_tid_t transfer_thread_id;
 static K_SEM_DEFINE(transfer_trigger_sem, 0, 1);
+static K_SEM_DEFINE(transfer_idle_sem, 0, 1);
 static K_MUTEX_DEFINE(transfer_cleanup_mutex);
 static volatile bool transfer_thread_running = false;
 static volatile bool transfer_thread_waiting = false;
 static volatile bool transfer_thread_ready = false;
+
+/* Helper: transfer thread signals idle then waits for trigger */
+static void transfer_thread_wait_idle(void)
+{
+	transfer_thread_waiting = true;
+	k_sem_give(&transfer_idle_sem);
+	k_sem_take(&transfer_trigger_sem, K_FOREVER);
+	transfer_thread_waiting = false;
+}
 
 /* Transfer state */
 static struct transfer_info current_transfer = {0};
@@ -111,10 +121,15 @@ int transfer_init(void)
         return -ENOMEM;
     }
     k_thread_name_set(&transfer_thread_data, "transfer");
-    LOG_INF("xfer thread waiting");
+    LOG_INF("xfer thread created");
 
-    /* Wait a bit for thread to initialize */
-    k_sleep(K_MSEC(100));
+    /* Wait for thread to reach idle state */
+    if (k_sem_take(&transfer_idle_sem, K_SECONDS(1)) != 0) {
+        LOG_ERR("Transfer thread not ready after 1s");
+        return -ETIMEDOUT;
+    }
+    /* Give back so transfer_start() can take it — thread is idle on trigger_sem */
+    k_sem_give(&transfer_idle_sem);
 
     return 0;
 }
@@ -137,72 +152,40 @@ int transfer_start(const char *session_id, const char *filename, struct transpor
     LOG_INF("xfer tp=%d", tp->type);
 
     clip_cpu_boost_acquire();
-    /* Check if transfer is already active */
+
+    /* Check if transfer is already active with file open */
     if (transfer_is_active() && transfer_file_open) {
+        clip_cpu_boost_release();
         LOG_WRN("Transfer already active");
         return -EBUSY;
     }
 
-    /* Wait for any previous transfer to complete */
-    int retry_count = 0;
-    while (current_transfer.state == TRANSFER_STATE_TRANSMITTING) {
-        if (transfer_file_open) {
-            LOG_WRN("Transfer in progress with file open");
-            return -EBUSY;
-        }
-
-        if (++retry_count > 20) {
-            LOG_WRN("xfer cleanup timeout, forcing idle");
-            current_transfer.state = TRANSFER_STATE_IDLE;
-            break;
-        }
-        k_sleep(K_MSEC(100));
-    }
-
-    /* Wait for transfer thread to be ready */
-    if (!transfer_thread_ready) {
-        int retry = 0;
-        while (!transfer_thread_ready && retry < 100) {
-            k_sleep(K_MSEC(10));
-            retry++;
-        }
-        if (!transfer_thread_ready) {
-            LOG_ERR("Transfer thread not ready after timeout");
-            return -ETIMEDOUT;
-        }
-    }
-
-    /* Wait for thread to finish cleanup and reach sem_take.
-     * Without this, memset + state=TRANSMITTING can race with
-     * the thread's transfer_cleanup() which sets state=IDLE.
-     */
-    {
-        int retry = 0;
-        while (!transfer_thread_waiting && retry < 200) {
-            k_sleep(K_MSEC(10));
-            retry++;
-        }
-        if (!transfer_thread_waiting) {
-            LOG_WRN("Transfer thread not waiting after 2s");
-        }
+    /* Wait for transfer thread to be idle (replaces 3 polling loops) */
+    if (k_sem_take(&transfer_idle_sem, K_SECONDS(3)) != 0) {
+        clip_cpu_boost_release();
+        LOG_ERR("Transfer thread not idle after 3s");
+        return -ETIMEDOUT;
     }
 
     if (!storage_is_mounted()) {
         LOG_ERR("SD card not mounted");
-        return -ENODEV;
+        err = -ENODEV;
+        goto fail;
     }
 
     /* Check if session exists */
     struct storage_session_info session_info;
     if (storage_get_session_info(session_id, &session_info) != 0) {
         LOG_ERR("Session not found: %s", session_id);
-        return -ENOENT;
+        err = -ENOENT;
+        goto fail;
     }
 
     /* Skip empty sessions (0 files) */
     if (session_info.file_count == 0) {
         LOG_INF("Empty session, skipping: %s", session_id);
-        return -ENOENT;
+        err = -ENOENT;
+        goto fail;
     }
 
     atomic_set(&transfer_complete_sent, 0);
@@ -269,15 +252,20 @@ int transfer_start(const char *session_id, const char *filename, struct transpor
 
     /* Start transfer thread */
     transfer_thread_running = true;
-    LOG_INF("xfer: sem give, state=%d waiting=%d",
-        current_transfer.state, transfer_thread_waiting);
     k_sem_give(&transfer_trigger_sem);
 
     return 0;
+
+fail:
+    clip_cpu_boost_release();
+    k_sem_give(&transfer_trigger_sem);  /* Release thread from idle */
+    return err;
 }
 
 int transfer_resume_from(const char *session_id, const char *start_file, struct transport *tp)
 {
+    int err;
+
     /* Use active transport if none specified */
     if (!tp) {
         tp = transport_get_active();
@@ -287,56 +275,39 @@ int transfer_resume_from(const char *session_id, const char *start_file, struct 
         }
     }
 
-    /* Wait for any previous transfer to complete */
-    int retry_count = 0;
-    while (current_transfer.state == TRANSFER_STATE_TRANSMITTING) {
-        if (transfer_file_open) {
-            return -EBUSY;
-        }
-
-        if (++retry_count > 50) {
-            LOG_WRN("xfer cleanup timeout, forcing idle");
-            current_transfer.state = TRANSFER_STATE_IDLE;
-            break;
-        }
-        k_sleep(K_MSEC(100));
+    /* Wait for transfer thread to be idle */
+    if (k_sem_take(&transfer_idle_sem, K_SECONDS(3)) != 0) {
+        LOG_ERR("Transfer thread not idle after 3s");
+        return -ETIMEDOUT;
     }
 
     if (transfer_is_active()) {
-        return -EBUSY;
-    }
-
-    /* Wait for transfer thread to be ready */
-    if (!transfer_thread_ready) {
-        int retry = 0;
-        while (!transfer_thread_ready && retry < 100) {
-            k_sleep(K_MSEC(10));
-            retry++;
-        }
-        if (!transfer_thread_ready) {
-            LOG_ERR("Transfer thread not ready after timeout");
-            return -ETIMEDOUT;
-        }
+        err = -EBUSY;
+        goto fail;
     }
 
     if (!storage_is_mounted()) {
         LOG_ERR("SD card not mounted");
-        return -ENODEV;
+        err = -ENODEV;
+        goto fail;
     }
 
     if (!session_id || !start_file) {
-        return -EINVAL;
+        err = -EINVAL;
+        goto fail;
     }
 
     struct storage_session_info tmp_info;
     if (storage_get_session_info(session_id, &tmp_info) != 0) {
         LOG_ERR("Session not found: %s", session_id);
-        return -ENOENT;
+        err = -ENOENT;
+        goto fail;
     }
 
     if (tmp_info.file_count == 0) {
         LOG_INF("Empty session, skipping: %s", session_id);
-        return -ENOENT;
+        err = -ENOENT;
+        goto fail;
     }
 
     atomic_set(&transfer_complete_sent, 0);
@@ -356,10 +327,11 @@ int transfer_resume_from(const char *session_id, const char *start_file, struct 
 
     /* Get total file count */
     struct storage_session_info session_info;
-    int err = storage_get_session_info(session_id, &session_info);
+    err = storage_get_session_info(session_id, &session_info);
     if (err < 0) {
         LOG_ERR("Failed to get session info: %d", err);
-        return err;
+        clip_cpu_boost_release();
+        goto fail;
     }
 
     current_transfer.total_files = session_info.file_count;
@@ -394,6 +366,10 @@ int transfer_resume_from(const char *session_id, const char *start_file, struct 
     k_sem_give(&transfer_trigger_sem);
 
     return 0;
+
+fail:
+    k_sem_give(&transfer_trigger_sem);  /* Release thread from idle */
+    return err;
 }
 
 int transfer_cancel(void)
@@ -575,19 +551,15 @@ static void transfer_thread_main(void *p1, void *p2, void *p3)
     ARG_UNUSED(p3);
 
     /* Wait for initial transfer start signal */
-    transfer_thread_waiting = true;
     transfer_thread_ready = true;
-    k_sem_take(&transfer_trigger_sem, K_FOREVER);
-    transfer_thread_waiting = false;
+    transfer_thread_wait_idle();
 
     LOG_INF("xfer: initial wake, state=%d", current_transfer.state);
 
     while (transfer_thread_running) {
         /* Check if paused */
         if (current_transfer.state == TRANSFER_STATE_PAUSED) {
-            transfer_thread_waiting = true;
-            k_sem_take(&transfer_trigger_sem, K_FOREVER);
-            transfer_thread_waiting = false;
+            transfer_thread_wait_idle();
             continue;
         }
 
@@ -609,9 +581,7 @@ process_next_file:
             }
             atomic_set(&transfer_cancel_requested, 0);
             transfer_cleanup();
-            transfer_thread_waiting = true;
-            k_sem_take(&transfer_trigger_sem, K_FOREVER);
-            transfer_thread_waiting = false;
+            transfer_thread_wait_idle();
             goto process_next_file;
         }
 
@@ -619,9 +589,7 @@ process_next_file:
         if (current_transfer.state != TRANSFER_STATE_TRANSMITTING) {
             /* Not in transmitting state, wait for next transfer */
             if (current_transfer.state == TRANSFER_STATE_IDLE) {
-                transfer_thread_waiting = true;
-                k_sem_take(&transfer_trigger_sem, K_FOREVER);
-                transfer_thread_waiting = false;
+                transfer_thread_wait_idle();
                 goto process_next_file;
             }
             /* COMPLETED or ERROR state - wait and recheck */
@@ -634,9 +602,7 @@ process_next_file:
             LOG_INF("tp disconnected, stopping xfer");
             current_transfer.state = TRANSFER_STATE_IDLE;
             transfer_cleanup();
-            transfer_thread_waiting = true;
-            k_sem_take(&transfer_trigger_sem, K_FOREVER);
-            transfer_thread_waiting = false;
+            transfer_thread_wait_idle();
             LOG_INF("xfer: re-woke, state=%d tp=%d",
                 current_transfer.state, current_transport != NULL);
             goto process_next_file;
@@ -663,9 +629,7 @@ process_next_file:
                     send_transfer_complete_once(current_transfer.session_id,
                                                  (int)current_transfer.synced_files);
                     transfer_cleanup();
-                    transfer_thread_waiting = true;
-                    k_sem_take(&transfer_trigger_sem, K_FOREVER);
-                    transfer_thread_waiting = false;
+                    transfer_thread_wait_idle();
                     goto process_next_file;
                 } else if (ret == -EAGAIN) {
                     /* Missing file skipped — try next immediately */
@@ -682,9 +646,7 @@ process_next_file:
                         send_transfer_complete_once(current_transfer.session_id,
                                                      (int)current_transfer.synced_files);
                         transfer_cleanup();
-                        transfer_thread_waiting = true;
-                        k_sem_take(&transfer_trigger_sem, K_FOREVER);
-                        transfer_thread_waiting = false;
+                        transfer_thread_wait_idle();
                         consecutive_file_errors = 0;
                         goto process_next_file;
                     }

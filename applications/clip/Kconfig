@@ -79,6 +79,14 @@ config CLIP_DISPLAY_PAIRING_TIMEOUT_MS
 	int "Pairing guide display timeout (ms)"
 	default 60000
 
+config CLIP_WIFI_AP_CHANNEL
+	int "Default WiFi AP channel (5GHz: 36-165)"
+	default 36
+
+config CLIP_WIFI_AP_REG_DOMAIN
+	string "Default WiFi regulatory domain (2-letter country code)"
+	default "US"
+
 # =============================================================================
 # Button Configuration
 # =============================================================================
