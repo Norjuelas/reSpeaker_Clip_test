@@ -26,7 +26,8 @@
 
 LOG_MODULE_REGISTER(suspend_to_ram, LOG_LEVEL_INF);
 
-#define SUSPEND_INDICATE_PIN 27
+#define SUSPEND_INDICATE_PIN 15
+#define SUSPEND_INDICATE_PORT gpio1
 #define SPI4_CS_PIN          9  /* gpio0.9 - SD card CS (active-low) */
 
 static const struct device *gpio0 = DEVICE_DT_GET(DT_NODELABEL(gpio0));
@@ -46,14 +47,14 @@ static struct fs_mount_t mp = {
 static void on_pm_state_entry(enum pm_state state)
 {
 	if (state == PM_STATE_SUSPEND_TO_RAM) {
-		gpio_pin_set(gpio0, SUSPEND_INDICATE_PIN, 1);
+		gpio_pin_set(SUSPEND_INDICATE_PORT, SUSPEND_INDICATE_PIN, 1);
 	}
 }
 
 static void on_pm_state_exit(enum pm_state state)
 {
 	ARG_UNUSED(state);
-	gpio_pin_set(gpio0, SUSPEND_INDICATE_PIN, 0);
+	gpio_pin_set(SUSPEND_INDICATE_PORT, SUSPEND_INDICATE_PIN, 0);
 }
 
 static struct pm_notifier notifier = {
@@ -104,6 +105,16 @@ static void shutdown_peripheral_rails(void)
 	}
 
 	spi4_suspend();
+
+	/* Park all SPI flash pins as input+pull-down to prevent leakage */
+	static const uint8_t flash_pins[] = {19, 20, 21, 22, 23, 24};
+	for (int i = 0; i < ARRAY_SIZE(flash_pins); i++) {
+		gpio_pin_configure(gpio0, flash_pins[i],
+				   GPIO_INPUT | GPIO_PULL_DOWN);
+	}
+	/* P0.27 flash VDD — drive low since regulator-fixed is disabled */
+	gpio_pin_configure(gpio0, 27, GPIO_OUTPUT_INACTIVE);
+	LOG_INF("Flash pins parked (P0.19-24 input+pd, P0.27 output low)");
 }
 
 static int test_sd_card(void)
@@ -205,7 +216,7 @@ int main(void)
 		return -1;
 	}
 
-	int ret = gpio_pin_configure(gpio0, SUSPEND_INDICATE_PIN, GPIO_OUTPUT_INACTIVE);
+	int ret = gpio_pin_configure(SUSPEND_INDICATE_PORT, SUSPEND_INDICATE_PIN, GPIO_OUTPUT_INACTIVE);
 
 	if (ret != 0) {
 		LOG_ERR("gpio_pin_configure failed: %d", ret);
@@ -219,7 +230,7 @@ int main(void)
 	bt_enable(bt_ready);
 
 	LOG_INF("=== suspend_to_ram ready (30s SD cycle) ===");
-	LOG_INF("Probe GPIO0.%d: HIGH = in suspend-to-RAM.",
+	LOG_INF("Probe GPIO1.%d: HIGH = in suspend-to-RAM.",
 		SUSPEND_INDICATE_PIN);
 
 	while (1) {

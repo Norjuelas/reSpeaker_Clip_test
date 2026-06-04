@@ -21,6 +21,21 @@
 	status = "okay";
 };
 
+/* Disable SPI flash and its power for idle current baseline */
+&spi3 {
+	status = "disabled";
+};
+
+&flash_vdd {
+	status = "disabled";
+};
+
+/ {
+	chosen {
+		/delete-property/ nordic,pm-ext-flash;
+	};
+};
+
 /*
  * Add pull-down to SPI4 sleep pinctrl so suspended pins don't float
  * and leak through the SD card's ESD diodes.
