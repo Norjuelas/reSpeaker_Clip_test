@@ -165,22 +165,20 @@ static enum mgmt_cb_return mcumgr_dfu_cb(uint32_t event, enum mgmt_cb_return pre
         k_work_schedule(&ota_progress_work, K_MSEC(OTA_PROGRESS_POLL_INTERVAL_MS));
         clip_post_event(CLIP_EVENT_OTA_START);
     } else if (event == MGMT_EVT_OP_IMG_MGMT_DFU_CHUNK) {
-        /*
-         * data contains struct img_mgmt_upload_check with:
-         * - action->size: total image size
-         * - req->off: current offset
-         */
-        LOG_DBG("MCUmgr: DFU CHUNK event, data=%p, data_size=%zu",
-                data, data_size);
-
         if (data && data_size >= sizeof(struct img_mgmt_upload_check)) {
             struct img_mgmt_upload_check *check = (struct img_mgmt_upload_check *)data;
 
-            LOG_DBG("check=%p, action=%p, req=%p",
-                    check, check->action, check->req);
-
             /* Get total size from action (only once, on first chunk) */
             k_mutex_lock(&ota_mutex, K_FOREVER);
+
+            /* Detect OTA resume: first chunk with offset > 0 means resuming */
+            if (!ota_in_progress && check->req && check->req->off > 0) {
+                LOG_INF("OTA resumed at offset %zu", (size_t)check->req->off);
+                ota_in_progress = true;
+                k_work_schedule(&ota_progress_work, K_MSEC(OTA_PROGRESS_POLL_INTERVAL_MS));
+                clip_post_event(CLIP_EVENT_OTA_START);
+            }
+
             if (check->action && g_ota_total_size == 0) {
                 unsigned long long action_size = check->action->size;
                 if (action_size > 0) {
@@ -238,6 +236,15 @@ static enum mgmt_cb_return mcumgr_dfu_cb(uint32_t event, enum mgmt_cb_return pre
         /* Cancel the progress work */
         k_work_cancel_delayable(&ota_progress_work);
         display_set_ota_progress(100);
+    } else if (event == MGMT_EVT_OP_IMG_MGMT_DFU_STOPPED) {
+        k_mutex_lock(&ota_mutex, K_FOREVER);
+        LOG_INF("OTA stopped/cancelled (%u chunks)", g_ota_chunk_count);
+        g_ota_total_size = 0;
+        g_ota_chunk_count = 0;
+        k_mutex_unlock(&ota_mutex);
+        ota_in_progress = false;
+        k_work_cancel_delayable(&ota_progress_work);
+        clip_post_event(CLIP_EVENT_OTA_DONE);
     }
 
     return MGMT_CB_OK;
@@ -246,16 +253,17 @@ static enum mgmt_cb_return mcumgr_dfu_cb(uint32_t event, enum mgmt_cb_return pre
 void clip_event_ota_cancel(void)
 {
     if (ota_in_progress) {
+        LOG_INF("OTA cancelled (BLE disconnect)");
         ota_in_progress = false;
+        k_work_cancel_delayable(&ota_progress_work);
         clip_post_event(CLIP_EVENT_OTA_DONE);
     }
 }
 
-static struct mgmt_callback mcumgr_dfu_cb_handler = {
-    .callback = mcumgr_dfu_cb,
-    .event_id = MGMT_EVT_OP_IMG_MGMT_DFU_STARTED | MGMT_EVT_OP_IMG_MGMT_DFU_CHUNK |
-                MGMT_EVT_OP_IMG_MGMT_DFU_PENDING,
-};
+static struct mgmt_callback mcumgr_dfu_cb_started;
+static struct mgmt_callback mcumgr_dfu_cb_chunk;
+static struct mgmt_callback mcumgr_dfu_cb_pending;
+static struct mgmt_callback mcumgr_dfu_cb_stopped;
 
 int clip_event_init(void)
 {
@@ -264,7 +272,21 @@ int clip_event_init(void)
 
     k_work_init_delayable(&ota_progress_work, ota_progress_work_handler);
 
-    mgmt_callback_register(&mcumgr_dfu_cb_handler);
+    mcumgr_dfu_cb_started.callback = mcumgr_dfu_cb;
+    mcumgr_dfu_cb_started.event_id = MGMT_EVT_OP_IMG_MGMT_DFU_STARTED;
+    mgmt_callback_register(&mcumgr_dfu_cb_started);
+
+    mcumgr_dfu_cb_chunk.callback = mcumgr_dfu_cb;
+    mcumgr_dfu_cb_chunk.event_id = MGMT_EVT_OP_IMG_MGMT_DFU_CHUNK;
+    mgmt_callback_register(&mcumgr_dfu_cb_chunk);
+
+    mcumgr_dfu_cb_pending.callback = mcumgr_dfu_cb;
+    mcumgr_dfu_cb_pending.event_id = MGMT_EVT_OP_IMG_MGMT_DFU_PENDING;
+    mgmt_callback_register(&mcumgr_dfu_cb_pending);
+
+    mcumgr_dfu_cb_stopped.callback = mcumgr_dfu_cb;
+    mcumgr_dfu_cb_stopped.event_id = MGMT_EVT_OP_IMG_MGMT_DFU_STOPPED;
+    mgmt_callback_register(&mcumgr_dfu_cb_stopped);
 
     LOG_INF("Event dispatcher initialized");
     return 0;
