@@ -43,6 +43,15 @@
 		status = "okay";
 	};
 
+	/* SPI flash power (P0.27), dip switch on Lav, power button on next rev */
+	flash_vdd: regulator-flash {
+		compatible = "regulator-fixed";
+		regulator-name = "flash_vdd";
+		regulator-boot-on;
+		enable-gpios = <&gpio0 27 GPIO_ACTIVE_HIGH>;
+		status = "okay";
+	};
+
 
 	chosen {
 		zephyr,sram = &sram0_image;
