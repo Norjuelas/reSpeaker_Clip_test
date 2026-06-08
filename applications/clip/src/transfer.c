@@ -363,7 +363,6 @@ int transfer_resume_from(const char *session_id, const char *start_file, struct 
     err = storage_get_session_info(session_id, &session_info);
     if (err < 0) {
         LOG_ERR("Failed to get session info: %d", err);
-        clip_cpu_boost_release();
         goto fail;
     }
 

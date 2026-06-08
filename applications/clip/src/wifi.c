@@ -231,7 +231,7 @@ static int wifi_set_reg_domain(struct net_if *iface)
 	int ret;
 
 	regd.oper = WIFI_MGMT_SET;
-	strncpy(regd.country_code, config_get_wifi_reg_domain(), WIFI_COUNTRY_CODE_LEN + 1);
+	strncpy(regd.country_code, config_get_wifi_reg_domain(), WIFI_COUNTRY_CODE_LEN);
 
 	ret = net_mgmt(NET_REQUEST_WIFI_REG_DOMAIN, iface, &regd, sizeof(regd));
 	if (ret)

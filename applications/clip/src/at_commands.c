@@ -11,6 +11,7 @@
 #include <zephyr/retention/bootmode.h>
 #include <time.h>
 #include <string.h>
+#include <strings.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include "at_commands.h"
