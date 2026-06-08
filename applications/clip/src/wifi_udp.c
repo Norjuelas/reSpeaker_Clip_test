@@ -30,6 +30,7 @@ LOG_MODULE_REGISTER(wifi_udp, CONFIG_CLIP_LOG_LEVEL);
 /* State */
 static K_THREAD_STACK_DEFINE(udp_stack, CONFIG_CLIP_UDP_THREAD_STACK_SIZE);
 static struct k_thread udp_thread_data;
+static K_SEM_DEFINE(udp_thread_done_sem, 0, 1);
 
 static volatile bool server_running;
 static volatile bool client_active;
@@ -165,6 +166,7 @@ static void udp_server_thread(void *p1, void *p2, void *p3)
     }
 
     server_running = false;
+    k_sem_give(&udp_thread_done_sem);
     LOG_INF("UDP server stopped");
 }
 
@@ -216,7 +218,8 @@ void wifi_udp_stop(void)
         server_sock = -1;
     }
 
-    k_sleep(K_MSEC(100));
+    /* Wait for UDP server thread to finish */
+    k_sem_take(&udp_thread_done_sem, K_SECONDS(2));
     LOG_INF("UDP server stopped");
 }
 

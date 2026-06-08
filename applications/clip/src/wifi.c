@@ -57,6 +57,18 @@ static void wifi_timeout_handler(struct k_work *work)
 
 static K_WORK_DELAYABLE_DEFINE(wifi_timeout_work, wifi_timeout_handler);
 
+/* Work for transfer cancel on STA disconnect (deferred to avoid stack issues) */
+static void wifi_transfer_cancel_work_handler(struct k_work *work);
+static K_WORK_DEFINE(wifi_transfer_cancel_work, wifi_transfer_cancel_work_handler);
+
+static void wifi_transfer_cancel_work_handler(struct k_work *work)
+{
+	ARG_UNUSED(work);
+	if (transfer_is_active()) {
+		transfer_cancel();
+	}
+}
+
 static void schedule_wifi_timeout(void)
 {
 	if (CONFIG_CLIP_WIFI_TIMEOUT_MS > 0) {
@@ -164,9 +176,7 @@ static void wifi_mgmt_event_handler(struct net_mgmt_event_callback *cb,
 		sta_connected = false;
 		schedule_wifi_timeout();
 		transport_udp_update_active(false); /* Notify transport of disconnect */
-		if (transfer_is_active()) {
-			transfer_cancel();
-		}
+		k_work_submit(&wifi_transfer_cancel_work);
 		break;
 	}
 	default:

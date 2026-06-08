@@ -58,6 +58,10 @@ static char last_transferred_file[32] = {0};
 /* Transfer rate tracking */
 static int64_t file_transfer_start_ms = 0;
 
+/* Static counters reset at start of each transfer */
+static int consecutive_file_errors = 0;
+static int chunk_count = 0;
+
 /* Transfer control flags (atomic for thread safety) */
 static atomic_t transfer_pause_requested = ATOMIC_INIT(0);
 static atomic_t transfer_cancel_requested = ATOMIC_INIT(0);
@@ -202,6 +206,8 @@ int transfer_start(const char *session_id, const char *filename, struct transpor
     /* Initialize transfer state */
     memset(&current_transfer, 0, sizeof(current_transfer));
     memset(last_transferred_file, 0, sizeof(last_transferred_file));
+    consecutive_file_errors = 0;
+    chunk_count = 0;
     current_transfer.state = TRANSFER_STATE_TRANSMITTING;
     current_transfer.uses_groups = session_info.uses_groups;
 
@@ -284,8 +290,22 @@ int transfer_resume_from(const char *session_id, const char *start_file, struct 
         }
     }
 
+    /* Save the transport for this transfer session */
+    current_transport = tp;
+    LOG_INF("xfer tp=%d", tp->type);
+
+    clip_cpu_boost_acquire();
+
+    /* Check if transfer is already active with file open */
+    if (transfer_is_active() && transfer_file_open) {
+        clip_cpu_boost_release();
+        LOG_WRN("Transfer already active");
+        return -EBUSY;
+    }
+
     /* Wait for transfer thread to be idle */
     if (k_sem_take(&transfer_idle_sem, K_SECONDS(3)) != 0) {
+        clip_cpu_boost_release();
         LOG_ERR("Transfer thread not idle after 3s");
         return -ETIMEDOUT;
     }
@@ -330,14 +350,10 @@ int transfer_resume_from(const char *session_id, const char *start_file, struct 
         transfer_file_open = false;
     }
 
-    /* Save the transport for this transfer session */
-    current_transport = tp;
-    LOG_INF("xfer tp=%d", tp->type);
-
-    clip_cpu_boost_acquire();
-
     /* Initialize transfer state */
     memset(&current_transfer, 0, sizeof(current_transfer));
+    consecutive_file_errors = 0;
+    chunk_count = 0;
     current_transfer.state = TRANSFER_STATE_TRANSMITTING;
     current_transfer.direction = TRANSFER_DIR_UPLOAD;
     strncpy(current_transfer.session_id, session_id, sizeof(current_transfer.session_id) - 1);
@@ -385,6 +401,7 @@ int transfer_resume_from(const char *session_id, const char *start_file, struct 
     return 0;
 
 fail:
+    clip_cpu_boost_release();
     k_sem_give(&transfer_trigger_sem);  /* Release thread from idle */
     return err;
 }
@@ -398,8 +415,6 @@ int transfer_cancel(void)
     LOG_INF("xfer canceled");
     atomic_set(&transfer_cancel_requested, 1);
     atomic_set(&transfer_pause_requested, 0);
-    /* Force state to IDLE so send loop exits even if thread is mid-iteration */
-    current_transfer.state = TRANSFER_STATE_IDLE;
 
     return 0;
 }
@@ -491,6 +506,11 @@ int transfer_set_synced_files(const char *session_id, uint32_t count)
         storage_session_json_unlock();
         return bytes_read;
     }
+    if (bytes_read >= (ssize_t)(sizeof(json_buf) - 64)) {
+        LOG_ERR("session.json too large (%zd bytes)", bytes_read);
+        storage_session_json_unlock();
+        return -ENOMEM;
+    }
     json_buf[bytes_read] = '\0';
 
     /* Update synced field */
@@ -503,9 +523,17 @@ int transfer_set_synced_files(const char *session_id, uint32_t count)
             if (p) {
                 char new_synced[32];
                 snprintf(new_synced, sizeof(new_synced), ",\n  \"synced\": %u", count);
+                size_t insert_len = strlen(new_synced);
+                /* Check if there's room for the insertion */
+                size_t tail_len = strlen(p + 1);
+                if ((size_t)(p - json_buf) + 1 + insert_len + tail_len + 1 > sizeof(json_buf)) {
+                    LOG_ERR("session.json: no room for synced field");
+                    storage_session_json_unlock();
+                    return -ENOMEM;
+                }
                 /* Insert after comma */
-                memmove(p + strlen(new_synced) + 1, p + 1, strlen(p + 1));
-                memcpy(p + 1, new_synced, strlen(new_synced));
+                memmove(p + insert_len + 1, p + 1, tail_len + 1);
+                memcpy(p + 1, new_synced, insert_len);
             }
         }
     } else {
@@ -582,7 +610,6 @@ static void transfer_thread_main(void *p1, void *p2, void *p3)
 
         /* Process transfer */
         int ret;
-        static int consecutive_file_errors = 0;
 
 process_next_file:
         /* Handle cancel: send TRANSFER_DONE then cleanup */
@@ -617,7 +644,6 @@ process_next_file:
         /* Check transport connection */
         if (!transport_is_connected()) {
             LOG_INF("tp disconnected, stopping xfer");
-            current_transfer.state = TRANSFER_STATE_IDLE;
             transfer_cleanup();
             transfer_thread_wait_idle();
             LOG_INF("xfer: re-woke, state=%d tp=%d",
@@ -686,7 +712,6 @@ process_next_file:
                     fs_close(&transfer_file);
                     transfer_file_open = false;
                 }
-                current_transfer.state = TRANSFER_STATE_IDLE;
                 break;
             }
 
@@ -1078,7 +1103,6 @@ static int transfer_send_chunk(void)
     }
 
     /* Log timing for first few chunks and every 64th chunk */
-    static int chunk_count;
     if (chunk_count < 3 || chunk_count % 64 == 0) {
         LOG_INF("chunk %d: read=%dms, send=%dms, size=%d",
                 chunk_count, (int)t_read, (int)t_send, (int)bytes_read);
@@ -1166,6 +1190,11 @@ static void transfer_cleanup(void)
 	display_set_transferring(false);
 
 	clip_cpu_boost_release();
+
+	/* Refresh BLE inactivity timer so it doesn't expire immediately
+	 * after a long transfer (or paused transfer that was canceled)
+	 */
+	ble_activity_refresh();
 
 	if (transfer_file_open) {
 		fs_close(&transfer_file);
