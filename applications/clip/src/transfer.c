@@ -190,6 +190,14 @@ int transfer_start(const char *session_id, const char *filename, struct transpor
 
     atomic_set(&transfer_complete_sent, 0);
     atomic_set(&transfer_pause_requested, 0);
+    atomic_set(&transfer_cancel_requested, 0);
+
+    /* Close any leaked file handle from interrupted transfer */
+    if (transfer_file_open) {
+        LOG_WRN("Closing leaked file handle");
+        fs_close(&transfer_file);
+        transfer_file_open = false;
+    }
 
     /* Initialize transfer state */
     memset(&current_transfer, 0, sizeof(current_transfer));
@@ -213,7 +221,8 @@ int transfer_start(const char *session_id, const char *filename, struct transpor
                             file_num > 0 ? file_num : 1);
         if (fs_stat(filepath, &entry) != 0) {
             LOG_ERR("File not found: %s", filepath);
-            return -ENOENT;
+            err = -ENOENT;
+            goto fail;
         }
 
         strncpy(current_transfer.current_file, filename, sizeof(current_transfer.current_file) - 1);
@@ -227,7 +236,7 @@ int transfer_start(const char *session_id, const char *filename, struct transpor
         err = storage_get_session_info(session_id, &session_info);
         if (err < 0) {
             LOG_ERR("Failed to get session info: %d", err);
-            return err;
+            goto fail;
         }
         current_transfer.total_files = session_info.file_count;
         current_transfer.total_bytes = session_info.total_bytes;
@@ -312,6 +321,14 @@ int transfer_resume_from(const char *session_id, const char *start_file, struct 
 
     atomic_set(&transfer_complete_sent, 0);
     atomic_set(&transfer_pause_requested, 0);
+    atomic_set(&transfer_cancel_requested, 0);
+
+    /* Close any leaked file handle from interrupted transfer */
+    if (transfer_file_open) {
+        LOG_WRN("Closing leaked file handle");
+        fs_close(&transfer_file);
+        transfer_file_open = false;
+    }
 
     /* Save the transport for this transfer session */
     current_transport = tp;
@@ -665,6 +682,10 @@ process_next_file:
             /* Check if transport is connected before sending */
             if (!transport_is_connected()) {
                 LOG_WRN("Transport disconnected during send");
+                if (transfer_file_open) {
+                    fs_close(&transfer_file);
+                    transfer_file_open = false;
+                }
                 current_transfer.state = TRANSFER_STATE_IDLE;
                 break;
             }

@@ -302,6 +302,8 @@ void clip_cpu_boost_acquire(void)
     if (ref == 0) {
 #ifdef CLOCK_FEATURE_HFCLK_DIVIDE_PRESENT
         nrfx_clock_divider_set(NRF_CLOCK_DOMAIN_HFCLK, NRF_CLOCK_HFCLK_DIV_1);
+        /* Wait for HFCLK divider to stabilize */
+        k_busy_wait(20);
         LOG_INF("CPU boost ON (128MHz)");
 #endif
     }
@@ -313,6 +315,8 @@ void clip_cpu_boost_release(void)
     if (ref == 1) {
 #ifdef CLOCK_FEATURE_HFCLK_DIVIDE_PRESENT
         nrfx_clock_divider_set(NRF_CLOCK_DOMAIN_HFCLK, NRF_CLOCK_HFCLK_DIV_2);
+        /* Wait for HFCLK divider to stabilize */
+        k_busy_wait(20);
         LOG_INF("CPU boost OFF (64MHz)");
 #endif
     }

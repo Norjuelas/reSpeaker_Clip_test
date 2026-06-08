@@ -23,6 +23,7 @@
 #include "config.h"
 #include "clip_event.h"
 #include "ble.h"
+#include "transfer.h"
 
 
 #ifdef CONFIG_NRF70_SR_COEX
@@ -163,6 +164,9 @@ static void wifi_mgmt_event_handler(struct net_mgmt_event_callback *cb,
 		sta_connected = false;
 		schedule_wifi_timeout();
 		transport_udp_update_active(false); /* Notify transport of disconnect */
+		if (transfer_is_active()) {
+			transfer_cancel();
+		}
 		break;
 	}
 	default:

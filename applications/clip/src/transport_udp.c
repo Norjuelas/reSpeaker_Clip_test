@@ -488,6 +488,9 @@ void transport_udp_update_active(bool active)
 
     if (!active) {
         transport_udp_reset_file_state();
+        /* Wake transfer thread if blocked waiting for FILE_ACK */
+        file_ack_result = -1;
+        k_sem_give(&file_ack_sem);
     } else {
         /* Start heartbeat when becoming active */
         k_timer_start(&heartbeat_timer, K_MSEC(CONFIG_CLIP_UDP_HEARTBEAT_INTERVAL_MS), K_NO_WAIT);
