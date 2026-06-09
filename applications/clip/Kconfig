@@ -266,6 +266,17 @@ config CLIP_WIFI_TIMEOUT_MS
 	  Timer starts after AP is enabled, restarts on client disconnect.
 	  Set to 0 to disable auto-off.
 
+config COEX_SEP_ANTENNAS
+	bool "WiFi and BLE use separate antennas"
+	default n
+
+config SR_PROTOCOL_BLE
+	bool "Short Range protocol is Bluetooth LE"
+	default y
+	help
+	  Tells the WiFi/BLE coexistence PTA that the short-range
+	  protocol is BLE, enabling proper radio arbitration.
+
 # =============================================================================
 # Debug Configuration
 # =============================================================================
