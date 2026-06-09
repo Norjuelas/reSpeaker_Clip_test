@@ -326,7 +326,7 @@ int wifi_on(void)
 		return -ENODEV;
 	}
 
-	/* Bring up interface if not already up (required when CONFIG_NRF_WIFI_IF_AUTO_START=n) */
+	/* Bring up interface if not already up */
 	if (!net_if_is_admin_up(iface))
 	{
 		LOG_INF("Interface is down, bringing up");
@@ -337,7 +337,7 @@ int wifi_on(void)
 			return ret;
 		}
 
-		/* Wait for WiFi driver ready instead of blind sleep */
+		/* Wait for WiFi driver ready */
 		if (!wifi_ready) {
 			ret = k_sem_take(&wifi_ready_sem, K_SECONDS(3));
 			if (ret) {
@@ -346,15 +346,6 @@ int wifi_on(void)
 				return -ETIMEDOUT;
 			}
 		}
-
-#ifdef CONFIG_NRF70_SR_COEX
-		/* Configure coexistence early so WiFi/BLE share radio properly */
-		wifi_coex_configure();
-
-		/* Let PTA arbitration stabilize before heavy WiFi radio use
-		 * (AP enable, reg domain) to prevent BLE supervision timeout. */
-		k_sleep(K_MSEC(200));
-#endif
 	}
 
 	/* Set regulatory domain */
@@ -364,11 +355,17 @@ int wifi_on(void)
 	ret = wifi_enable_ap(iface);
 	if (ret)
 	{
-		/* Cleanup: bring interface down to restore clean state */
+		LOG_WRN("wifi_on: AP failed, cleaning up");
 		net_if_down(iface);
 		ap_running = false;
 		return ret;
 	}
+
+#ifdef CONFIG_NRF70_SR_COEX
+	/* Configure coexistence AFTER AP is enabled. Do NOT configure before
+	 * AP enable — if nRF70 is in a bad state, coex config hangs forever. */
+	wifi_coex_configure();
+#endif
 
 	/* Configure static IP from Kconfig macros */
 	{
@@ -447,6 +444,7 @@ int wifi_off(void)
 	/* Power down interface to save power (required when CONFIG_NRF_WIFI_IF_AUTO_START=n) */
 	if (net_if_is_admin_up(iface))
 	{
+		LOG_INF("wifi_off: calling net_if_down");
 		ret = net_if_down(iface);
 		if (ret)
 		{
@@ -454,7 +452,7 @@ int wifi_off(void)
 		}
 		else
 		{
-			LOG_INF("WiFi interface down");
+			LOG_INF("wifi_off: net_if_down done");
 		}
 	}
 

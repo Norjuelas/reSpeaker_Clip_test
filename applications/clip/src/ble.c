@@ -168,7 +168,7 @@ static void le_param_updated(struct bt_conn *conn, uint16_t interval,
             .interval_min = 6,
             .interval_max = 6,
             .latency = 0,
-            .timeout = 200,
+            .timeout = 500,
         };
         bt_conn_le_param_update(conn, &fast_params);
     }
@@ -177,11 +177,12 @@ static void le_param_updated(struct bt_conn *conn, uint16_t interval,
 /* Reject connection parameters that are too aggressive */
 static bool le_param_req(struct bt_conn *conn, struct bt_le_conn_param *param)
 {
-    /* Require minimum timeout of 200 (2 seconds) for stability */
-    if (param->timeout < 200) {
+    /* Require minimum timeout of 500 (5 seconds) to survive WiFi AP setup
+     * which monopolizes the radio for ~5 seconds during net_if_up/enable_ap. */
+    if (param->timeout < 500) {
         LOG_WRN("Rejecting params: timeout %u",
                 param->timeout);
-        param->timeout = 200;
+        param->timeout = 500;
         param->interval_min = 30;
         param->interval_max = 50;
         param->latency = 0;
