@@ -350,6 +350,10 @@ int wifi_on(void)
 #ifdef CONFIG_NRF70_SR_COEX
 		/* Configure coexistence early so WiFi/BLE share radio properly */
 		wifi_coex_configure();
+
+		/* Let PTA arbitration stabilize before heavy WiFi radio use
+		 * (AP enable, reg domain) to prevent BLE supervision timeout. */
+		k_sleep(K_MSEC(200));
 #endif
 	}
 

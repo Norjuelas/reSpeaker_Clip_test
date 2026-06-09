@@ -1503,6 +1503,10 @@ static int cmd_wifi_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
                                            NULL, response, len);
             }
 
+            /* Guard interval: delay before responding to prevent rapid
+             * WiFi on/off cycles that can lock up the nRF70 firmware. */
+            k_sleep(K_SECONDS(3));
+
             return create_json_response(true, NULL, "{\"wifi\":\"off\"}", response, len);
 
         } else {
