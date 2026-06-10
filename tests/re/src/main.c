@@ -12,7 +12,6 @@
 #include "oled.h"
 #include "pmic.h"
 #include "motor.h"
-#include "imu.h"
 #include "mic.h"
 #include "wifi.h"
 #include "ble.h"
@@ -56,11 +55,6 @@ int main(void)
 	ret = motor_init();
 	if (ret != 0) {
 		LOG_WRN("Motor init failed: %d", ret);
-	}
-
-	ret = imu_init();
-	if (ret != 0) {
-		LOG_WRN("IMU init failed: %d", ret);
 	}
 
 	/* Start WiFi AP */

@@ -21,6 +21,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <net/wifi_ready.h>
 #include "wifi.h"
 
 #ifdef CONFIG_NRF70_SR_COEX
@@ -50,6 +51,14 @@ bool wifi_ap_is_running(void)
 static char ap_ssid[32] = "ClipTest_XXXX";
 static struct net_mgmt_event_callback wifi_mgmt_cb;
 static K_SEM_DEFINE(ap_enabled_sem, 0, 1);
+static K_SEM_DEFINE(wifi_ready_sem, 0, 1);
+
+static void wifi_ready_callback(bool ready)
+{
+	if (ready) {
+		k_sem_give(&wifi_ready_sem);
+	}
+}
 
 /* Scan state */
 static K_SEM_DEFINE(scan_done_sem, 0, 1);
@@ -215,6 +224,24 @@ static int do_wifi_ap_start(void)
 	if (!iface) {
 		printk("[WiFi] No WiFi interface\n");
 		return -ENODEV;
+	}
+
+	/* Bring up interface manually (CONFIG_NRF_WIFI_IF_AUTO_START=n) */
+	if (!net_if_is_admin_up(iface)) {
+		printk("[WiFi] Bringing up interface\n");
+		ret = net_if_up(iface);
+		if (ret) {
+			printk("[WiFi] net_if_up failed: %d\n", ret);
+			return ret;
+		}
+		/* Wait for WiFi driver ready */
+		ret = k_sem_take(&wifi_ready_sem, K_SECONDS(3));
+		if (ret) {
+			printk("[WiFi] WiFi ready timeout\n");
+			net_if_down(iface);
+			return -ETIMEDOUT;
+		}
+		printk("[WiFi] Interface ready\n");
 	}
 
 	/* Set regulatory domain */
@@ -523,7 +550,14 @@ int wifi_init_and_connect(void)
 				     NET_EVENT_WIFI_AP_STA_DISCONNECTED);
 	net_mgmt_add_event_callback(&wifi_mgmt_cb);
 
-	printk("WiFi initialized (AP mode, auto-start)\n");
+	/* Register WiFi ready callback */
+	struct net_if *iface = net_if_get_first_wifi();
+	if (iface) {
+		wifi_ready_callback_t cb = { .wifi_ready_cb = wifi_ready_callback };
+		register_wifi_ready_callback(cb, iface);
+	}
+
+	printk("WiFi initialized (AP mode)\n");
 	printk("  SSID will be: %s\n", ap_ssid);
 	printk("  Use 'wifi on' to start AP\n");
 

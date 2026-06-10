@@ -17,14 +17,13 @@
 #include "oled.h"
 #include "motor.h"
 #include "pmic.h"
-#include "imu.h"
 #include "mic.h"
 #include "wifi.h"
 #include "ble.h"
 
 LOG_MODULE_REGISTER(re_test, LOG_LEVEL_INF);
 
-#define NUM_TESTS 9
+#define NUM_TESTS 8
 #define FLASH_TEST_OFFSET 0x130000
 
 #define MIC_SAMPLE_RATE 16000
@@ -42,7 +41,6 @@ static struct re_test_stats stats[NUM_TESTS] = {
 	{ "OLED",     0, 0 },
 	{ "Motor",    0, 0 },
 	{ "PMIC",     0, 0 },
-	{ "IMU",      0, 0 },
 	{ "MIC",      0, 0 },
 	{ "WiFi AP",  0, 0 },
 	{ "BLE",      0, 0 },
@@ -183,20 +181,6 @@ static int test_pmic(void)
 	return 0;
 }
 
-static int test_imu(void)
-{
-	struct imu_data data;
-	int rc = imu_read(&data);
-	if (rc != 0) {
-		return rc;
-	}
-
-	LOG_INF("  IMU: accel=%d,%d,%d gyro=%d,%d,%d",
-		data.accel_x, data.accel_y, data.accel_z,
-		data.gyro_x, data.gyro_y, data.gyro_z);
-	return 0;
-}
-
 static int test_mic(void)
 {
 	const struct device *dmic_dev;
@@ -294,7 +278,6 @@ static re_test_fn test_fns[NUM_TESTS] = {
 	test_oled,
 	test_motor,
 	test_pmic,
-	test_imu,
 	test_mic,
 	test_wifi,
 	test_ble,
