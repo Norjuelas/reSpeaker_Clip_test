@@ -7,6 +7,8 @@
 iovdd-ctrl-gpios = <&gpio0 26 GPIO_ACTIVE_HIGH>;
 bucken-gpios = <&gpio0 11 GPIO_ACTIVE_HIGH>;
 host-irq-gpios = <&gpio0 12 GPIO_ACTIVE_HIGH>;
+/* IOVDD takes ~10ms to ramp up after IO EN assertion on this board */
+iovdd-power-up-delay-ms = <50>;
 
 
 wifi-max-tx-pwr-2g-dsss = <21>;
