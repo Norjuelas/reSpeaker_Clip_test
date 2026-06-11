@@ -205,7 +205,7 @@ static int cmd_device_handler(struct at_cmd_ctx *ctx, char *response, size_t len
 static int cmd_version_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
 {
     char version_str[32];
-    snprintf(version_str, sizeof(version_str), "\"%s\"", APP_VERSION_STRING);
+    snprintf(version_str, sizeof(version_str), "\"%s\"", CLIP_VERSION);
     int n = snprintf(response, len, "{\"ok\":true,\"firmware\":%s}", version_str);
     if (n < 0 || n >= len - 2) {
         return AT_ERR_NOMEM;

@@ -10,8 +10,16 @@
 #include <zephyr/kernel.h>
 #include <zephyr/device.h>
 #include <zephyr/sys/util.h>
+#include <app_version.h>
 #include <stdint.h>
 #include <stdbool.h>
+
+/* Version string: "0.0.4" when TWEAK=0, "0.0.4+1" when TWEAK>0 */
+#if APP_TWEAK > 0
+#define CLIP_VERSION APP_VERSION_TWEAK_STRING
+#else
+#define CLIP_VERSION APP_VERSION_STRING
+#endif
 
 /**
  * @brief Clip error codes
