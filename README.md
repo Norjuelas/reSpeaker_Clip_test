@@ -19,7 +19,7 @@ This is a Zephyr RTOS based firmware project for ReSpeaker Clip. It is designed 
 ## Getting Started
 
 ### Prerequisites
-- nRF Connect SDK v3.2.1
+- nRF Connect SDK v3.3.0
 - Zephyr SDK
 - west (Zephyr's meta-tool)
 - CMake
@@ -30,7 +30,7 @@ This is a Zephyr RTOS based firmware project for ReSpeaker Clip. It is designed 
 #### Environment Setup
 Activate the NCS/Zephyr environment:
 ```sh
-source ~/ncs/v3.2.1/zephyr/zephyr-env.sh
+source ~/ncs/v3.3.0/zephyr/zephyr-env.sh
 ```
 
 #### Method 1: Using the build script (Recommended)
@@ -46,8 +46,8 @@ Set environment variable for module discovery:
 export ZEPHYR_EXTRA_MODULES=$(pwd)
 
 # Build
-source ~/ncs/v3.2.1/zephyr/zephyr-env.sh
-west build --build-dir build --board respeaker/nrf5340/cpuapp samples/hello_world
+source ~/ncs/v3.3.0/zephyr/zephyr-env.sh
+west build --build-dir build --board clip/nrf5340/cpuapp samples/hello_world
 ```
 
 **Important**: `ZEPHYR_EXTRA_MODULES` must be set as an **environment variable**, not as a CMake parameter (`-DZEPHYR_EXTRA_MODULES`). The environment variable is needed for Kconfig module discovery, which happens before CMake configuration.
