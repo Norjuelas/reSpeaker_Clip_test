@@ -32,8 +32,20 @@ LOG_MODULE_REGISTER(battery, CONFIG_CLIP_LOG_LEVEL);
 /* Battery full threshold (SoC %) */
 #define BATTERY_FULL_THRESHOLD  99
 
-/* Low battery auto-shutdown threshold (SoC %) */
-#define BATTERY_SHUTDOWN_THRESHOLD  3
+/*
+ * Reserved capacity at the bottom of the battery. The displayed percentage
+ * is shifted so that 0% shown to the user corresponds to BATTERY_RESERVE_PERCENT
+ * actual SoC. This guarantees enough energy remains at "0%" to stop a recording
+ * in progress (flush to SD card) and enter ship mode gracefully, instead of
+ * hard-powering off mid-write. The displayed range is still a natural 0-100%.
+ */
+#define BATTERY_RESERVE_PERCENT  5
+
+/* Low battery warning/auto-shutdown are evaluated on the DISPLAYED percentage.
+ * With RESERVE=5, the warning fires at actual 20% (displayed 15%) and the
+ * shutdown fires at actual 5% (displayed 0%). */
+#define BATTERY_LOW_WARNING_THRESHOLD  15
+#define BATTERY_SHUTDOWN_THRESHOLD     0
 
 /* SoC smoothing configuration for stable display */
 #define SOC_SMOOTH_ALPHA    0.3f    /* EMA factor: lower = smoother (0.1-0.5) */
@@ -49,7 +61,7 @@ static const struct device *pmic_dev;
 static const struct device *charger_dev;
 
 /* Cached state */
-static uint8_t last_percent;
+static uint8_t last_percent = 255; /* Sentinel: forces first update to always trigger */
 static bool last_charging;
 static bool low_battery_warned;
 static int64_t fg_ref_time;
@@ -67,7 +79,19 @@ static struct k_work_delayable battery_level_work;
 /* Delayed update after VBUS detection (charger needs time to start) */
 static struct k_work_delayable battery_delayed_update_work;
 
+/* True once battery_init() has completed; prevents posting events before
+ * the event dispatcher (semaphore) is initialized. */
+static bool init_complete;
+
 static void read_and_update(void);
+
+bool battery_is_critical(void)
+{
+	/* Critical if displayed SoC is at the shutdown threshold (0%).
+	 * The shutdown itself is only meaningful when not charging; callers
+	 * (or the event handler) decide whether to act on it. */
+	return last_percent <= BATTERY_SHUTDOWN_THRESHOLD;
+}
 
 void battery_poll(void)
 {
@@ -247,24 +271,43 @@ static void read_and_update(void)
 		percent = (uint8_t)(smoothed_soc + 0.5f);
 	}
 
-	/* Update battery percent */
-	if (percent != last_percent) {
-		last_percent = percent;
-		bt_bas_set_battery_level(percent);
-		ctx->status.battery_percent = percent;
-		LOG_INF("Battery: %u%% (%u mV)", percent, (uint32_t)(voltage * 1000));
+	/*
+	 * Convert raw SoC to displayed percentage with bottom reserve.
+	 * The user sees a natural 0-100% range, but 0% displayed maps to
+	 * BATTERY_RESERVE_PERCENT actual, leaving energy for graceful shutdown.
+	 */
+	uint8_t display_percent = percent;
+	if (percent > BATTERY_RESERVE_PERCENT) {
+		display_percent = percent - BATTERY_RESERVE_PERCENT;
+	} else {
+		display_percent = 0;
+	}
 
-		/* Low battery warning */
+	/* Update battery percent (display value) */
+	if (display_percent != last_percent) {
+		last_percent = display_percent;
+		bt_bas_set_battery_level(display_percent);
+		ctx->status.battery_percent = display_percent;
+		LOG_INF("Battery: %u%% (actual %u%%, %u mV)",
+			display_percent, percent, (uint32_t)(voltage * 1000));
+
+		/* Low battery warning and auto-shutdown use displayed percentage */
 		if (!charging) {
-			if (percent <= 15 && !low_battery_warned) {
+			if (display_percent <= BATTERY_LOW_WARNING_THRESHOLD
+			    && !low_battery_warned) {
 				display_post_event(UI_EVENT_LOW_BATTERY);
 				low_battery_warned = true;
 			}
 
-			/* Auto-shutdown to prevent over-discharge */
-			if (percent <= BATTERY_SHUTDOWN_THRESHOLD) {
-				LOG_WRN("Battery critically low (%u%%), auto shutdown", percent);
-				clip_post_event(CLIP_EVENT_POWER_OFF_EXEC);
+			/* Auto-shutdown: displayed 0% = actual RESERVE%.
+			 * Only post the event after init is complete — the event
+			 * dispatcher semaphore is not ready during battery_init(). */
+			if (display_percent <= BATTERY_SHUTDOWN_THRESHOLD) {
+				LOG_WRN("Battery critically low (actual %u%%, displayed %u%%), auto shutdown",
+					percent, display_percent);
+				if (init_complete) {
+					clip_post_event(CLIP_EVENT_POWER_OFF_EXEC);
+				}
 			}
 		}
 	}
@@ -446,6 +489,9 @@ int battery_init(void)
 
 	LOG_INF("Battery init (poll=60s, fg=%s)",
 		fg_initialized ? "enabled" : "disabled");
+
+	/* Allow read_and_update to post events now that we return to main. */
+	init_complete = true;
 
 	return 0;
 }

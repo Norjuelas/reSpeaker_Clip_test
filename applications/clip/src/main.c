@@ -8,6 +8,7 @@
 #include <zephyr/logging/log.h>
 #include <zephyr/logging/log_backend.h>
 #include <zephyr/logging/log_ctrl.h>
+#include <zephyr/drivers/regulator.h>
 #include <app_version.h>
 #include <zephyr/sys/util.h>
 #include <zephyr/sys/mem_stats.h>
@@ -172,6 +173,17 @@ int clip_init(void)
     if (err) {
         LOG_WRN("Display init failed: %d", err);
         /* Continue anyway - display is optional */
+    }
+
+    /* Early low-battery shutdown: silently enter ship mode without booting.
+     * No animation, no haptic — the device simply does not power on. */
+    if (battery_is_critical() && !g_ctx.status.battery_charging) {
+        LOG_WRN("Battery critically low at boot, shutting down");
+        const struct device *regs = DEVICE_DT_GET(DT_NODELABEL(npm1300_regulators));
+        if (device_is_ready(regs)) {
+            regulator_parent_ship_mode(regs);
+        }
+        return -ESHUTDOWN;
     }
 
     /* Start boot animation (runs in background while init continues) */

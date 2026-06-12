@@ -44,7 +44,7 @@ LOG_MODULE_REGISTER(clip_event, CONFIG_CLIP_LOG_LEVEL);
  *                  START  STOP   PAUSE  RESUME MARK   WIFI_ON WIFI_OFF POFF_S POFF_E STATUS USB   OTA_S OTA_D
  */
 static const uint8_t transition_table[CLIP_STATE_OTA + 1][CLIP_EVENT_COUNT] = {
-    /* UNINITIALIZED */ { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,    0,    0,    0 },
+    /* UNINITIALIZED */ { 0, 0, 0, 0, 0, 0, 0, TRANS_SAME, TRANS_SAME, 0,    0,    0,    0 },
     /* IDLE          */ { CLIP_STATE_RECORDING, 0, 0, 0, 0,
                          CLIP_STATE_WIFI_SYNC, 0,
                          TRANS_SAME, TRANS_SAME, TRANS_SAME,
