@@ -39,7 +39,7 @@ LOG_MODULE_REGISTER(battery, CONFIG_CLIP_LOG_LEVEL);
  * in progress (flush to SD card) and enter ship mode gracefully, instead of
  * hard-powering off mid-write. The displayed range is still a natural 0-100%.
  */
-#define BATTERY_RESERVE_PERCENT  5
+#define BATTERY_RESERVE_PERCENT  3
 
 /* Low battery warning/auto-shutdown are evaluated on the DISPLAYED percentage.
  * With RESERVE=5, the warning fires at actual 20% (displayed 15%) and the
