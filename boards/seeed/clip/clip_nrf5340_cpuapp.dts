@@ -205,6 +205,10 @@
 			thermistor-ohms = <10000>;
 			thermistor-beta = <3380>;
 			charging-enable;
+			/* Allow charging a deeply discharged battery (below VBATLOW),
+			 * e.g. after the protection IC trips at ~2.4V. Without this the
+			 * charger refuses to activate and the battery cannot recover. */
+			vbatlow-charge-enable;
 		};
 	};
 };
