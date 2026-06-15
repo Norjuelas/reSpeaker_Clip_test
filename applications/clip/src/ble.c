@@ -78,11 +78,13 @@ static const struct bt_le_adv_param adv_param_fast =
     BT_LE_ADV_PARAM_INIT(BT_LE_ADV_OPT_CONN, BT_GAP_ADV_FAST_INT_MIN_1,
                          BT_GAP_ADV_FAST_INT_MAX_1, NULL);
 
-/* Slow advertising: for reconnection after bonding (1000-1200ms) */
+/* "Slow" advertising: ~100-150ms — a middle ground. Connection-friendly
+ * (a scanning phone connects within ~1 adv interval) but ~2x slower than
+ * the 30-60ms fast bug. 1-2s was too slow to connect reliably. */
 static const struct bt_le_adv_param adv_param_slow =
     BT_LE_ADV_PARAM_INIT(BT_LE_ADV_OPT_CONN,
-                         BT_GAP_ADV_FAST_INT_MIN_1,
-                         BT_GAP_ADV_FAST_INT_MAX_1, NULL);
+                         BT_GAP_ADV_FAST_INT_MIN_2,
+                         BT_GAP_ADV_FAST_INT_MAX_2, NULL);
 
 #define ADV_FAST_TIMEOUT_MS 30000   /* Switch to slow advertising after 30s */
 #define BLE_INACTIVITY_TIMEOUT_MS (5 * 60 * 1000)  /* 5 minutes */
@@ -298,13 +300,9 @@ static void adv_timeout_handler(struct k_work *work)
 		return;
 	}
 
-	/* Unbonded devices stay fast for discoverability */
-	if (!ble_is_bonded()) {
-		k_work_reschedule(&adv_timeout_work, K_MSEC(ADV_FAST_TIMEOUT_MS));
-		return;
-	}
-
-	/* Only switch to slow advertising when idle */
+	/* Drop to slow advertising when idle — applies to bonded AND unbonded.
+	 * Slow adv is still discoverable/connitable (just ~1-2s to find vs
+	 * instant); staying fast forever wastes too much idle current. */
 	enum clip_state state = clip_event_get_state();
 	if (state != CLIP_STATE_IDLE) {
 		k_work_reschedule(&adv_timeout_work, K_MSEC(ADV_FAST_TIMEOUT_MS));
