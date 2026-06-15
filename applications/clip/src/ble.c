@@ -166,11 +166,14 @@ static void le_param_updated(struct bt_conn *conn, uint16_t interval,
     if (!mtu_exchanged && ble_ctx.conn == conn) {
         bt_gatt_exchange_mtu(conn, &mtu_params);
         /* After MTU exchange, request faster connection parameters */
+        /* Coexistence-friendly params: moderate interval + long supervision
+         * timeout (8s) so a WiFi-AP cold start (~8s) doesn't supervise the
+         * BLE link out. Was interval=6/timeout=500 -> disconnects on WiFi-on. */
         struct bt_le_conn_param fast_params = {
-            .interval_min = 6,
-            .interval_max = 6,
+            .interval_min = 15,
+            .interval_max = 30,
             .latency = 0,
-            .timeout = 500,
+            .timeout = 800,
         };
         bt_conn_le_param_update(conn, &fast_params);
     }
