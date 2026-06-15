@@ -274,6 +274,10 @@
 			has-dpd;
 			t-enter-dpd = <3000>;
 			t-exit-dpd = <35000>;
+			/* Runtime PM: auto-enter DPD when the flash is idle (no
+			 * settings/LittleFS access) so it stops drawing standby
+			 * current. Resumes (~35ms exit) on next access. */
+			zephyr,pm-device-runtime-auto;
 
 		partitions {
 			compatible = "fixed-partitions";
