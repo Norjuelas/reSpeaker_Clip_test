@@ -63,6 +63,14 @@ config CLIP_AGC_DECREMENT
 	int "AGC max decrease (dB/s)"
 	default -100
 
+config CLIP_STORAGE_FULL_PERCENT
+	int "SD usage percent at which recording is refused (storage full)"
+	default 95
+	range 50 99
+	help
+	  Recording is refused and a "Storage Full" error is shown when SD card
+	  usage reaches this percentage (e.g. 95 = refuse at 95% full).
+
 config CLIP_DEFAULT_AUTODEL
 	int "Default auto-delete days (-1 for off)"
 	default -1

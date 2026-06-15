@@ -523,6 +523,16 @@ static enum clip_event_result execute_transition(enum clip_event event,
             return CLIP_EVENT_ERROR;
         }
 
+        /* Refuse recording if storage is (near) full */
+        struct storage_stats st;
+        storage_get_stats(&st);   /* refresh free/total */
+        if (storage_is_full()) {
+            LOG_WRN("Storage full, refusing recording");
+            display_post_error("Storage Full");
+            ble_notify_event("storage", "full");
+            return CLIP_EVENT_ERROR;
+        }
+
         err = audio_start_recording(AUDIO_MODE_MERGE);
         if (err) {
             if (err == -EBUSY) {

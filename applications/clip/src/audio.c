@@ -821,10 +821,13 @@ void audio_recording_thread(void *p1, void *p2, void *p3)
             if (current_storage_file.is_open) {
                 ret = storage_write_frame(&current_storage_file, opus_packet, encoded_bytes);
                 if (ret != 0) {
-                    LOG_ERR("Storage write error: %d", ret);
-                    /* Close file on error */
+                    LOG_ERR("Storage write error (card full?): %d", ret);
                     storage_close_file(&current_storage_file);
                     memset(&current_storage_file, 0, sizeof(current_storage_file));
+                    /* Card full: stop recording cleanly + show on screen */
+                    stop_requested = true;
+                    display_post_error("Storage Full");
+                    ble_notify_event("storage", "full");
                 }
             }
 

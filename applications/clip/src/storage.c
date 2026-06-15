@@ -30,6 +30,7 @@ static struct fs_mount_t mp = {
 };
 static bool sd_mounted = false;
 static bool sd_powered = false;
+static bool sd_full = false;     /* latched on write failure; cleared when free space recovers */
 
 /* SD power-gating handles: LDO2 rail, SPI4 bus, and CS pin parking */
 static const struct device *const sd_ldo2 = DEVICE_DT_GET(DT_NODELABEL(npm1300_ldo2));
@@ -55,6 +56,7 @@ static struct fs_file_t *current_file_ptr = NULL;
 static uint32_t total_chunks = 0;
 static uint64_t total_bytes = 0;
 static uint32_t free_space_mb = 0;
+static uint32_t sd_total_mb = 0;
 static uint64_t session_bytes_base = 0;  /* total_bytes at session start */
 
 /* Current recording session */
@@ -316,6 +318,18 @@ bool storage_is_mounted(void)
     return sd_mounted;
 }
 
+bool storage_is_full(void)
+{
+    if (sd_full) {
+        return true;
+    }
+    if (sd_total_mb == 0) {
+        return false;   /* size unknown — don't block recording */
+    }
+    /* Full when free% <= (100 - threshold), i.e. usage >= threshold */
+    return (free_space_mb * 100U) <= ((100U - CONFIG_CLIP_STORAGE_FULL_PERCENT) * sd_total_mb);
+}
+
 int storage_get_stats(struct storage_stats *stats)
 {
     if (!stats)
@@ -331,6 +345,12 @@ int storage_get_stats(struct storage_stats *stats)
     if (sd_mounted)
     {
         update_free_space();
+        /* Clear the full latch once free space recovers (usage drops below
+         * the threshold, e.g. after the user deletes sessions). */
+        if (sd_total_mb > 0 &&
+            (free_space_mb * 100U) > ((100U - CONFIG_CLIP_STORAGE_FULL_PERCENT) * sd_total_mb)) {
+            sd_full = false;
+        }
         stats->free_space_mb = free_space_mb;
     }
 
@@ -482,6 +502,7 @@ int storage_write_chunk(const char *session_id, uint32_t chunk_index,
     if (written != len)
     {
         LOG_ERR("Write incomplete: %zd != %u", written, len);
+        sd_full = true;
         return -EIO;
     }
 
@@ -507,6 +528,7 @@ static int flush_write_buffer(void)
     if (written != buffer_pos)
     {
         LOG_ERR("Buffer flush incomplete: %zd != %u", written, buffer_pos);
+        sd_full = true;
         return -EIO;
     }
 
@@ -1538,27 +1560,24 @@ static void delete_dir_contents(const char *dir_path)
 
 static int update_free_space(void)
 {
-    uint32_t free_sectors;
-    FATFS *fat_fs_ptr;
-    int rc;
+    struct fs_statvfs stat;
 
     if (!sd_mounted)
     {
         return -ENODEV;
     }
 
-    /* Get free space from FatFS - use FatFS native path */
-    rc = f_getfree("0:", &free_sectors, &fat_fs_ptr);
-    if (rc != 0)
+    /* Use the Zephyr FS API so we get both free and total capacity. */
+    if (fs_statvfs("/SD:", &stat) != 0)
     {
-        LOG_WRN("Failed to get free space: %d", rc);
+        LOG_WRN("Failed to get free space");
         free_space_mb = 0;
-        return rc;
+        sd_total_mb = 0;
+        return -EIO;
     }
 
-    /* Calculate free space in MB (sector size is typically 512 bytes) */
-    uint64_t free_bytes = (uint64_t)free_sectors * fat_fs_ptr->csize * 512;
-    free_space_mb = (uint32_t)(free_bytes / (1024 * 1024));
+    free_space_mb = (uint32_t)((uint64_t)stat.f_bfree * stat.f_bsize / (1024 * 1024));
+    sd_total_mb = (uint32_t)((uint64_t)stat.f_blocks * stat.f_bsize / (1024 * 1024));
 
     return 0;
 }

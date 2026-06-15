@@ -112,6 +112,17 @@ int storage_ensure_mounted(void);
  */
 bool storage_is_sd_powered(void);
 
+/**
+ * @brief Check if storage is (near) full
+ *
+ * Returns true after a write failure latches the full flag, or when SD usage
+ * reaches CONFIG_CLIP_STORAGE_FULL_PERCENT. Clears once usage drops back
+ * below the threshold.
+ *
+ * @return true if too full to record, false otherwise
+ */
+bool storage_is_full(void);
+
 /* Activity callback invoked after any SD access to re-arm idle power-off */
 typedef void (*storage_activity_cb_t)(void);
 
