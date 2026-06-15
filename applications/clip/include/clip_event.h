@@ -76,6 +76,18 @@ enum clip_state clip_event_get_state(void);
 int clip_event_init(void);
 
 /**
+ * @brief Notify SD activity (re-arms the idle SD power-off timer)
+ */
+void clip_storage_activity_notify(void);
+
+/**
+ * @brief Check if the FS log backend is currently active (AT+LOG on)
+ *
+ * When active, idle SD power-off is suppressed (logs write to SD).
+ */
+bool clip_log_fs_active(void);
+
+/**
  * @brief Wait for events (called by main loop)
  *
  * Blocks until an event is posted or timeout expires.

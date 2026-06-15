@@ -9,6 +9,8 @@
 #include <zephyr/storage/disk_access.h>
 #include <zephyr/fs/fs.h>
 #include <zephyr/drivers/regulator.h>
+#include <zephyr/drivers/gpio.h>
+#include <zephyr/pm/device.h>
 #include <ff.h>
 #include <zephyr/logging/log.h>
 #include <string.h>
@@ -27,6 +29,19 @@ static struct fs_mount_t mp = {
     .mnt_point = "/SD:",
 };
 static bool sd_mounted = false;
+static bool sd_powered = false;
+
+/* SD power-gating handles: LDO2 rail, SPI4 bus, and CS pin parking */
+static const struct device *const sd_ldo2 = DEVICE_DT_GET(DT_NODELABEL(npm1300_ldo2));
+static const struct device *const sd_spi4 = DEVICE_DT_GET(DT_NODELABEL(spi4));
+static const struct device *const sd_gpio0 = DEVICE_DT_GET(DT_NODELABEL(gpio0));
+#define STORAGE_SD_CS_PIN 9
+
+/* Serialize SD power lifecycle vs concurrent AT/recording access */
+static K_MUTEX_DEFINE(sd_lifecycle_mutex);
+
+/* Activity callback: re-arms the idle power-off timer (set by clip_event) */
+static storage_activity_cb_t sd_activity_cb;
 
 /* Base path for recordings */
 #define STORAGE_BASE_PATH "/SD:/REC"
@@ -126,6 +141,7 @@ int storage_init(void)
     }
 
     sd_mounted = true;
+    sd_powered = true;
     LOG_INF("SD card mounted at /SD:");
 
     /* Create base REC directory if not exists */
@@ -152,6 +168,52 @@ void storage_cleanup(void)
         fs_unmount(&mp);
         sd_mounted = false;
     }
+}
+
+int storage_idle_poweroff(void)
+{
+    char ws[STORAGE_SESSION_ID_LEN], wf[STORAGE_FILENAME_MAX_LEN];
+
+    /* Never yank the rail while a file is mid-write */
+    if (storage_get_writing_file(ws, wf, sizeof(ws), sizeof(wf))) {
+        return -EBUSY;
+    }
+
+    k_mutex_lock(&sd_lifecycle_mutex, K_FOREVER);
+
+    if (!sd_powered) {
+        k_mutex_unlock(&sd_lifecycle_mutex);
+        return 0;                       /* idempotent */
+    }
+
+    /* Park CS low and cut the rail. ORDER: SPI4 suspend (its sleep pinctrl
+     * pulls SCK/MOSI/MISO low) -> park CS low -> cut LDO2, so the unpowered
+     * card never sees a high level on any pin. SCK/MOSI/MISO are NOT touched
+     * here — the SPI4 sleep pinctrl handles them; reconfiguring them raises
+     * leakage (matches samples/suspend_to_ram spi4_suspend()). */
+    if (sd_mounted) {
+        (void)fs_unmount(&mp);
+        sd_mounted = false;
+    }
+    (void)disk_access_ioctl("SD", DISK_IOCTL_CTRL_DEINIT, NULL);
+
+    if (device_is_ready(sd_spi4)) {
+        /* Usually already suspended by runtime PM (-EALREADY); explicit call
+         * is a safety net guaranteeing the sleep pinctrl is applied. */
+        (void)pm_device_action_run(sd_spi4, PM_DEVICE_ACTION_SUSPEND);
+    }
+    if (device_is_ready(sd_gpio0)) {
+        (void)gpio_pin_configure(sd_gpio0, STORAGE_SD_CS_PIN,
+                                 GPIO_INPUT | GPIO_PULL_DOWN);
+    }
+    if (device_is_ready(sd_ldo2)) {
+        (void)regulator_disable(sd_ldo2);
+    }
+
+    sd_powered = false;
+    LOG_INF("SD idle power-off (LDO2 off, CS low)");
+    k_mutex_unlock(&sd_lifecycle_mutex);
+    return 0;
 }
 
 int storage_remount(void)
@@ -181,6 +243,72 @@ int storage_remount(void)
 
     update_free_space();
     return 0;
+}
+
+int storage_resume(void)
+{
+    int rc;
+
+    k_mutex_lock(&sd_lifecycle_mutex, K_FOREVER);
+
+    if (sd_mounted && sd_powered) {
+        k_mutex_unlock(&sd_lifecycle_mutex);
+        return 0;                       /* idempotent, stale-safe */
+    }
+
+    LOG_INF("SD resume start");
+    if (device_is_ready(sd_ldo2)) {
+        (void)regulator_enable(sd_ldo2);
+        k_msleep(100);
+    }
+    if (device_is_ready(sd_spi4)) {
+        (void)pm_device_action_run(sd_spi4, PM_DEVICE_ACTION_RESUME);
+    }
+    if (device_is_ready(sd_gpio0)) {
+        /* CS restored deselected (physical HIGH); GPIO_ACTIVE_LOW preserved */
+        (void)gpio_pin_configure(sd_gpio0, STORAGE_SD_CS_PIN,
+                                 GPIO_OUTPUT_HIGH | GPIO_ACTIVE_LOW);
+    }
+
+    rc = disk_access_init("SD");
+    if (rc != 0) {
+        LOG_ERR("SD disk init failed: %d", rc);
+        k_mutex_unlock(&sd_lifecycle_mutex);
+        return rc;
+    }
+    rc = fs_mount(&mp);
+    if (rc != 0) {
+        LOG_ERR("SD remount failed: %d", rc);
+        k_mutex_unlock(&sd_lifecycle_mutex);
+        return rc;
+    }
+
+    sd_mounted = true;
+    sd_powered = true;
+    update_free_space();
+    k_mutex_unlock(&sd_lifecycle_mutex);
+    LOG_INF("SD resumed (mounted)");
+    return 0;
+}
+
+int storage_ensure_mounted(void)
+{
+    int rc = storage_resume();          /* idempotent + locked internally */
+
+    if (rc == 0 && sd_activity_cb) {
+        sd_activity_cb();               /* re-arm idle power-off timer */
+    }
+    return rc;
+}
+
+bool storage_is_sd_powered(void)
+{
+    return sd_powered;
+}
+
+void storage_set_activity_cb(storage_activity_cb_t cb)
+{
+    sd_activity_cb = cb;
 }
 
 bool storage_is_mounted(void)

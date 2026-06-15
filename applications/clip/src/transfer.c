@@ -171,7 +171,7 @@ int transfer_start(const char *session_id, const char *filename, struct transpor
         return -ETIMEDOUT;
     }
 
-    if (!storage_is_mounted()) {
+    if (storage_ensure_mounted() != 0) {
         LOG_ERR("SD card not mounted");
         err = -ENODEV;
         goto fail;
@@ -315,7 +315,7 @@ int transfer_resume_from(const char *session_id, const char *start_file, struct 
         goto fail;
     }
 
-    if (!storage_is_mounted()) {
+    if (storage_ensure_mounted() != 0) {
         LOG_ERR("SD card not mounted");
         err = -ENODEV;
         goto fail;

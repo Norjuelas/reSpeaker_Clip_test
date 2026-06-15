@@ -26,6 +26,7 @@
 #include "ble.h"
 #include "wifi.h"
 #include "storage.h"
+#include "transfer.h"
 #include "usb_cdc.h"
 #include "config.h"
 
@@ -265,12 +266,64 @@ static struct mgmt_callback mcumgr_dfu_cb_chunk;
 static struct mgmt_callback mcumgr_dfu_cb_pending;
 static struct mgmt_callback mcumgr_dfu_cb_stopped;
 
+/* ========================================================================== */
+/* SD Idle Power-Off (Work Queue)                                             */
+/* ========================================================================== */
+
+#define SD_IDLE_POWEROFF_DELAY_MS  K_SECONDS(45)
+static struct k_work_delayable sd_idle_poweroff_work;
+
+/*
+ * True only when genuinely idle: IDLE state, no recording/transfer/OTA,
+ * USB not exposing the SD (MSC), FS log backend off, no file mid-write,
+ * and the SD rail is currently up (something to power off).
+ */
+static bool sd_idle_poweroff_safe(void)
+{
+    char ws[STORAGE_SESSION_ID_LEN], wf[STORAGE_FILENAME_MAX_LEN];
+
+    if ((enum clip_state)atomic_get(&g_state) != CLIP_STATE_IDLE) {
+        return false;
+    }
+    if (transfer_is_active() || audio_is_recording() || ota_in_progress) {
+        return false;
+    }
+    if (usb_cdc_is_enabled()) {
+        return false;   /* USB MSC exposes the SD — don't pull the rail */
+    }
+    if (clip_log_fs_active()) {
+        return false;   /* logs write to SD */
+    }
+    if (storage_get_writing_file(ws, wf, sizeof(ws), sizeof(wf))) {
+        return false;
+    }
+    return storage_is_sd_powered();
+}
+
+static void sd_idle_poweroff_work_handler(struct k_work *work)
+{
+    if (sd_idle_poweroff_safe()) {
+        (void)storage_idle_poweroff();
+    }
+    /* Keep re-arming so we re-evaluate each interval (no-op once powered off) */
+    k_work_schedule(&sd_idle_poweroff_work, SD_IDLE_POWEROFF_DELAY_MS);
+}
+
+void clip_storage_activity_notify(void)
+{
+    /* Any SD access re-arms the idle timer */
+    k_work_reschedule(&sd_idle_poweroff_work, SD_IDLE_POWEROFF_DELAY_MS);
+}
+
 int clip_event_init(void)
 {
     atomic_set(&g_state, CLIP_STATE_IDLE);
     k_sem_init(&event_notify_sem, 0, 1);
 
     k_work_init_delayable(&ota_progress_work, ota_progress_work_handler);
+    k_work_init_delayable(&sd_idle_poweroff_work, sd_idle_poweroff_work_handler);
+    storage_set_activity_cb(clip_storage_activity_notify);
+    k_work_schedule(&sd_idle_poweroff_work, SD_IDLE_POWEROFF_DELAY_MS);
 
     mcumgr_dfu_cb_started.callback = mcumgr_dfu_cb;
     mcumgr_dfu_cb_started.event_id = MGMT_EVT_OP_IMG_MGMT_DFU_STARTED;
@@ -461,6 +514,14 @@ static enum clip_event_result execute_transition(enum clip_event event,
     case CLIP_EVENT_START:
     {
         struct clip_context *ctx = clip_get_context();
+
+        /* SD may be idle-powered-off — bring it up before recording writes */
+        err = storage_ensure_mounted();
+        if (err) {
+            LOG_ERR("storage_ensure_mounted failed: %d", err);
+            display_post_error("SD Error");
+            return CLIP_EVENT_ERROR;
+        }
 
         err = audio_start_recording(AUDIO_MODE_MERGE);
         if (err) {

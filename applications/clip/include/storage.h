@@ -80,6 +80,49 @@ int storage_remount(void);
 bool storage_is_mounted(void);
 
 /**
+ * @brief Power-gate the SD card for idle (unmount + LDO2 off + SPI4 suspend + CS park)
+ *
+ * Refuses (-EBUSY) if a file is mid-write. Idempotent. Thread-safe.
+ *
+ * @return 0 on success, -EBUSY if a file is writing, or negative error code
+ */
+int storage_idle_poweroff(void);
+
+/**
+ * @brief Power on and remount the SD card (undo storage_idle_poweroff)
+ *
+ * @return 0 on success, negative error code on failure
+ */
+int storage_resume(void);
+
+/**
+ * @brief Ensure the SD card is mounted (resume if it was idle-powered-off)
+ *
+ * Single on-demand chokepoint for any SD access. Also re-arms the idle
+ * power-off timer via the registered activity callback.
+ *
+ * @return 0 when mounted, negative error code otherwise
+ */
+int storage_ensure_mounted(void);
+
+/**
+ * @brief Check if the SD card rail is powered
+ *
+ * @return true if powered, false otherwise
+ */
+bool storage_is_sd_powered(void);
+
+/* Activity callback invoked after any SD access to re-arm idle power-off */
+typedef void (*storage_activity_cb_t)(void);
+
+/**
+ * @brief Register the SD-activity callback (re-arms idle power-off)
+ *
+ * @param cb Callback, or NULL to clear
+ */
+void storage_set_activity_cb(storage_activity_cb_t cb);
+
+/**
  * @brief Get storage statistics
  *
  * @param stats Output statistics structure

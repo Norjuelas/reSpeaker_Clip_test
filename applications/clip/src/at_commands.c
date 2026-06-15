@@ -6,6 +6,8 @@
 
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
+#include <zephyr/logging/log_backend.h>
+#include <zephyr/logging/log_ctrl.h>
 #include <zephyr/sys/reboot.h>
 #include <zephyr/drivers/regulator.h>
 #include <zephyr/retention/bootmode.h>
@@ -34,6 +36,7 @@ LOG_MODULE_REGISTER(at_commands, CONFIG_CLIP_LOG_LEVEL);
 /* Delayed reboot work — allows response to be sent before rebooting */
 static struct k_work_delayable reboot_work;
 static bool reboot_clear_bonds;
+static bool log_fs_active;   /* AT+LOG controls the FS (SD) log backend */
 
 static void reboot_work_handler(struct k_work *work)
 {
@@ -356,6 +359,78 @@ static int cmd_mode_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
     }
 }
 
+/* LOG Command Handler - control the FS (SD card) log backend.
+ * AT+LOG=off (default) | info | debug. Default off so the SD can idle-power-off;
+ * when on, INF (or DBG) level logs persist to /SD:/LOG. */
+static int cmd_log_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
+{
+    if (ctx->type == AT_CMD_TYPE_SET) {
+        if (!ctx->args || strlen(ctx->args) == 0) {
+            return create_json_response(false, "Missing log mode", NULL, response, len);
+        }
+
+        char mode[32];
+        strncpy(mode, ctx->args, sizeof(mode) - 1);
+        mode[sizeof(mode) - 1] = '\0';
+        for (char *p = mode; *p; p++) {
+            if (*p >= 'A' && *p <= 'Z') {
+                *p = *p - 'A' + 'a';
+            }
+        }
+
+        if (strcmp(mode, "off") == 0) {
+            log_fs_active = false;
+            const struct log_backend *fs_be = log_backend_get_by_name("log_backend_fs");
+            if (fs_be) {
+                log_backend_deactivate(fs_be);
+            }
+            char data[32];
+            snprintf(data, sizeof(data), "{\"log\":\"off\"}");
+            return create_json_response(true, NULL, data, response, len);
+        }
+
+        if (strcmp(mode, "info") != 0 && strcmp(mode, "debug") != 0) {
+            return create_json_response(false, "Log mode must be off, info or debug",
+                                        NULL, response, len);
+        }
+
+        uint32_t level = (strcmp(mode, "debug") == 0) ? LOG_LEVEL_DBG : LOG_LEVEL_INF;
+
+        /* SD may be idle-powered-off; bring it up before enabling the backend */
+        if (storage_ensure_mounted() != 0) {
+            return create_json_response(false, "SD card not available", NULL, response, len);
+        }
+
+        const struct log_backend *fs_be = log_backend_get_by_name("log_backend_fs");
+        if (!fs_be) {
+            return create_json_response(false, "FS log backend unavailable", NULL, response, len);
+        }
+
+        log_backend_activate(fs_be, NULL);
+        uint32_t src_cnt = log_src_cnt_get(0);
+        for (uint32_t i = 0; i < src_cnt; i++) {
+            log_filter_set(fs_be, 0, (int16_t)i, level);
+        }
+        log_fs_active = true;
+        clip_storage_activity_notify();
+
+        char data[32];
+        snprintf(data, sizeof(data), "{\"log\":\"%s\"}", mode);
+        return create_json_response(true, NULL, data, response, len);
+    } else {
+        /* AT+LOG? */
+        const char *m = log_fs_active ? "info" : "off";
+        char data[32];
+        snprintf(data, sizeof(data), "{\"log\":\"%s\"}", m);
+        return create_json_response(true, NULL, data, response, len);
+    }
+}
+
+bool clip_log_fs_active(void)
+{
+    return log_fs_active;
+}
+
 /* AUTODEL Command Handler - Get/Set auto-delete policy */
 static int cmd_autodel_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
 {
@@ -567,7 +642,7 @@ static int cmd_pair_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
 /* PURGEABLE Command Handler - List sessions ready for cleanup */
 static int cmd_purgeable_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
 {
-    if (!storage_is_mounted()) {
+    if (storage_ensure_mounted() != 0) {
         return create_json_response(false, "SD card not mounted", NULL, response, len);
     }
 
@@ -642,7 +717,7 @@ static int parse_pagination(const char *query, int *page, int *per_page, int max
 /* FORMAT Command Handler - Format SD card (delete all sessions) */
 static int cmd_format_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
 {
-    if (!storage_is_mounted()) {
+    if (storage_ensure_mounted() != 0) {
         return create_json_response(false, "SD card not mounted", NULL, response, len);
     }
 
@@ -850,7 +925,7 @@ static int cmd_list_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
 
     LOG_DBG("AT+LIST: args='%s'", ctx->args ? ctx->args : "(null)");
 
-    if (!storage_is_mounted()) {
+    if (storage_ensure_mounted() != 0) {
         LOG_WRN("SD card not mounted for AT+LIST");
         return create_json_response(false, "SD card not mounted", NULL, response, len);
     }
@@ -1090,7 +1165,7 @@ static int cmd_marks_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
     }
 
     /* Check if SD card is mounted */
-    if (!storage_is_mounted()) {
+    if (storage_ensure_mounted() != 0) {
         return create_json_response(false, "SD card not mounted", NULL, response, len);
     }
 
@@ -1220,7 +1295,7 @@ static int cmd_download_handler(struct at_cmd_ctx *ctx, char *response, size_t l
     }
 
     /* Check if SD card is mounted */
-    if (!storage_is_mounted()) {
+    if (storage_ensure_mounted() != 0) {
         return create_json_response(false, "SD card not mounted", NULL, response, len);
     }
 
@@ -1328,7 +1403,7 @@ static int cmd_delete_handler(struct at_cmd_ctx *ctx, char *response, size_t len
     }
 
     /* Check if SD card is mounted */
-    if (!storage_is_mounted()) {
+    if (storage_ensure_mounted() != 0) {
         return create_json_response(false, "SD card not mounted", NULL, response, len);
     }
 
@@ -1371,7 +1446,7 @@ static int cmd_purge_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
      */
 
     /* Check if SD card is mounted */
-    if (!storage_is_mounted()) {
+    if (storage_ensure_mounted() != 0) {
         return create_json_response(false, "SD card not mounted", NULL, response, len);
     }
 
@@ -1890,6 +1965,15 @@ int at_commands_register(void)
         .handler = cmd_usb_handler,
     };
     err = at_server_register_cmd(&usb_cmd);
+    if (err) return err;
+
+    /* LOG - control FS (SD) log backend (AT+LOG=off|info|debug) */
+    static const struct at_command log_cmd = {
+        .name = "LOG",
+        .flags = AT_CMD_SET | AT_CMD_QUERY | AT_CMD_EXEC,
+        .handler = cmd_log_handler,
+    };
+    err = at_server_register_cmd(&log_cmd);
     if (err) return err;
 
     LOG_INF("AT commands registered");
