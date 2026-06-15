@@ -124,6 +124,18 @@
 	hfclkaudio-frequency = <12288000>;
 };
 
+/* Switch the nRF5340 internal regulators from the SDK default LDO to DCDC.
+ * The Clip board has the 10µH DCDC inductors (L1, L2) populated; in LDO mode
+ * the suspend/idle current is ~500-600µA higher. Matches the nRF5340+nRF7022
+ * reference (nrf7002dk) and samples/suspend_to_ram. */
+&vregmain {
+	regulator-initial-mode = <NRF5X_REG_MODE_DCDC>;
+};
+
+&vregradio {
+	regulator-initial-mode = <NRF5X_REG_MODE_DCDC>;
+};
+
 &pdm0 {
 	status = "okay";
 	pinctrl-0 = <&pdm0_default>;
