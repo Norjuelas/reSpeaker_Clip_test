@@ -133,6 +133,16 @@ typedef void (*storage_activity_cb_t)(void);
  */
 void storage_set_activity_cb(storage_activity_cb_t cb);
 
+/* Busy-check callback: returns true if the SD must NOT be idle-powered-off
+ * (e.g. recording/transfer/OTA active). Evaluated under sd_lifecycle_mutex
+ * by storage_idle_poweroff(), closing the TOCTOU with the unlocked tick. */
+typedef bool (*storage_busy_cb_t)(void);
+
+/**
+ * @brief Register the SD-busy callback
+ */
+void storage_set_busy_cb(storage_busy_cb_t cb);
+
 /**
  * @brief Get storage statistics
  *

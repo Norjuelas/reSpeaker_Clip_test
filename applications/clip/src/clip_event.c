@@ -278,33 +278,31 @@ static struct k_work_delayable sd_idle_poweroff_work;
  * USB not exposing the SD (MSC), FS log backend off, no file mid-write,
  * and the SD rail is currently up (something to power off).
  */
-static bool sd_idle_poweroff_safe(void)
+/* Registered with storage as the busy callback: returns true (busy) if the SD
+ * must NOT be idle-powered-off. Evaluated under sd_lifecycle_mutex by
+ * storage_idle_poweroff(), closing the TOCTOU with the unlocked tick. */
+static bool clip_sd_busy(void)
 {
-    char ws[STORAGE_SESSION_ID_LEN], wf[STORAGE_FILENAME_MAX_LEN];
-
     if ((enum clip_state)atomic_get(&g_state) != CLIP_STATE_IDLE) {
-        return false;
+        return true;
     }
     if (transfer_is_active() || audio_is_recording() || ota_in_progress) {
-        return false;
+        return true;
     }
     if (usb_cdc_is_enabled()) {
-        return false;   /* USB MSC exposes the SD — don't pull the rail */
+        return true;   /* USB MSC exposes the SD — don't pull the rail */
     }
     if (clip_log_fs_active()) {
-        return false;   /* logs write to SD */
+        return true;   /* logs write to SD */
     }
-    if (storage_get_writing_file(ws, wf, sizeof(ws), sizeof(wf))) {
-        return false;
-    }
-    return storage_is_sd_powered();
+    return false;
 }
 
 static void sd_idle_poweroff_work_handler(struct k_work *work)
 {
-    if (sd_idle_poweroff_safe()) {
-        (void)storage_idle_poweroff();
-    }
+    /* storage_idle_poweroff() checks writing_file + the busy callback UNDER
+     * the lock, so no TOCTOU with a recording/transfer starting mid-check. */
+    (void)storage_idle_poweroff();
     /* Keep re-arming so we re-evaluate each interval (no-op once powered off) */
     k_work_schedule(&sd_idle_poweroff_work, SD_IDLE_POWEROFF_DELAY_MS);
 }
@@ -323,6 +321,7 @@ int clip_event_init(void)
     k_work_init_delayable(&ota_progress_work, ota_progress_work_handler);
     k_work_init_delayable(&sd_idle_poweroff_work, sd_idle_poweroff_work_handler);
     storage_set_activity_cb(clip_storage_activity_notify);
+    storage_set_busy_cb(clip_sd_busy);
     k_work_schedule(&sd_idle_poweroff_work, SD_IDLE_POWEROFF_DELAY_MS);
 
     mcumgr_dfu_cb_started.callback = mcumgr_dfu_cb;

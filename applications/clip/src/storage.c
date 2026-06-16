@@ -44,6 +44,9 @@ static K_MUTEX_DEFINE(sd_lifecycle_mutex);
 /* Activity callback: re-arms the idle power-off timer (set by clip_event) */
 static storage_activity_cb_t sd_activity_cb;
 
+/* Busy callback: returns true if SD must not be powered off (checked under lock) */
+static storage_busy_cb_t sd_busy_cb;
+
 /* Base path for recordings */
 #define STORAGE_BASE_PATH "/SD:/REC"
 
@@ -176,16 +179,23 @@ int storage_idle_poweroff(void)
 {
     char ws[STORAGE_SESSION_ID_LEN], wf[STORAGE_FILENAME_MAX_LEN];
 
-    /* Never yank the rail while a file is mid-write */
-    if (storage_get_writing_file(ws, wf, sizeof(ws), sizeof(wf))) {
-        return -EBUSY;
-    }
-
     k_mutex_lock(&sd_lifecycle_mutex, K_FOREVER);
 
     if (!sd_powered) {
         k_mutex_unlock(&sd_lifecycle_mutex);
         return 0;                       /* idempotent */
+    }
+
+    /* Re-check everything UNDER the lock: a recording/transfer/AT that starts
+     * between the work handler's unlocked tick and here must not have its FAT
+     * FS unmounted and rail cut underneath it (closes the TOCTOU). */
+    if (storage_get_writing_file(ws, wf, sizeof(ws), sizeof(wf))) {
+        k_mutex_unlock(&sd_lifecycle_mutex);
+        return -EBUSY;
+    }
+    if (sd_busy_cb && sd_busy_cb()) {
+        k_mutex_unlock(&sd_lifecycle_mutex);
+        return -EBUSY;
     }
 
     /* Park CS low and cut the rail. ORDER: SPI4 suspend (its sleep pinctrl
@@ -311,6 +321,11 @@ bool storage_is_sd_powered(void)
 void storage_set_activity_cb(storage_activity_cb_t cb)
 {
     sd_activity_cb = cb;
+}
+
+void storage_set_busy_cb(storage_busy_cb_t cb)
+{
+    sd_busy_cb = cb;
 }
 
 bool storage_is_mounted(void)
