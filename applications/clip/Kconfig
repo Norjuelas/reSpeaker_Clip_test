@@ -71,6 +71,13 @@ config CLIP_STORAGE_FULL_PERCENT
 	  Recording is refused and a "Storage Full" error is shown when SD card
 	  usage reaches this percentage (e.g. 95 = refuse at 95% full).
 
+config CLIP_LOG_FS_DEFAULT_ON
+	bool "Enable FS (SD card) log backend by default at boot"
+	default y
+	help
+	  Debug builds: FS log on by default (INF to /SD:/LOG).
+	  Production snippet sets this to n.
+
 config CLIP_DEFAULT_AUTODEL
 	int "Default auto-delete days (-1 for off)"
 	default -1

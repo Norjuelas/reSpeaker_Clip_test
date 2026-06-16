@@ -36,7 +36,7 @@ LOG_MODULE_REGISTER(at_commands, CONFIG_CLIP_LOG_LEVEL);
 /* Delayed reboot work — allows response to be sent before rebooting */
 static struct k_work_delayable reboot_work;
 static bool reboot_clear_bonds;
-static bool log_fs_active;   /* AT+LOG controls the FS (SD) log backend */
+static bool log_fs_active = IS_ENABLED(CONFIG_CLIP_LOG_FS_DEFAULT_ON);
 
 static void reboot_work_handler(struct k_work *work)
 {

@@ -248,11 +248,19 @@ int clip_init(void)
         display_check_untransferred();
 
 #ifdef CONFIG_LOG_BACKEND_FS
-        /* FS log backend starts OFF so the SD can idle-power-off.
-         * Enable with AT+LOG=info|debug to persist logs to /SD:/LOG. */
         const struct log_backend *fs_be = log_backend_get_by_name("log_backend_fs");
         if (fs_be) {
-            log_backend_deactivate(fs_be);
+            if (IS_ENABLED(CONFIG_CLIP_LOG_FS_DEFAULT_ON)) {
+                /* Debug: FS log on by default (WRN+ERR to /SD:/LOG) */
+                log_backend_activate(fs_be, NULL);
+                uint32_t src_cnt = log_src_cnt_get(0);
+                for (uint32_t i = 0; i < src_cnt; i++) {
+                    log_filter_set(fs_be, 0, (int16_t)i, LOG_LEVEL_INF);
+                }
+            } else {
+                /* Production: FS log off (enable via AT+LOG) */
+                log_backend_deactivate(fs_be);
+            }
         }
 #endif
     }

@@ -223,7 +223,7 @@ int storage_idle_poweroff(void)
     }
 
     sd_powered = false;
-    LOG_INF("SD idle power-off (LDO2 off, CS low)");
+    LOG_DBG("SD idle power-off (LDO2 off, CS low)");
     k_mutex_unlock(&sd_lifecycle_mutex);
     return 0;
 }
