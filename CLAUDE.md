@@ -9,31 +9,27 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-ReSpeaker Clip is a Zephyr RTOS firmware project for the Seeed ReSpeaker Clip board, based on the Nordic nRF5340 dual-core MCU. It is a voice recording device with BLE and WiFi AP connectivity, AT command control, and UDP file transfer.
+ReSpeaker Clip is a Zephyr RTOS firmware project for the Seeed ReSpeaker Clip board, based on the Nordic nRF5340 dual-core MCU. It is a voice recording device with BLE, WiFi AP, and USB connectivity, AT command control, and UDP file transfer.
 
-- **RTOS**: Zephyr RTOS v3.2.1 (via Nordic nRF Connect SDK) — `main` branch
-- **RTOS**: Zephyr RTOS v3.3.0 (via Nordic nRF Connect SDK) — `ncs/v3.3.0` branch
+- **RTOS**: Zephyr RTOS v3.3.0 (via Nordic nRF Connect SDK) — active on `main`. v3.2.1 is no longer supported (`main` requires v3.3.0-only Kconfig).
 - **Hardware**: nRF5340 (dual-core: Application core + Network core)
-- **Key Features**: PDM microphone array, OLED display (CH1115), SD card, WiFi (nRF7002), external SPI flash, haptic motor, battery monitoring
+- **Key Features**: PDM microphone array, OLED display (CH1115), SD card, WiFi (nRF7002), external SPI flash, haptic motor, battery monitoring (NPM1300 + nRF Fuel Gauge, custom "240"/HSZ 362123 model), USB CDC serial + USB MSC (SD card mass storage)
+
+This repo (`module.yml` → `board_root`/`dts_root`) also carries the lineage of the related **ReSpeaker Lav** lavalier product (see the `reSpeaker Lav/` tree, the `240` battery, and DTS comments referencing "Lav"). The Clip is the active target.
 
 ## Environment Setup
 
-**main branch (v3.2.1):**
-```sh
-source ~/ncs/v3.2.1/zephyr/zephyr-env.sh
-export ZEPHYR_EXTRA_MODULES=$(pwd)
-```
-
-**ncs/v3.3.0 branch:**
+Active development uses **NCS v3.3.0** (`main` is the active branch):
 ```sh
 source ~/ncs/v3.3.0/zephyr/zephyr-env.sh
 export ZEPHYR_EXTRA_MODULES=$(pwd)
 ```
-source ~/ncs/v3.2.1/zephyr/zephyr-env.sh
-export ZEPHYR_EXTRA_MODULES=$(pwd)
-```
 
 `ZEPHYR_EXTRA_MODULES` must be an environment variable (not CMake), because Kconfig module discovery happens before CMake configuration.
+
+> **v3.2.1 is dropped.** `main` migrated to v3.3.0-only Kconfig (e.g. the WPA3 `..._WPA3_IMPLEMENTATION_NONE` choice, commit `099f62f`) and will no longer build against NCS v3.2.1. The `ncs/v3.3.0` branch is an older, diverged v3.3.0 line (~12 commits behind `main`); the local `master` is only the ancient initial import.
+
+The app builds as a Zephyr **sysbuild** (see `applications/clip/sysbuild/`): `mcuboot.conf`/`mcuboot.overlay` build the customized bootloader, `ipc_radio/prj.conf` builds the network-core BLE radio image, and `root-rsa-2048.pem` signs the app image. A normal `west build` against `applications/clip` pulls all three in automatically.
 
 ## Building & Flashing
 
@@ -55,11 +51,15 @@ minicom -D /dev/ttyACM0 -b 115200
 
 ### Power Management
 
-`CONFIG_PM_DEVICE_RUNTIME=y` enables automatic peripheral power management. UART, I2C, SPI drivers automatically suspend when idle and resume on access. No separate production snippet needed — the debug console is retained without power penalty since UART auto-suspends between log outputs.
+`CONFIG_PM_DEVICE_RUNTIME=y` enables automatic peripheral power management. UART, I2C, SPI drivers automatically suspend when idle and resume on access.
+
+**The debug UART console still leaks ~570µA at idle** — the UARTE peripheral stays enabled between log outputs (baud-independent; 115200 and 921600 both leak the same). The `production` snippet disables the console + UART log backend, bringing idle to ~170µA. The debug build (console on) idles higher. This was the single largest idle leak after the regulators and SD card were fixed.
+
+Idle power budget (3V3 rail, v0.0.5): nRF5340 main/radio regulators on **DCDC** (`vregmain`/`vregradio` = `NRF5X_REG_MODE_DCDC`, ~500–600µA vs LDO); SD card **idle power-gated** after 45s (unmount → disk deinit → SPI4 runtime-PM suspend → CS parked low → LDO2 off; lazy remount via `storage_ensure_mounted()`); SPI `bias-pull-up` removed from `spi3`/`spi4` (push-pull needs none) with `bias-pull-down` on `spi4_sleep`. Production (console off) reaches ~170µA.
 
 `CONFIG_NRF70_QSPI_LOW_POWER=y` puts QSPI in low power when WiFi is not in use.
 
-BLE slow advertising (1s interval) adds ~0.1mA averaged to idle current.
+BLE slow advertising (~1s interval) adds ~0.1mA averaged to idle current.
 
 ### Build Snippets
 
@@ -67,21 +67,28 @@ Snippets are in `applications/clip/snippets/`. Each snippet has a conf file, opt
 
 | Snippet | Purpose | Changes |
 |---------|---------|---------|
-| `production` | Production firmware (legacy) | Disables debug UART and console |
+| `production` | Low-power production firmware | Disables UART console + UART log backend (`CONFIG_CONSOLE=n`, `CONFIG_UART_CONSOLE=n`, `CONFIG_LOG_BACKEND_UART=n`); FS log default follows (off). Idle ~170µA vs ~higher for the debug build. |
 
-Note: With `PM_DEVICE_RUNTIME`, the production snippet is no longer necessary for power savings.
+The default (no-snippet) build is the **debug** image: UART console on, FS log to `/SD:/LOG` at INF level (`CLIP_LOG_FS_DEFAULT_ON` defaults to `LOG_BACKEND_UART`). Use the `production` snippet for battery/production builds where the console leak matters.
 
-Build with snippet: `west build ... -- -DSNIPPET_ROOT=applications/clip -DSNIPPET=<name>`
+Build with snippet: `west build ... -- -DSNIPPET_ROOT=$(pwd)/applications/clip -DSNIPPET=production` (SNIPPET_ROOT must be an absolute path).
 
 ### Output Firmware
+
+Two images per release: **debug** (`build-clip`, console + SD log) and **production** (`build-clip-prod`, `-- -DSNIPPET_ROOT=$(pwd)/applications/clip -DSNIPPET=production`, console off).
 
 ```sh
 VERSION=$(grep APP_VERSION_STRING build-clip/clip/zephyr/include/generated/zephyr/app_version.h | cut -d'"' -f2)
 mkdir -p output/$VERSION
 
-cp build-clip/merged.hex output/$VERSION/
-cp build-clip/merged_CPUNET.hex output/$VERSION/
-cp build-clip/dfu_application.zip output/$VERSION/clip-$VERSION-ota.zip
+# Debug
+cp build-clip/merged.hex            output/$VERSION/clip-$VERSION-debug-merged.hex
+cp build-clip/merged_CPUNET.hex     output/$VERSION/clip-$VERSION-debug-merged_CPUNET.hex
+cp build-clip/dfu_application.zip   output/$VERSION/clip-$VERSION-debug-ota.zip
+# Production
+cp build-clip-prod/merged.hex            output/$VERSION/clip-$VERSION-production-merged.hex
+cp build-clip-prod/merged_CPUNET.hex     output/$VERSION/clip-$VERSION-production-merged_CPUNET.hex
+cp build-clip-prod/dfu_application.zip   output/$VERSION/clip-$VERSION-production-ota.zip
 ```
 
 ## Testing
@@ -131,6 +138,21 @@ Shell commands: `nrf70 otp status/read/write_mac0/write_mac1/lock`
 
 See `tests/otp/README.md` for full usage.
 
+### Factory & RF Test Firmware
+
+Each is a standalone sysbuild image under `tests/<name>`, built like the hardware test above (`west build --build-dir build-<name> --pristine --board clip/nrf5340/cpuapp tests/<name>`):
+
+| Test | Purpose |
+|------|---------|
+| `tests/clip` | Multi-image hardware test suite (also hosts the `lfxo`/`hfxo` shell below) |
+| `tests/otp` | nRF70 OTP / MAC factory programming |
+| `tests/battery_profile` | NPM1300 battery profiler — logs V/I/T over UART to regenerate `battery_model.inc` via Nordic nPM PowerUP |
+| `tests/dtm` | BLE Direct Test Mode for RF conformance/certification (2-wire UART @19200; cpunet runs DTM, cpuapp bridges IPC→UART) |
+| `tests/wifi_radio` | nRF70 WiFi radio test for RF certification (TX/RX, tone, IQ, FICR) |
+| `tests/sysoff` | System-OFF lowest-power measurement |
+
+`tests/dk` and `tests/re` are dev-kit / reference-board bring-up variants. `tests/tools/poweroff.py` is a host-side helper.
+
 ### Crystal Capacitance Tuning (tests/clip)
 
 The board has no external load capacitors for LFXO/HFXO. Internal capacitors must be enabled via registers. Use the test firmware shell commands to tune:
@@ -161,10 +183,13 @@ After finding optimal values, configure in device tree:
 - `docs/architecture.md` - System architecture design
 - `docs/requirements.md` - Product requirements
 - `docs/development.md` - Development log
+- `docs/audio_quality_standard.md` - Audio recording quality test standard (ASR/transcription target)
+- `docs/mcuboot_app_development.md` - Building apps under the custom MCUboot, including OTA
+- `docs/whitepaper.md` / `docs/patent_disclosure.md` - Firmware whitepaper and patent disclosure (CN)
 
 ## Application Architecture
 
-The application (`applications/clip/`) uses an event-driven architecture with dual transport support (BLE + WiFi UDP).
+The application (`applications/clip/`) uses an event-driven architecture with triple transport support (BLE + WiFi UDP + USB CDC). All three are AT-command channels; the active one is auto-selected per response.
 
 ### Event System
 
@@ -176,7 +201,15 @@ UNINITIALIZED → IDLE → RECORDING → TRANSMITTING / WIFI_SYNC → IDLE. Also
 
 ### Transport Abstraction
 
-`transport.c` provides a unified interface over BLE (`transport_ble.c`) and UDP (`transport_udp.c`). Auto-selects active transport (BLE priority over UDP). Max 512 bytes per packet. Separate send vs send_file_data (BLE uses FILE_DATA characteristic).
+`transport.c` provides a unified interface over BLE (`transport_ble.c`), UDP (`transport_udp.c`), and USB CDC (`usb_cdc.c`). Auto-selects active transport (BLE priority over UDP). Max 512 bytes per packet. Separate send vs send_file_data (BLE uses FILE_DATA characteristic). `TRANSPORT_TYPE_USB` carries AT commands over the USB CDC ACM serial port.
+
+### USB Interface (`usb_cdc.c`)
+
+The device enumerates over USB (Seeed VID `0x2886`) with two classes:
+- **CDC ACM serial** — a third AT-command channel (`TRANSPORT_TYPE_USB`), wired into `at_server` exactly like BLE/UDP.
+- **MSC mass storage** — exposes the SD card as a drive (LUN `"SD"`).
+
+It is **VBUS-aware**: auto-disables USB immediately on VBUS removal, and auto-disables after 10 min if USB is enabled but no cable is present (`USB_NO_VBUS_TIMEOUT_MS`). State changes are pushed to the app via `ble_notify_event("usb", ...)`.
 
 ### AT Commands
 
@@ -188,6 +221,7 @@ All commands return JSON responses. Key commands:
 - `AT+DELETE=<session_id>` / `AT+PURGE` - Session management
 - `AT+MODE`, `AT+NOISE`, `AT+DEREVERB`, `AT+AUTODEL`, `AT+BRIGHTNESS` - Configuration
 - `AT+WIFI=on|off` - WiFi AP control
+- `AT+LOG=off|info|debug` - SD log backend level (debug default: info); off lets the SD card idle power-gate
 - `AT+TIME=<timestamp>` - Time sync
 - `AT+MARKS=<session_id>` - Bookmark management
 
@@ -214,7 +248,7 @@ Binary frame protocol with per-file CRC32 verification:
 - `icons.c` - XBM-format display icons
 - `button.c` - Multi-press, long-press support via custom input driver
 - `haptic.c` - Vibration motor feedback via PMIC GPIO
-- `battery.c` - NPM1300 PMIC battery monitoring + nRF Fuel Gauge
+- `battery.c` - NPM1300 PMIC battery monitoring + nRF Fuel Gauge (model in `battery_model.inc`). Polls every 60 s, posts a graceful shutdown event on critical level; recent tuning adds reserve capacity and early low-battery shutdown.
 
 ## Known Pitfalls
 
@@ -223,10 +257,23 @@ Binary frame protocol with per-file CRC32 verification:
 - **`except Exception` doesn't catch `KeyboardInterrupt`**: It's a `BaseException`, not `Exception`. Use bare `except:` or handle it explicitly.
 - **FAT directory order**: Not chronological. Session listing uses a cached sorted buffer invalidated on mutations.
 - **Transfer thread safety**: AT commands and transfer run on different threads. Use volatile flags for coordination (e.g., `transfer_cancel_requested`).
+- **Logs persist to SD card**: `CONFIG_LOG_BACKEND_FS=y` writes logs to `/SD:/LOG` (rotating 64 KiB files). `CONFIG_LOG_DEFAULT_LEVEL=0` compiles logs out at runtime — enable via `LOG_RUNTIME_FILTERING` / per-module level when debugging. Inspect the SD `/LOG/` files post-mortem.
 
 ## MCUboot Patch Development
 
-MCUboot source is in the NCS tree (`~/ncs/<version>/bootloader/mcuboot`). Patches are stored in `patches/mcuboot/`. The workflow is: **modify source → build → verify → export patches**. Patches apply to both v3.2.1 and v3.3.0.
+MCUboot source is in the NCS tree (`~/ncs/<version>/bootloader/mcuboot`). Patches are stored in `patches/mcuboot/` and the bootloader image is configured by the sysbuild files in `applications/clip/sysbuild/` (`mcuboot.conf`, `mcuboot.overlay`, `ipc_radio/prj.conf`, signing key `root-rsa-2048.pem`). See `docs/mcuboot_app_development.md` for the full app-under-MCUboot / OTA guide. The workflow is: **modify source → build → verify → export patches**.
+
+### Current patches (`patches/mcuboot/`)
+
+| Patch | Purpose |
+|-------|---------|
+| `0001-require-vbus-for-gpio-serial-recovery.patch` | Only allow GPIO/serial recovery when VBUS is present |
+| `0002-add-oled-display-support.patch` | OLED status UI in the bootloader (new `io_display.c`) |
+| `0003-add-serial-upload-progress-hook.patch` | Serial upload progress hook |
+| `0004-add-custom-mcumgr-commands.patch` | Custom mcumgr commands (erase SD, erase settings) |
+| `0005-add-swap-copy-progress-hook.patch` | Swap/copy progress hook |
+
+See `patches/mcuboot/README.md` for per-patch details.
 
 ### Step 1: Modify MCUboot source directly
 
@@ -302,23 +349,31 @@ Document what each patch does, which files it touches, and any constraints.
 - **PDM0**: Microphone array (alias: `dmic0`)
 - **I2C1**: NPM1300 PMIC at 0x6b (5 GPIOs, battery, regulators)
 - **I2C2**: CH1115 OLED at 0x3c (88x48, reset: gpio1.9)
-- **SPI3**: External SPI flash PY25Q64H (CS: gpio0.20, 64MB)
+- **SPI3**: External SPI flash PY25Q64H (CS: gpio0.20, 64MB), powered by `flash_vdd` (gpio0.27)
 - **SPI4**: SD card via SDHC-SPI (CS: gpio0.9)
 - **QSPI**: nRF7002 WiFi module
+- **USBD**: CDC ACM serial (3rd AT channel) + MSC (SD card mass storage)
+- **nrf_radio_coex**: WiFi/BLE PTA coexistence (req/status0/grant/swctrl1 on P0.28/25/31/30)
 - **GPIO1.15**: User button (pull-up, active-low)
+
+The DTS is split across includes: `clip-pinctrl.dtsi`, `clip-cpuapp_partitioning.dtsi`, `clip-shared_sram.dtsi`, `nrf70_common.dtsi`, plus `clip_nrf5340_cpunet.dts` (network core) and `_ns.dts` (non-secure/TrustZone). `boot_mode0` (retention register in `gpregret1`, `zephyr,boot-mode`) gates MCUboot serial-recovery entry. Battery profile is the "240" cell (HSZ 362123, 170 mAh).
 
 ### Power Management
 
-`CONFIG_PM_DEVICE_RUNTIME=y` enables automatic peripheral power management. UART, I2C, SPI drivers automatically suspend when idle and resume on access. No separate production snippet needed — the debug console is retained without power penalty since UART auto-suspends between log outputs.
+`CONFIG_PM_DEVICE_RUNTIME=y` enables automatic peripheral power management. UART, I2C, SPI drivers automatically suspend when idle and resume on access.
+
+**The debug UART console still leaks ~570µA at idle** — the UARTE peripheral stays enabled between log outputs (baud-independent; 115200 and 921600 both leak the same). The `production` snippet disables the console + UART log backend, bringing idle to ~170µA. The debug build (console on) idles higher. This was the single largest idle leak after the regulators and SD card were fixed.
+
+Idle power budget (3V3 rail, v0.0.5): nRF5340 main/radio regulators on **DCDC** (`vregmain`/`vregradio` = `NRF5X_REG_MODE_DCDC`, ~500–600µA vs LDO); SD card **idle power-gated** after 45s (unmount → disk deinit → SPI4 runtime-PM suspend → CS parked low → LDO2 off; lazy remount via `storage_ensure_mounted()`); SPI `bias-pull-up` removed from `spi3`/`spi4` (push-pull needs none) with `bias-pull-down` on `spi4_sleep`. Production (console off) reaches ~170µA.
 
 `CONFIG_NRF70_QSPI_LOW_POWER=y` puts QSPI in low power when WiFi is not in use.
 
-BLE slow advertising (1s interval) adds ~0.1mA averaged to idle current.
+BLE slow advertising (~1s interval) adds ~0.1mA averaged to idle current.
 
 ### PMIC & Regulators
 
 PMIC regulators (I2C1 @ 0x6b): BUCK1 (motor), BUCK2 (main 3.3V), LDO1 (mic 1.8V), LDO2 (SD 3.3V).
-GPIO-controlled: mic_vdd (gpio1.14), oled_vdd (gpio1.8), rfsw_vdd (gpio0.29).
+GPIO-controlled: mic_vdd (gpio1.14), oled_vdd (gpio1.8), rfsw_vdd (gpio0.29), flash_vdd (gpio0.27).
 
 ### External Flash Partitions
 
@@ -340,16 +395,15 @@ GPIO-controlled: mic_vdd (gpio1.14), oled_vdd (gpio1.8), rfsw_vdd (gpio0.29).
 
 - `boards/seeed/clip/` - Board Support Package (device trees, Kconfig, CMake)
 - `applications/clip/` - Main application
-  - `src/` - main.c, at_commands.c, at_server.c, audio.c, battery.c, ble.c, button.c, clip_event.c, config.c, display.c, haptic.c, icons.c, storage.c, transfer.c, transport.c, transport_ble.c, transport_udp.c, wifi.c, wifi_udp.c
+  - `src/` - main.c, at_commands.c, at_server.c, audio.c, battery.c (+ generated `battery_model.inc`), ble.c, button.c, clip_event.c, config.c, display.c, haptic.c, icons.c, storage.c, transfer.c, transport.c, transport_ble.c, transport_udp.c, usb_cdc.c, wifi.c, wifi_udp.c
   - `include/` - Headers for each module
+  - `sysbuild/` - MCUboot + network-core radio sysbuild config
   - `tests/clip/` - Python library (wifi.py, codec.py, transfer.py, etc.)
   - `tests/tools/` - Tools: record.py, udp_sync.py, udp_terminal.py, clip-cli.py, clip-web.py
   - `tests/tests/` - Application tests
   - `prj.conf` - Kconfig
-- `samples/` - Examples (hello_world, button_demo, lua_repl, opus_encode, t5838)
+- `samples/` - Examples (hello_world, button_demo, lua_repl, opus_encode, lc3_encode, t5838, battery_170, http_server, wifi_ap_iperf, wifi_ble_coex, suspend_to_ram)
 - `drivers/` - Custom device drivers (input)
 - `lib/` - Third-party libraries (opus, speexdsp, lua)
-- `tests/clip/` - Multi-image hardware test suite
-- `tests/otp/` - nRF70 OTP programming tool (factory MAC address burning)
-- `tests/ble_test.py` - BLE protocol test script
-- `docs/` - Protocol, architecture, requirements, development docs
+- `tests/` - Firmware test/bench tools: `clip` (HW suite), `otp`, `battery_profile`, `dtm`, `wifi_radio`, `sysoff`, `dk`/`re` (bring-up); `tests/ble_test.py` (BLE protocol test)
+- `docs/` - Protocol, architecture, requirements, development, audio quality, MCUboot/OTA, whitepaper docs

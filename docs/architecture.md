@@ -419,13 +419,31 @@ Bitrate and complexity are Kconfig per-mode constants, not runtime configurable:
 
 **Bookmarks**: Binary format (`marks.bin`) with 4-byte magic "MRK1", 4-byte count, then entries.
 
-**SD Card Log Persistence**: Warning and error level logs are persisted to the SD card for field debugging.
+**SD Card Idle Power-Gating** (low power): when no recording / transfer / AT / USB /
+log activity occurs for 45s (`SD_IDLE_POWEROFF_DELAY_MS`), the SD stack is torn
+down to recover idle current — `fs_unmount` → `disk deinit` → SPI4 runtime-PM
+suspend → CS parked low → LDO2 off. The next access lazily remounts via
+`storage_ensure_mounted()` (a no-op if already mounted). Safety: the filesystem is
+flushed (unmount) before LDO2 is removed, and an active write/transfer cancels the
+power-off (`storage_set_busy_cb`). API: `storage_idle_poweroff()` /
+`storage_resume()` / `storage_ensure_mounted()` / `storage_is_sd_powered()` /
+`storage_set_busy_cb()`.
+
+**Storage-Full Protection**: usage is tracked via `fs_statvfs`.
+`storage_is_full()` returns true when SD usage reaches
+`CONFIG_CLIP_STORAGE_FULL_PERCENT` (default 95%). On full, recording is refused,
+a "Storage Full" error is shown on the OLED, and a BLE event is posted.
+
+**SD Card Log Persistence**: Logs persist to the SD card for field debugging.
 - Enabled by `CONFIG_LOG_BACKEND_FS=y`
 - Log directory: `/SD:/LOG/`
-- Log files: `log.000001` ... `log.000010` (prefix `log.`, 64KB per file, max 10 files)
-- Circular overwrite: oldest file is replaced when limit is reached
-- Log level: `LOG_LEVEL_WRN` (warnings and errors only, to minimize write wear)
-- Backend is activated after SD card mount in `clip_init()`
+- Log files: `log.000001` ... (prefix `log.`, 128KB per file, up to 20 files,
+  circular overwrite)
+- Backend level is runtime-controlled by `AT+LOG=off|info|debug` (see §3.3)
+- Boot default follows the build: `CLIP_LOG_FS_DEFAULT_ON` tracks
+  `LOG_BACKEND_UART` (debug image → INF on; production image → off). While the
+  backend is active the SD stays mounted (higher idle current); `off` lets it
+  idle power-gate.
 
 ### 3.7 Transfer (transfer.c)
 
@@ -436,7 +454,9 @@ Bitrate and complexity are Kconfig per-mode constants, not runtime configurable:
 **Features:**
 - File-level retransmit (up to `TRANSFER_MAX_FILE_RETRIES=10` retries)
 - Per-file CRC32 verification
-- Pause/resume/cancel (thread-safe via volatile flag, handled in transfer thread)
+- Pause/resume/cancel — cancel is thread-safe via a volatile flag and marks the
+  transfer `TRANSFER_STATE_ERROR` synchronously, so a fresh download works
+  correctly after a BLE drop (the transfer is fully inactive before the next start)
 - Continuous mode (transfer while recording)
 - Progress tracking (bytes, files, percent)
 - Resume from specific file (reconnect scenario)
@@ -535,6 +555,13 @@ enum transfer_state {
 
 **Pairing**: BLE SMP with bonding, 1 max paired device, encrypted connection.
 
+**Advertising & Connection Parameters**: Fast advertising for a short window after
+boot/connect-drop, then drops to **slow advertising** (~1s interval, ~0.1mA averaged
+to idle) — including for un-bonded devices — to minimize idle current. Once
+connected, the link requests a tight interval (15–30) with a supervision timeout of
+800; parameter-update requests from the central are accepted (clamped) rather than
+rejected, so iOS/Android centrals settle quickly and the link stays stable.
+
 ### 3.11a BLE Event Notifications
 
 **Purpose**: Push real-time state and status events to the connected BLE client via the Response characteristic (notify).
@@ -558,9 +585,11 @@ Event notifications are JSON objects sent over the BLE GATT Response characteris
 
 **Purpose**: Battery monitoring via NPM1300 PMIC with nRF Fuel Gauge.
 
-**Fuel Gauge**: Uses `CONFIG_NRF_FUEL_GAUGE=y` with `CONFIG_NRF_FUEL_GAUGE_VARIANT_SECONDARY_CELL=y` for accurate State of Charge (SoC) estimation. SoC is smoothed over time to avoid sudden jumps.
+**Fuel Gauge**: Uses `CONFIG_NRF_FUEL_GAUGE=y` with `CONFIG_NRF_FUEL_GAUGE_VARIANT_SECONDARY_CELL=y` for accurate State of Charge (SoC) estimation. SoC is smoothed over time to avoid sudden jumps — except below the reserve band, where smoothing is bypassed so a genuine low reading is acted on immediately.
 
 **Reporting**: Battery level (0-100%), charging status reported via AT+GSTAT and displayed on OLED status bar.
+
+**Over-Discharge Protection**: A reserve capacity and early low-battery threshold trigger a graceful shutdown (ship mode) before the cell is over-discharged; the critical-level check retries every poll (not only on a displayed-percent change) so it fires reliably.
 
 ### 3.13 Button Handler (button.c)
 
@@ -886,14 +915,16 @@ Managed independently by the transfer subsystem. Does not affect device state di
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| CLIP_NORMAL_BITRATE | 16000 | Normal mode Opus bitrate per channel (bps) |
-| CLIP_NORMAL_COMPLEXITY | 0 | Normal mode Opus complexity (0-10) |
+| CLIP_NORMAL_BITRATE | 32000 | Normal mode Opus bitrate (bps) |
+| CLIP_NORMAL_COMPLEXITY | 1 | Normal mode Opus complexity (0-10) |
 | CLIP_ENHANCED_BITRATE | 32000 | Enhanced mode Opus bitrate (bps) |
 | CLIP_ENHANCED_COMPLEXITY | 1 | Enhanced mode Opus complexity (0-10) |
-| CLIP_DEFAULT_NOISE | 15 | Default noise suppression (dB) |
+| CLIP_DEFAULT_NOISE | 12 | Default noise suppression (dB) |
 | CLIP_DEFAULT_DEREVERB | n | Default dereverberation enabled |
 | CLIP_DEFAULT_AUTODEL | -1 | Default auto-delete days (-1=off) |
-| CLIP_DEFAULT_BRIGHTNESS | 128 | Default OLED brightness (0-255) |
+| CLIP_DEFAULT_BRIGHTNESS | 32 | Default OLED brightness (0-255) |
+| CLIP_STORAGE_FULL_PERCENT | 95 | SD usage % at which recording is refused |
+| CLIP_LOG_FS_DEFAULT_ON | y (if LOG_BACKEND_UART) | FS log backend on at boot (debug y / production n) |
 | CLIP_HAPTIC_MOTOR_ENABLED | n | Enable haptic motor |
 | CLIP_AT_SERVER_QUEUE_SIZE | 10 | AT command queue depth |
 | CLIP_AT_SERVER_STACK_SIZE | 4096 | AT server thread stack (bytes) |
@@ -921,10 +952,10 @@ Managed independently by the transfer subsystem. Does not affect device state di
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | config/mode | uint8_t | 0 | Recording mode (0=normal, 1=enhanced) |
-| config/noise_suppress | uint8_t | 15 | Noise suppression level (dB) |
+| config/noise_suppress | uint8_t | 12 | Noise suppression level (dB) |
 | config/auto_delete_days | int8_t | -1 | Auto-delete days (-1=off, 0-30) |
 | config/dereverb_enabled | bool | false | Dereverberation enabled |
-| config/oled_brightness | uint8_t | 128 | OLED brightness (0-255) |
+| config/oled_brightness | uint8_t | 32 | OLED brightness (0-255) |
 | time/unix_timestamp | int64_t | - | Synced time (for session IDs) |
 
 ## 9. Memory Architecture
@@ -990,4 +1021,18 @@ Managed independently by the transfer subsystem. Does not affect device state di
 | BUCK1 | MOTOR_3V3 | Vibration motor power | PMIC GPIO2 |
 | BUCK2 | VDD_3V3 | Main system power | Always-on |
 | LDO1 | VDDMIC_1V8 | Microphone power | Always-on |
-| LDO2 | VDD_SD | SD card power | Always-on |
+| LDO2 | VDD_SD | SD card power | Runtime-gated (idle power-off) |
+
+GPIO-controlled power rails: `mic_vdd` (GPIO1.14), `oled_vdd` (GPIO1.8),
+`rfsw_vdd` (GPIO0.29), `flash_vdd` (GPIO0.27).
+
+### 10.5 Power Management
+
+The nRF5340 main and radio regulators are configured for **DCDC** mode
+(`vregmain`/`vregradio`), which saves ~500–600µA over LDO. Combined with SD card
+idle power-gating (LDO2 + SPI4 off after 45s inactivity, §3.6), removal of the SPI
+`bias-pull-up`, and the production snippet disabling the UART console (which
+otherwise leaks ~570µA), the production image reaches **~170µA** steady-state idle
+(3V3 rail) while remaining BLE-connectable. The debug image idles higher because
+the console stays on. `CONFIG_PM_DEVICE_RUNTIME=y` lets UART/I²C/SPI suspend
+between accesses; `CONFIG_NRF70_QSPI_LOW_POWER=y` parks QSPI when WiFi is off.

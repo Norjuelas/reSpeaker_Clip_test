@@ -206,6 +206,7 @@ Set configuration or execute with parameters:
 - `AT+DOWNLOAD=<session/file>` - Download file
 - `AT+WIFI=<on|off>` - Start/stop WiFi AP
 - `AT+USB=<on|off>` - Enable/disable USB CDC+MSC
+- `AT+LOG=<off|info|debug>` - Set SD log backend level
 
 #### GET Commands (Query)
 Format: `AT+XX?`
@@ -220,6 +221,7 @@ Query current configuration:
 - `AT+PAIR?` - Get pairing status
 - `AT+WIFI?` - Get WiFi AP status
 - `AT+USB?` - Get USB status
+- `AT+LOG?` - Get SD log backend status
 
 ### 3.2 JSON Message Format
 
@@ -1112,13 +1114,14 @@ AT+NAME?
 ```
 
 **Validation Rules:**
-- Length: 1–32 characters
+- Length: 1–256 bytes
 - Allowed: printable UTF-8 characters (letters, digits, CJK, spaces, `-`, `_`, etc.)
 - Not allowed: control characters (0x00–0x1F), empty string
+- Surrounding quotes (`"..."`) are stripped from the argument, so `AT+NAME="My Clip"` is equivalent to `AT+NAME=My Clip`
 - `AT+NAME=CLEAR` removes the name (sets to empty)
 
 **Error Cases:**
-- Name too long (> 32 characters)
+- Name too long (> 256 bytes)
 - Contains control characters
 - Empty name (use `CLEAR` to remove)
 
@@ -1243,6 +1246,59 @@ or
 **Auto-disable behavior:**
 - USB automatically disables on cable unplug
 - USB automatically disables after 10 minutes without a USB cable connected
+
+---
+
+##### AT+LOG - SD Log Backend Control
+
+Control the SD card log backend (`/SD:/LOG`, rotating files). Useful for post-mortem
+debugging on a device without the UART console (e.g. the production image).
+
+**Request (Set):**
+```
+AT+LOG=off
+AT+LOG=info
+AT+LOG=debug
+```
+
+**Request (Query):**
+```
+AT+LOG?
+```
+
+**Response (Set):**
+```json
+{
+  "ok": true,
+  "data": {"log": "info"}
+}
+```
+
+**Response (Query):**
+```json
+{
+  "ok": true,
+  "data": {"log": "off"}
+}
+```
+
+**Modes:**
+| Mode | Behavior |
+|------|----------|
+| `off` | Deactivates the FS log backend; the SD card is then free to idle power-gate (lowest idle current) |
+| `info` | Ensures the SD is mounted, then logs at INF level and above to `/SD:/LOG` |
+| `debug` | Same as `info` but at DBG level (most verbose; for troubleshooting) |
+
+**Notes:**
+- Boot default follows the build: the **debug** image enables `info` at boot; the
+  **production** image defaults to `off`. `AT+LOG` overrides this at runtime.
+- Enabling the backend (`info`/`debug`) keeps the SD mounted, which raises idle
+  current — use for diagnostics, then set `off` to restore low-power idle.
+- The query reports `info` whenever the backend is active (regardless of debug level).
+
+**Error Cases:**
+- Missing or invalid mode (must be `off`, `info`, or `debug`)
+- SD card not available when enabling (`info`/`debug`)
 
 ---
 
@@ -2330,7 +2386,8 @@ To prevent BLE congestion:
 | AT+PAIR | GET/SET | BLE pairing | 3.3.7 |
 | AT+FACTORY | SET | Factory reset | 3.3.7 |
 | AT+REBOOT | EXEC | Reboot | 3.3.7 |
-| AT+NAME | GET/SET | User device name | 3.3.7 |
+| AT+NAME | GET/SET | User device name (≤256 bytes) | 3.3.7 |
+| AT+LOG | GET/SET | SD log backend (off/info/debug) | 3.3.7 |
 
 ## Appendix E: Button Events
 

@@ -11,7 +11,7 @@
 | SpeexDSP Processing | Noise suppression, dereverberation (no AGC - FIXED_POINT limitation) |
 | Audio Modes | Normal (stereo, 16kbps/ch, complexity 0), Enhanced (mono, 32kbps, complexity 1) |
 | SD Card Storage | FAT32, session directories under /REC/ |
-| SD Card Log Persistence | LOG_BACKEND_FS, /SD:/LOG/, WRN+ERR only, 64KB files x10 max |
+| SD Card Log Persistence | LOG_BACKEND_FS, /SD:/LOG/, 128KB files x20; AT+LOG=off\|info\|debug (debug default INF) |
 | Session Metadata | session.json, files.lst, marks.bin |
 | Bookmark System | Binary marks.bin with notes |
 | BLE GATT Service | Command, Response, File Data, Event characteristics |
@@ -39,7 +39,7 @@
 | Transfer Cancel | Thread-safe cancel via volatile flag (no race with transfer thread) |
 | Device Naming | AT+NAME for custom BLE device name |
 
-### AT Commands (29)
+### AT Commands (30)
 
 | Command | Type | Purpose |
 |---------|------|---------|
@@ -69,6 +69,7 @@
 | AT+FACTORY | SET | Factory reset |
 | AT+REBOOT | EXEC | Reboot |
 | AT+USB | GET/SET | USB CDC control (default: off, auto-off on disconnect) |
+| AT+LOG | SET | SD log backend level: off \| info \| debug (debug default info) |
 | AT+NAME | GET/SET | Custom BLE device name |
 
 ### Thread Architecture
@@ -120,6 +121,23 @@ minicom -D /dev/ttyACM0 -b 115200
 ---
 
 ## Change History
+
+### 2026-06-16 - v0.0.5 Release
+
+- **Idle power: ~1.5mA → ~170µA (production)** via four changes, each measured on the 3V3 rail:
+  - nRF5340 internal regulators switched to DCDC (`vregmain`/`vregradio` = `NRF5X_REG_MODE_DCDC`); ~500–600µA
+  - SD card idle power-gating: after 45s of no record/transfer/AT/USB activity, unmount → disk deinit → SPI4 runtime-PM suspend → park CS low → LDO2 off; lazy remount on next access via `storage_ensure_mounted()`
+  - SPI bias-pull-up removed from `spi3`/`spi4` (push-pull needs no pull-up) and `bias-pull-down` added to `spi4_sleep`; ~750µA
+  - UART console keeps UARTE active at idle (~570µA, baud-independent); the `production` snippet disables console + UART log backend
+- **Debug / production firmware split** via the `production` snippet: debug keeps UART console + SD log at INF; production strips both for low power. Both exported to `output/0.0.5/`
+- **FS log backend (`/SD:/LOG`) now AT-controlled**: new `AT+LOG=off|info|debug` toggles it at runtime; boot default coupled to `LOG_BACKEND_UART` (debug on / production off) so the app-only Kconfig symbol is never broadcast into the mcuboot sysbuild image
+- **Storage-full handling**: percentage-based (`CLIP_STORAGE_FULL_PERCENT`, default 95%) via `fs_statvfs`; recording refused with a "Storage Full" on-screen error and BLE event when SD is full
+- **AT+NAME**: capacity 32B → 256B; surrounding quotes stripped from the argument
+- **BLE reliability**: fixed slow-advertising interval (was a copy-paste of the fast interval); un-bonded devices also drop to slow advertising; connection params tightened (interval 15–30, supervision timeout 800); CCC handlers use a notify mask (`&`) instead of equality
+- **Transfer cancel**: thread-safe, marks the transfer ERROR synchronously so re-download works after a BLE drop
+- **Battery**: reserve capacity + early low-battery shutdown; SoC smoothing bypassed below reserve so a true low reading is acted on immediately
+- **Python client (`tests/clip`)**: retries AT commands on BLE-notify drops; robust JSON parse around brace-matched notifications
+- New storage API: `storage_idle_poweroff()` / `storage_resume()` / `storage_ensure_mounted()` / `storage_is_full()` / `storage_set_busy_cb()`
 
 ### 2026-05-18 - v0.0.1 Release
 
