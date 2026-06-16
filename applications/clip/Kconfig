@@ -73,10 +73,15 @@ config CLIP_STORAGE_FULL_PERCENT
 
 config CLIP_LOG_FS_DEFAULT_ON
 	bool "Enable FS (SD card) log backend by default at boot"
-	default y
+	default y if LOG_BACKEND_UART
 	help
-	  Debug builds: FS log on by default (INF to /SD:/LOG).
-	  Production snippet sets this to n.
+	  FS log default follows the UART log backend: debug builds (which keep
+	  UART logging) default FS log on (INF to /SD:/LOG); the production
+	  snippet disables UART logging, so FS log defaults off there. The FS
+	  log can still be toggled at runtime with AT+LOG=off|info|debug.
+	  Coupling to LOG_BACKEND_UART (rather than overriding this symbol from
+	  the production snippet) avoids broadcasting an app-only Kconfig symbol
+	  into the mcuboot sysbuild image, where it is undefined.
 
 config CLIP_DEFAULT_AUTODEL
 	int "Default auto-delete days (-1 for off)"
