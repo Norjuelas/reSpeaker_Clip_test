@@ -42,8 +42,8 @@ LOG_MODULE_REGISTER(battery, CONFIG_CLIP_LOG_LEVEL);
 #define BATTERY_RESERVE_PERCENT  3
 
 /* Low battery warning/auto-shutdown are evaluated on the DISPLAYED percentage.
- * With RESERVE=5, the warning fires at actual 20% (displayed 15%) and the
- * shutdown fires at actual 5% (displayed 0%). */
+ * With RESERVE=3, the warning fires at actual 18% (displayed 15%) and the
+ * shutdown fires at actual 3% (displayed 0%). */
 #define BATTERY_LOW_WARNING_THRESHOLD  15
 #define BATTERY_SHUTDOWN_THRESHOLD     0
 
