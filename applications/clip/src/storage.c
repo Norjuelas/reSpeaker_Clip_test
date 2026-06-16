@@ -236,9 +236,9 @@ int storage_remount(void)
         return 0;
     }
 
-    /* Re-initialize SD card */
+    /* Re-initialize SD card (-ENOTSUP = already initialized, e.g. after MSC release) */
     rc = disk_access_init("SD");
-    if (rc != 0) {
+    if (rc != 0 && rc != -ENOTSUP) {
         LOG_ERR("SD reinit failed: %d", rc);
         return rc;
     }
@@ -283,7 +283,7 @@ int storage_resume(void)
     }
 
     rc = disk_access_init("SD");
-    if (rc != 0) {
+    if (rc != 0 && rc != -ENOTSUP) {
         LOG_ERR("SD disk init failed: %d", rc);
         k_mutex_unlock(&sd_lifecycle_mutex);
         return rc;

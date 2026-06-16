@@ -260,8 +260,8 @@ int usb_cdc_disable(void)
 	usb_active = false;
 	LOG_INF("USB disabled");
 
-	/* Remount SD card for app use */
-	storage_remount();
+	/* Remount SD card for app use (handles SD idle-powered-off case) */
+	storage_ensure_mounted();
 	return 0;
 }
 
