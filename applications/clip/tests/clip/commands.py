@@ -489,14 +489,30 @@ class ClipCommands:
         return session_id
 
     async def stop_recording(self) -> Dict[str, Any]:
-        """
-        Stop the current recording.
+        """Stop the current recording.
+
+        Retries on timeout: the device processes AT+STOP immediately, but the
+        BLE response notify can be dropped while the real-time sync (FILE_DATA)
+        saturates the BLE TX queue. By the time we retry the device has already
+        stopped, so a retry is safe and confirms the stop.
 
         Returns:
-            Dict with session info including duration
+            Dict with session info, or {"stopped": True} if the session info
+            was lost but the stop succeeded.
         """
-        response = await self._send_and_check("AT+STOP")
-        return response.get('data', {})
+        last_err: Optional[Exception] = None
+        for attempt in range(3):
+            try:
+                response = await self._send_and_check("AT+STOP", timeout=5.0)
+                return response.get('data', {})
+            except TimeoutError as e:
+                last_err = e  # response notify likely dropped in the sync flood
+                if attempt < 2:
+                    await asyncio.sleep(0.3)
+            except CommandError:
+                # ok:false (e.g. "not recording") -> a prior STOP already stopped it
+                return {"stopped": True}
+        raise last_err
 
     async def pause_recording(self) -> bool:
         """
