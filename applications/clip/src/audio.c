@@ -321,8 +321,11 @@ int audio_stop_recording(void)
     k_mutex_unlock(&audio_state_mutex);
     LOG_INF("Recording stop requested");
 
-    /* Wait for audio thread to finish cleanup */
-    k_sem_take(&stop_done_sem, K_MSEC(2000));
+    /* Wait for audio thread to finish cleanup (file close + sync on slow SD) */
+    if (k_sem_take(&stop_done_sem, K_MSEC(5000)) != 0) {
+        LOG_WRN("audio stop timed out (slow SD close?)");
+        return -ETIMEDOUT;
+    }
 
     return 0;
 }

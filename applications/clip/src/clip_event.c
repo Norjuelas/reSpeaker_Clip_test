@@ -659,11 +659,26 @@ static enum clip_event_result execute_transition(enum clip_event event,
 
     case CLIP_EVENT_POWER_OFF_EXEC:
     {
+        /* Cancel any active transfer so it stops reading the SD before we cut
+         * power. Bounded wait so a stuck transfer can't block shutdown. */
+        if (transfer_is_active()) {
+            LOG_INF("Cancelling transfer before power off");
+            transfer_cancel();
+            for (int i = 0; i < 20 && transfer_is_active(); i++) {
+                k_sleep(K_MSEC(100));   /* up to ~2s */
+            }
+        }
+
         /* Stop recording if active, to save file before shutdown */
         if (audio_is_recording()) {
             LOG_INF("Stopping recording before power off");
-            audio_stop_recording();
-            k_sleep(K_MSEC(100));
+            int stop_rc = audio_stop_recording();
+            if (stop_rc != 0) {
+                LOG_WRN("audio_stop_recording: %d (slow SD?), extra grace", stop_rc);
+                k_sleep(K_MSEC(500));
+            } else {
+                k_sleep(K_MSEC(100));
+            }
         }
 
         haptic_play_pattern(HAPTIC_DOUBLE);

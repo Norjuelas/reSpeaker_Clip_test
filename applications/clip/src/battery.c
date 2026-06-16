@@ -251,6 +251,11 @@ static void read_and_update(void)
 		if (!soc_initialized) {
 			smoothed_soc = raw_soc;
 			soc_initialized = true;
+		} else if (raw_soc < (BATTERY_RESERVE_PERCENT + 10)) {
+			/* Low battery: bypass smoothing so fast discharge reaches the
+			 * shutdown threshold promptly instead of lagging into a hard
+			 * PMIC undervoltage cutoff. */
+			smoothed_soc = raw_soc;
 		} else {
 			float delta = raw_soc - smoothed_soc;
 			/* Rate limit: cap maximum change per update cycle */
@@ -298,18 +303,18 @@ static void read_and_update(void)
 				display_post_event(UI_EVENT_LOW_BATTERY);
 				low_battery_warned = true;
 			}
-
-			/* Auto-shutdown: displayed 0% = actual RESERVE%.
-			 * Only post the event after init is complete — the event
-			 * dispatcher semaphore is not ready during battery_init(). */
-			if (display_percent <= BATTERY_SHUTDOWN_THRESHOLD) {
-				LOG_WRN("Battery critically low (actual %u%%, displayed %u%%), auto shutdown",
-					percent, display_percent);
-				if (init_complete) {
-					clip_post_event(CLIP_EVENT_POWER_OFF_EXEC);
-				}
-			}
 		}
+	}
+
+	/* Auto-shutdown: checked EVERY poll (not only when displayed % changes)
+	 * so a failed POWER_OFF_EXEC (I2C error / full event queue) is retried
+	 * until ship mode succeeds. Only after init (sem not ready during
+	 * battery_init). */
+	if (!charging && init_complete &&
+	    display_percent <= BATTERY_SHUTDOWN_THRESHOLD) {
+		LOG_WRN("Battery critically low (actual %u%%, displayed %u%%), auto shutdown",
+			percent, display_percent);
+		clip_post_event(CLIP_EVENT_POWER_OFF_EXEC);
 	}
 
 	/* Update charging status */
