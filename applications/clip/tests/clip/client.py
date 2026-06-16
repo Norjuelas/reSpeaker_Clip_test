@@ -431,7 +431,19 @@ class ClipDevice:
                             complete_json = remaining[:end_idx]
 
                             # Verify it's valid
-                            parsed = json.loads(complete_json)
+                            try:
+                                parsed = json.loads(complete_json)
+                            except json.JSONDecodeError:
+                                # Brace-matched but still invalid (e.g. truncated
+                                # UTF-8 at a BLE notification boundary). Skip.
+                                if self._debug:
+                                    print(f"[Notification] Skipping invalid JSON fragment")
+                                remaining = remaining[end_idx:].lstrip()
+                                if remaining:
+                                    self._response_buffer = bytearray(remaining.encode('utf-8'))
+                                else:
+                                    self._response_buffer.clear()
+                                continue
 
                             processed_count += 1
 

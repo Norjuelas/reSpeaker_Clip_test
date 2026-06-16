@@ -46,7 +46,7 @@ static const struct config_entry config_table[] = {
     { SETTING_DEREVERB,       offsetof(struct clip_config, dereverb_enabled), sizeof(bool) },
     { SETTING_BRIGHTNESS,       offsetof(struct clip_config, oled_brightness),  sizeof(uint8_t) },
     { SETTING_WIFI_PASSWORD,    offsetof(struct clip_config, wifi_password),    sizeof(char[9]) },
-    { SETTING_DEVICE_NAME,      offsetof(struct clip_config, device_name),      sizeof(char[33]) },
+    { SETTING_DEVICE_NAME,      offsetof(struct clip_config, device_name),      sizeof(char[257]) },
     { SETTING_WIFI_CHANNEL,     offsetof(struct clip_config, wifi_channel),     sizeof(uint8_t) },
     { SETTING_WIFI_REG_DOMAIN,  offsetof(struct clip_config, wifi_reg_domain), sizeof(char[3]) },
 };
@@ -327,7 +327,7 @@ int config_set(uint16_t key, const void *value, size_t len)
         }
         break;
     case CONFIG_KEY_DEVICE_NAME:
-        if (len <= 32) {
+        if (len <= 256) {
             strncpy(ctx->config.device_name, value, len);
             ctx->config.device_name[len] = '\0';
         } else {
@@ -408,8 +408,10 @@ int config_get(uint16_t key, void *value, size_t len)
         }
         break;
     case CONFIG_KEY_DEVICE_NAME:
-        if (len >= 33) {
-            strncpy(value, ctx->config.device_name, 33);
+        if (len > 0) {
+            char *dst = (char *)value;
+            strncpy(dst, ctx->config.device_name, len);
+            dst[len - 1] = '\0';
             return 0;
         }
         break;

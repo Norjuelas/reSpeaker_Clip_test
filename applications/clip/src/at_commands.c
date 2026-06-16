@@ -1489,18 +1489,28 @@ static int cmd_name_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
             return create_json_response(true, "Name cleared", NULL, response, len);
         }
 
-        size_t name_len = strlen(ctx->args);
-
-        if (name_len > 32) {
-            return create_json_response(false, "Name too long (max 32)", NULL, response, len);
+        /* Strip surrounding quotes if present (AT+NAME="value" → value) */
+        char name_buf[257];
+        const char *src = ctx->args;
+        size_t src_len = strlen(src);
+        if (src_len >= 2 && src[0] == '"' && src[src_len - 1] == '"') {
+            src++;
+            src_len -= 2;
         }
 
+        if (src_len > 256) {
+            return create_json_response(false, "Name too long (max 256 bytes)", NULL, response, len);
+        }
+
+        memcpy(name_buf, src, src_len);
+        name_buf[src_len] = '\0';
+
         bool has_printable = false;
-        for (size_t i = 0; i < name_len; i++) {
-            if ((unsigned char)ctx->args[i] < 0x20) {
+        for (size_t i = 0; i < src_len; i++) {
+            if ((unsigned char)name_buf[i] < 0x20) {
                 return create_json_response(false, "Invalid characters", NULL, response, len);
             }
-            if ((unsigned char)ctx->args[i] >= 0x20) {
+            if ((unsigned char)name_buf[i] >= 0x20) {
                 has_printable = true;
             }
         }
@@ -1509,18 +1519,18 @@ static int cmd_name_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
             return create_json_response(false, "Name cannot be empty", NULL, response, len);
         }
 
-        int err = config_set_device_name(ctx->args);
+        int err = config_set_device_name(name_buf);
         if (err) {
             return create_json_response(false, "Save failed", NULL, response, len);
         }
 
-        char data[40];
-        snprintf(data, sizeof(data), "{\"name\":\"%s\"}", ctx->args);
+        char data[300];
+        snprintf(data, sizeof(data), "{\"name\":\"%s\"}", name_buf);
         return create_json_response(true, NULL, data, response, len);
     }
 
     const char *name = config_get_device_name();
-    char data[40];
+    char data[300];
     snprintf(data, sizeof(data), "{\"name\":\"%s\"}", name);
     return create_json_response(true, NULL, data, response, len);
 }
