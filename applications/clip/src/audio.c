@@ -1364,10 +1364,10 @@ static void calculate_energy_level(int16_t *pcm_data, int frame_size)
      * - rms 2048-4095: level 4 (loud speech)
      * - rms 4096-8191: level 5 (very loud)
      * - rms 8192-16383: level 6
-     * - rms 16384-32767: level 7
-     * - rms 32768-65535: level 8
-     * - rms 65535-131071: level 9
-     * - rms >= 131072: level 10
+     * - rms 16384-20479: level 7
+     * - rms 20480-24575: level 8
+     * - rms 24576-28671: level 9
+     * - rms >= 28672: level 10  (RMS of int16 samples maxes at ~32767)
      */
     uint8_t new_level;
     if (rms < 256) {
@@ -1384,11 +1384,11 @@ static void calculate_energy_level(int16_t *pcm_data, int frame_size)
         new_level = 5;
     } else if (rms < 16384) {
         new_level = 6;
-    } else if (rms < 32768) {
+    } else if (rms < 20480) {
         new_level = 7;
-    } else if (rms < 65536) {
+    } else if (rms < 24576) {
         new_level = 8;
-    } else if (rms < 131072) {
+    } else if (rms < 28672) {
         new_level = 9;
     } else {
         new_level = 10;
