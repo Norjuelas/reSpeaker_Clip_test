@@ -414,6 +414,9 @@ int transfer_cancel(void)
     LOG_INF("xfer canceled");
     atomic_set(&transfer_cancel_requested, 1);
     atomic_set(&transfer_pause_requested, 0);
+    /* Mark inactive immediately so a subsequent AT+DOWNLOAD right after a BLE
+     * drop isn't rejected as "already in progress" while the thread winds down. */
+    current_transfer.state = TRANSFER_STATE_ERROR;
 
     return 0;
 }
