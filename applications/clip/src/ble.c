@@ -182,16 +182,15 @@ static void le_param_updated(struct bt_conn *conn, uint16_t interval,
 /* Reject connection parameters that are too aggressive */
 static bool le_param_req(struct bt_conn *conn, struct bt_le_conn_param *param)
 {
-    /* Require minimum timeout of 500 (5 seconds) to survive WiFi AP setup
-     * which monopolizes the radio for ~5 seconds during net_if_up/enable_ap. */
-    if (param->timeout < 500) {
-        LOG_WRN("Rejecting params: timeout %u",
-                param->timeout);
-        param->timeout = 500;
+    /* Require a coexistence-friendly minimum so WiFi AP bring-up (~5-8s,
+     * monopolizes the radio) can't supervise the link out. */
+    if (param->timeout < 800) {
+        LOG_WRN("Clamping conn params: timeout %u", param->timeout);
+        param->timeout = 800;
         param->interval_min = 30;
         param->interval_max = 50;
         param->latency = 0;
-        return false; /* Reject with our counter-proposal */
+        return true; /* accept the clamped counter-proposal (false = reject) */
     }
 
     LOG_DBG("accept: int=%u-%u lat=%u to=%u",
@@ -258,7 +257,7 @@ BT_GATT_SERVICE_DEFINE(clip_svc,
 /* CCC callback */
 static void resp_ccc_cfg_changed(const struct bt_gatt_attr *attr, uint16_t value)
 {
-    ble_ctx.notify_enabled = (value == BT_GATT_CCC_NOTIFY);
+    ble_ctx.notify_enabled = (value & BT_GATT_CCC_NOTIFY);
     LOG_DBG("Notify: %d", ble_ctx.notify_enabled);
 
     /* Update transport when connection and notification are both ready */
@@ -275,13 +274,13 @@ static void resp_ccc_cfg_changed(const struct bt_gatt_attr *attr, uint16_t value
 
 static void file_data_ccc_cfg_changed(const struct bt_gatt_attr *attr, uint16_t value)
 {
-    ble_ctx.file_data_notify_enabled = (value == BT_GATT_CCC_NOTIFY);
+    ble_ctx.file_data_notify_enabled = (value & BT_GATT_CCC_NOTIFY);
     LOG_DBG("File data notify: %d", ble_ctx.file_data_notify_enabled);
 }
 
 static void audio_vis_ccc_cfg_changed(const struct bt_gatt_attr *attr, uint16_t value)
 {
-    ble_ctx.audio_vis_notify_enabled = (value == BT_GATT_CCC_NOTIFY);
+    ble_ctx.audio_vis_notify_enabled = (value & BT_GATT_CCC_NOTIFY);
     LOG_DBG("Audio vis notify: %d", ble_ctx.audio_vis_notify_enabled);
 }
 
