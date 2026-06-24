@@ -656,7 +656,7 @@ void audio_recording_thread(void *p1, void *p2, void *p3)
                 mic_power_off();
 
                 is_paused = true;
-                LOG_INF("Recording paused at %llu sec", stats.recording_time_ms / 1000);
+                LOG_INF("Recording paused at %u sec", (unsigned int)(stats.recording_time_ms / 1000));
 
                 /* Wait for resume signal */
                 while (is_paused && !stop_requested) {

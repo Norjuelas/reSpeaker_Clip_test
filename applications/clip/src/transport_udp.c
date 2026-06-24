@@ -382,7 +382,7 @@ static bool udp_is_connected(void)
     if (udp_ready) {
         int64_t elapsed = k_uptime_get() - last_activity_time;
         if (elapsed > CONFIG_CLIP_UDP_CONNECTION_TIMEOUT_MS) {
-            LOG_WRN("Connection timeout (%lld ms)", elapsed);
+            LOG_WRN("Connection timeout (%u ms)", (unsigned int)elapsed);
             udp_ready = false;
             udp_transport.ready = false;
         }

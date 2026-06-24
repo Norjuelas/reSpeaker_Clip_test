@@ -10,6 +10,7 @@
 #include <zephyr/logging/log_ctrl.h>
 #include <zephyr/sys/reboot.h>
 #include <zephyr/drivers/regulator.h>
+#include <zephyr/settings/settings.h>
 #include <zephyr/retention/bootmode.h>
 #include <time.h>
 #include <string.h>
@@ -619,8 +620,11 @@ static int cmd_pair_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
             return create_json_response(false, "Use AT+PAIR=reset", NULL, response, len);
         }
 
-        /* Send response before clearing bonds (which drops BLE link) */
+        /* Clear bonds and persist before reboot. ble_clear_bonds may
+         * drop the BLE link, so send the response first. */
         int ret = create_json_response(true, NULL, "{\"rebooting\":true}", response, len);
+        ble_clear_bonds();
+        settings_save();
         storage_format_card();
         schedule_reboot(500, true);
         return ret;
@@ -637,53 +641,6 @@ static int cmd_pair_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
             return create_json_response(true, "\"unpaired\"", NULL, response, len);
         }
     }
-}
-
-/* PURGEABLE Command Handler - List sessions ready for cleanup */
-static int cmd_purgeable_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
-{
-    if (storage_ensure_mounted() != 0) {
-        return create_json_response(false, "SD card not mounted", NULL, response, len);
-    }
-
-    static struct storage_session_info sessions[100];
-    int count = storage_list_sessions(sessions, 100);
-    if (count < 0) {
-        return create_json_response(false, "Failed to list sessions", NULL, response, len);
-    }
-
-    /* Find fully synced sessions (synced up to last file) */
-    int purgeable_count = 0;
-    uint64_t total_bytes = 0;
-    char ids_buf[1024];
-    int ids_len = 0;
-
-    ids_buf[0] = '\0';
-
-    for (int i = 0; i < count; i++) {
-        if (sessions[i].file_count > 0 &&
-            sessions[i].synced_files == sessions[i].file_count) {
-            total_bytes += sessions[i].total_bytes;
-            purgeable_count++;
-
-            if (ids_len > 0 && ids_len < (int)sizeof(ids_buf) - 30) {
-                ids_len += snprintf(ids_buf + ids_len, sizeof(ids_buf) - ids_len, ",");
-            }
-            if (ids_len < (int)sizeof(ids_buf) - 30) {
-                ids_len += snprintf(ids_buf + ids_len, sizeof(ids_buf) - ids_len,
-                                    "\"%s\"", sessions[i].session_id);
-            }
-        }
-    }
-
-    char data[1152];
-    snprintf(data, sizeof(data),
-             "\"count\":%d,\"bytes\":%llu,\"sessions\":[%s]",
-             purgeable_count,
-             (unsigned long long)total_bytes,
-             ids_buf);
-
-    return create_json_response(true, NULL, data, response, len);
 }
 
 /* Per-request session ID buffer for LIST commands (no persistent cache) */
@@ -1435,47 +1392,6 @@ static int cmd_delete_handler(struct at_cmd_ctx *ctx, char *response, size_t len
     return create_json_response(true, NULL, "{\"deleted\":true}", response, len);
 }
 
-/* PURGE Command Handler - Delete all sessions */
-static int cmd_purge_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
-{
-    /*
-     * AT+PURGE - Delete all recording sessions
-     *
-     * Response: {"ok":true,"data":{"purged":X}}
-     * Error: {"ok":false,"error":"..."}
-     */
-
-    /* Check if SD card is mounted */
-    if (storage_ensure_mounted() != 0) {
-        return create_json_response(false, "SD card not mounted", NULL, response, len);
-    }
-
-    /* Get all sessions */
-    static struct storage_session_info sessions[50];
-    int count = storage_list_sessions(sessions, 50);
-    if (count < 0) {
-        return create_json_response(false, "Failed to list sessions", NULL, response, len);
-    }
-
-    /* Delete each session */
-    int deleted = 0;
-    int failed = 0;
-    for (int i = 0; i < count; i++) {
-        int err = storage_delete_session(sessions[i].session_id);
-        if (err == 0) {
-            deleted++;
-        } else {
-            failed++;
-            LOG_WRN("Failed to delete session %s: %d", sessions[i].session_id, err);
-        }
-    }
-
-    char data[64];
-    snprintf(data, sizeof(data), "{\"purged\":%d,\"failed\":%d}", deleted, failed);
-
-    return create_json_response(true, NULL, data, response, len);
-}
-
 /* NAME Command Handler - Set/Get device name */
 static int cmd_name_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
 {
@@ -1913,25 +1829,6 @@ int at_commands_register(void)
     };
     err = at_server_register_cmd(&delete_cmd);
     if (err) return err;
-
-    /* PURGE - Delete all sessions */
-    static const struct at_command purge_cmd = {
-        .name = "PURGE",
-        .flags = AT_CMD_EXEC,
-        .handler = cmd_purge_handler,
-    };
-    err = at_server_register_cmd(&purge_cmd);
-    if (err) return err;
-
-    /* PURGEABLE - List sessions ready for cleanup */
-    static const struct at_command purgeable_cmd = {
-        .name = "PURGEABLE",
-        .flags = AT_CMD_EXEC,
-        .handler = cmd_purgeable_handler,
-    };
-    err = at_server_register_cmd(&purgeable_cmd);
-    if (err) return err;
-
     /* FORMAT - Format SD card */
     static const struct at_command format_cmd = {
         .name = "FORMAT",

@@ -1090,7 +1090,7 @@ static int transfer_send_chunk(void)
 
     if (bytes_read == 0) {
         /* End of file */
-        LOG_DBG("End of file: %llu bytes", current_transfer.bytes_transferred);
+        LOG_DBG("End of file: %u bytes", (unsigned int)current_transfer.bytes_transferred);
         return -EOF;
     }
 
