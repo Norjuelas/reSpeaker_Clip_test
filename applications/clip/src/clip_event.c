@@ -270,7 +270,7 @@ static struct mgmt_callback mcumgr_dfu_cb_stopped;
 /* SD Idle Power-Off (Work Queue)                                             */
 /* ========================================================================== */
 
-#define SD_IDLE_POWEROFF_DELAY_MS  K_SECONDS(45)
+#define SD_IDLE_POWEROFF_DELAY_MS  K_MSEC(CONFIG_CLIP_SD_IDLE_DELAY_MS)
 static struct k_work_delayable sd_idle_poweroff_work;
 
 /*

@@ -99,6 +99,14 @@ config CLIP_DISPLAY_PAIRING_TIMEOUT_MS
 	int "Pairing guide display timeout (ms)"
 	default 60000
 
+config CLIP_SD_IDLE_DELAY_MS
+	int "SD card idle power-off delay (ms)"
+	default 45000
+
+config CLIP_ADV_FAST_TIMEOUT_MS
+	int "BLE fast advertising timeout before dropping to slow (ms)"
+	default 30000
+
 config CLIP_WIFI_AP_CHANNEL
 	int "Default WiFi AP channel (5GHz: 36-165)"
 	default 36

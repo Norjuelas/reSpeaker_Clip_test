@@ -86,7 +86,7 @@ static const struct bt_le_adv_param adv_param_slow =
                          BT_GAP_ADV_FAST_INT_MIN_2,
                          BT_GAP_ADV_FAST_INT_MAX_2, NULL);
 
-#define ADV_FAST_TIMEOUT_MS 30000   /* Switch to slow advertising after 30s */
+#define ADV_FAST_TIMEOUT_MS  CONFIG_CLIP_ADV_FAST_TIMEOUT_MS   /* Switch to slow advertising after N ms */
 #define BLE_INACTIVITY_TIMEOUT_MS (5 * 60 * 1000)  /* 5 minutes */
 
 static struct k_work_delayable adv_timeout_work;

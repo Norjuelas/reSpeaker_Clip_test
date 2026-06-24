@@ -51,7 +51,7 @@
 	status = "okay";
 };
 &npm1300_gpio {
-	status = "disabled";
+	status = "okay";  /* GPIO3 controls LDO2 / SD card power */
 };
 &npm1300_buck2 {
 	status = "disabled";
@@ -101,7 +101,7 @@
 	status = "disabled";
 };
 
-/* External SPI flash power — needed for erase-settings to work */
+/* External SPI flash power — needed for erase-settings */
 &flash_vdd {
 	status = "okay";
 };

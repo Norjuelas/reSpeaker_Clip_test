@@ -21,7 +21,7 @@ new file mode 100644
 index 00000000..00000000
 --- /dev/null
 +++ b/boot/zephyr/boot_serial_extension_clip.c
-@@ -0,0 +1,108 @@
+@@ -0,0 +1,128 @@
 +/*
 + * Copyright (c) 2024 Clip
 + *
@@ -34,6 +34,7 @@ index 00000000..00000000
 +
 +#include <zephyr/kernel.h>
 +#include <zephyr/drivers/flash.h>
++#include <zephyr/drivers/regulator.h>
 +#include <zephyr/storage/disk_access.h>
 +
 +#include "bootutil/bootutil_log.h"
@@ -59,19 +60,38 @@ index 00000000..00000000
 +
 +static int bs_custom_erase_sd_card(zcbor_state_t *cs)
 +{
++	const struct device *ldo2 = DEVICE_DT_GET(DT_NODELABEL(npm1300_ldo2));
 +	const char *disk = "SD";
 +	uint8_t zero[512] = {0};
 +	int rc;
 +
++	/* Enable LDO2 on-demand: turn on SD power, erase, turn off.
++	 * regulator-boot-on is NOT used in the overlay because the
++	 * app's regulator init reads the physical LDO2 state from the
++	 * PMIC (get_enabled) and seeds its refcount from it — a
++	 * boot-on from the bootloader would leak a permanent +1 into
++	 * the app, preventing the idle-power-gating from ever turning
++	 * LDO2 off. */
++	if (device_is_ready(ldo2)) {
++		regulator_enable(ldo2);
++	}
++
 +	rc = disk_access_init(disk);
 +	if (rc != 0) {
 +		BOOT_LOG_ERR("SD init failed: %d", rc);
-+		return MGMT_ERR_EUNKNOWN;
++		goto out;
 +	}
 +
 +	rc = disk_access_write(disk, zero, 0, 1);
 +	if (rc != 0) {
 +		BOOT_LOG_ERR("SD erase failed: %d", rc);
++	}
++
++out:
++	if (device_is_ready(ldo2)) {
++		regulator_disable(ldo2);
++	}
++	if (rc != 0) {
 +		return MGMT_ERR_EUNKNOWN;
 +	}
 +
