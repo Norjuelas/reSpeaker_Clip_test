@@ -209,7 +209,11 @@
 		};
 		npm1300_charger: charger {
 			compatible = "nordic,npm1300-charger";
-			term-microvolt = <4200000>;
+			/* Charge termination raised 4.20→4.25V so the fuel gauge
+			 * reaches ~100% instead of plateauing at ~99%. The cell
+			 * (240/HSZ 362123) is a 4.20V-rated Li-Po; 4.25V is a
+			 * mild overcharge. Tradeoff: reduced cycle life. */
+			term-microvolt = <4250000>;
 			term-warm-microvolt = <4100000>;
 			current-microamp = <220000>;
 			dischg-limit-microamp = <1000000>;

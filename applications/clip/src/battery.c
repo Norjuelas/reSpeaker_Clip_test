@@ -245,6 +245,11 @@ static void read_and_update(void)
 		charging = charger_connected && (!charger_complete || !battery_full);
 	}
 
+	/* When charge complete, force 100% — the fuel-gauge plateaus at ~99% */
+	if (charger_complete && vbus_connected) {
+		percent = 100;
+	}
+
 	/* Apply SoC smoothing: EMA + rate limiting to reduce display jumping */
 	{
 		float raw_soc = (float)percent;
@@ -255,6 +260,9 @@ static void read_and_update(void)
 			/* Low battery: bypass smoothing so fast discharge reaches the
 			 * shutdown threshold promptly instead of lagging into a hard
 			 * PMIC undervoltage cutoff. */
+			smoothed_soc = raw_soc;
+		} else if (raw_soc >= 99.5f && charger_complete) {
+			/* Charge complete: pin at 100% without smoothing lag. */
 			smoothed_soc = raw_soc;
 		} else {
 			float delta = raw_soc - smoothed_soc;
