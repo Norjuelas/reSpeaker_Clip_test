@@ -40,10 +40,13 @@ All responses use unified JSON format:
 ```json
 {
   "ok": true,
-  "data": { ... },
-  "error": null
+  "data": { ... }
 }
 ```
+
+> The `"data"` value is inserted raw by the response builder, so its shape is
+> command-specific (an object, a string, or omitted). Human-readable messages
+> (both informational and errors) always use a `"msg"` key, never `"error"`.
 
 **Success Response:**
 ```json
@@ -57,13 +60,17 @@ All responses use unified JSON format:
 ```json
 {
   "ok": false,
-  "error": "Error message"
+  "msg": "Error message"
 }
 ```
 
 ### 1.5 Error Handling
 
-All errors return JSON with `"ok": false` and an `"error"` field containing a descriptive message. Error codes are categorized by type (see Section 8).
+All errors return JSON with `"ok": false` and a `"msg"` field containing a
+descriptive message (e.g. `{"ok":false,"msg":"SD card not mounted"}`). There is
+**no numeric error code** — handlers return only the message string. A few
+commands also return an informational message on success via `"msg"` (e.g.
+`AT+FACTORY`, `AT+NAME` clear).
 
 ## 2. BLE GATT Service Definition
 
@@ -179,12 +186,11 @@ Execute an operation or retrieve status:
 - `AT+MARKS` - Get session bookmarks
 - `AT+DOWNLOAD` - Download file
 - `AT+DELETE` - Delete session
-- `AT+PURGEABLE` - Query cleanable sessions
-- `AT+PURGE` - Delete transferred sessions
 - `AT+FORMAT` - Format SD card
 - `AT+POWEROFF` - Power off device
 - `AT+FACTORY` - Factory reset
 - `AT+REBOOT` - Reboot device
+- `AT+DFU` - Reboot into MCUboot DFU/recovery mode
 - `AT+WIFI` - Start WiFi AP (equivalent to `AT+WIFI=on`)
 - `AT+USB` - Enable USB CDC+MSC
 
@@ -320,7 +326,8 @@ AT+TIME?
 **Response (Set):**
 ```json
 {
-  "ok": true
+  "ok": true,
+  "data": { "time": 1706918430 }
 }
 ```
 
@@ -328,18 +335,22 @@ AT+TIME?
 ```json
 {
   "ok": true,
-  "value": "2024-02-03T10:00:30Z"
+  "data": { "time": "2024-02-03T10:00:30Z" }
 }
 ```
 
+> Set echoes the Unix timestamp back in `data.time` (integer); Get returns an
+> ISO-8601 string in `data.time`. If time was never set, Get returns
+> `{"ok":false,"msg":"Time not set (use AT+TIME=<timestamp>)"}`.
+
 **Error Cases:**
-- `1001`: Invalid timestamp format
+- `{"ok":false,"msg":"Missing timestamp"}` / `"Invalid timestamp"` / `"Invalid time"`
 
 ---
 
 ##### AT+VERSION - Version Information
 
-Get firmware, hardware, and SDK versions.
+Get firmware version.
 
 **Request:**
 ```
@@ -350,18 +361,12 @@ AT+VERSION
 ```json
 {
   "ok": true,
-  "firmware": "0.0.1",
-  "hardware": "1.0",
-  "sdk": "3.2.1",
-  "build": "2024-02-03"
+  "firmware": "0.0.6"
 }
 ```
 
 **Fields:**
-- `firmware`: Firmware version string
-- `hardware`: Hardware revision
-- `sdk`: Zephyr/Nordic SDK version
-- `build`: Build date
+- `firmware`: Firmware version string (the only field returned)
 
 ---
 
@@ -384,17 +389,16 @@ AT+START=normal
 {
   "ok": true,
   "data": {
-    "session": "20240203100000",
-    "mode": "normal"
+    "session": "20240203100000"
   }
 }
 ```
 
+> `data` contains only the `session` id (an empty object if the id isn't ready yet).
+
 **Error Cases:**
-- `4001`: Already recording
-- `4002`: SD card not present
-- `4003`: SD card full
-- `4004`: Battery too low (< 10%)
+- `{"ok":false,"msg":"Already recording or invalid state"}` / `"Audio module busy"` / `"Failed to start recording"`
+- `"WiFi active, cannot record"` / `"USB MSC active, disable USB first"` (recording blocked while WiFi/USB active)
 
 **State Change:** IDLE → RECORDING
 
@@ -422,7 +426,8 @@ AT+STOP
   "data": {
     "session": "20240203100000",
     "duration": 600,
-    "file_count": 5,
+    "frames": 1440000,
+    "file_count": 1,
     "total_size": 3600000
   }
 }
@@ -431,11 +436,12 @@ AT+STOP
 **Fields:**
 - `session`: Session ID
 - `duration`: Recording duration in seconds
-- `file_count`: Number of Opus files created
+- `frames`: Total audio frames captured
+- `file_count`: Number of files in the session (1 for a fresh stop)
 - `total_size`: Total bytes of all files
 
 **Error Cases:**
-- `4005`: Not currently recording
+- `{"ok":false,"msg":"No active session"}` / `"Not recording"`
 
 **State Change:** RECORDING → IDLE
 
@@ -449,14 +455,9 @@ AT+STOP
 
 ##### AT+MARK - Add Bookmark
 
-Add a bookmark at current recording position.
+Add a bookmark at the current recording position.
 
-**Request (with note):**
-```
-AT+MARK=Important discussion
-```
-
-**Request (without note):**
+**Request:**
 ```
 AT+MARK
 ```
@@ -466,18 +467,20 @@ AT+MARK
 {
   "ok": true,
   "data": {
-    "offset": 123,
-    "note": "Important discussion"
+    "offset": 123
   }
 }
 ```
 
 **Fields:**
 - `offset`: Seconds from session start
-- `note`: Optional note text
+
+> A note argument (`AT+MARK=<text>`) is accepted by the parser but is **not
+> stored** — the bookmark records only the offset. Bookmarks are stored
+> per-session in `marks.bin`.
 
 **Error Cases:**
-- `4006`: Not recording (can only bookmark during recording)
+- `{"ok":false,"msg":"No active session"}` / `"Not recording"` (can only bookmark while recording)
 
 **Side Effects:**
 - Writes bookmark to marks.bin
@@ -497,7 +500,7 @@ List all sessions with pagination, get session details, or list files with pagin
 AT+LIST
 ```
 
-**Note:** Sessions are sorted newest-first (descending by session ID, which is a timestamp). A shared cache is used for efficient pagination — DELETE and PURGE operations invalidate the cache.
+**Note:** Sessions are sorted newest-first (descending by session ID, which is a timestamp). A shared cache is used for efficient pagination — DELETE operations invalidate the cache.
 
 **Request (Paginated Sessions):**
 ```
@@ -620,21 +623,18 @@ AT+DELETE=20240203100000
 ```json
 {
   "ok": true,
-  "deleted": ["0001.opus", "0002.opus", "0003.opus"],
-  "freed": 2160000
+  "data": { "deleted": true }
 }
 ```
 
 **Fields:**
-- `deleted`: List of deleted files
-- `freed`: Bytes freed from storage
+- `deleted`: `true` once the session directory has been removed
 
 **Error Cases:**
-- `3001`: Session not found
-- `3003`: File system error
+- `{"ok":false,"msg":"Session not found"}` / `"Invalid session ID"` / `"Cannot delete current recording session"`
 
 **Side Effects:**
-- Deletes session directory
+- Deletes the session directory and all its files
 - Updates session count in GSTAT
 
 ---
@@ -653,8 +653,8 @@ AT+MARKS=20240203100000
 {
   "ok": true,
   "data": {
-    "total": 50,
-    "marks_file": "marks.bin"
+    "session": "20240203100000",
+    "total": 50
   }
 }
 ```
@@ -673,8 +673,8 @@ AT+MARKS=20240203100000?1&10
     "page": 1,
     "per_page": 10,
     "bookmarks": [
-      {"offset": 30, "note": "Important point"},
-      {"offset": 60, "note": ""}
+      {"offset": 30},
+      {"offset": 60}
     ]
   }
 }
@@ -686,14 +686,11 @@ AT+MARKS=20240203100000?2&10
 ```
 
 **Fields:**
+- `session`: Session ID (summary response)
 - `total`: Total number of bookmarks
 - `page`: Current page number (1-based)
 - `per_page`: Items per page (default 10, max 50)
-- `bookmarks`: Array of bookmark entries
-- `marks_file`: Filename for full bookmark data (summary only)
-  - Per bookmark:
-    - `offset`: Seconds from session start
-    - `note`: Optional note text (omitted if empty)
+- `bookmarks`: Array of bookmark entries; each entry has only `offset` (seconds from session start). Notes are not stored.
 
 **Pagination Logic:**
 - Without `?`: Returns summary with total count
@@ -712,21 +709,16 @@ AT+MARKS=20240203100000?2&10
 
 ##### AT+DOWNLOAD - Download File
 
-Start file transfer from device to app. Supports three modes:
+Start file transfer from device to app. Two modes (the parser only splits on `:`):
 
 **Request (Entire Session):**
 ```
 AT+DOWNLOAD=<session_id>
 ```
 
-**Request (Single File):**
+**Request (Single File / Resume):**
 ```
-AT+DOWNLOAD=<session_id>/<filename>
-```
-
-**Request (Resume from File):**
-```
-AT+DOWNLOAD=<session_id>:<start_file>
+AT+DOWNLOAD=<session_id>:<filename>
 ```
 
 **Examples:**
@@ -734,13 +726,12 @@ AT+DOWNLOAD=<session_id>:<start_file>
 # Download all files from session
 AT+DOWNLOAD=20250225143000
 
-# Download single file
-AT+DOWNLOAD=20250225143000/015.opus
-
-# Resume from specific file (skips files before start_file)
-# Use format: 4-digit number with leading zeros + .opus extension
+# Download / resume from a specific file (skips files before it)
 AT+DOWNLOAD=20250225143000:0016.opus
 ```
+
+> Only the `:` separator is parsed. A `/` separator (`session/file`) is **not**
+> supported — use `:` for single-file / resume mode.
 
 **Resume Logic:**
 1. Client queries session details: `AT+LIST=<session_id>`
@@ -749,10 +740,19 @@ AT+DOWNLOAD=20250225143000:0016.opus
 4. Client sends: `AT+DOWNLOAD=<session_id>:0016.opus`
 5. Device transfers from 0016.opus onwards
 
-**Response (Start):**
+**Response (Start, whole session):**
 ```json
 {
-  "ok": true
+  "ok": true,
+  "data": { "state": "transmitting", "session": "20250225143000" }
+}
+```
+
+**Response (Start, single file / resume):**
+```json
+{
+  "ok": true,
+  "data": { "state": "transmitting", "session": "20250225143000", "file": "0016.opus", "total": 30, "bytes": 0 }
 }
 ```
 
@@ -777,28 +777,8 @@ After the start response, the device sends binary frames on the File Data charac
 5. Client sends `AT+DOWNLOAD=session:last_received_file`
 6. Transfer resumes from next file
 
-**Example Session:**
-```
-# Initial transfer start
-AT+DOWNLOAD=20250225143000
-
-# ... transfer progresses ...
-
-# [BLE disconnects - file 015.opus was last sent]
-
-# [Client reconnects]
-
-# Resume from next file (016.opus)
-AT+DOWNLOAD=20250225143000:016.opus
-
-# Transfer continues from 016.opus onwards
-```
-
 **Error Cases:**
-- `5001`: Session not found
-- `5002`: Transfer already in progress
-- `5003`: SD card not mounted
-- `5004`: Invalid file format
+- `{"ok":false,"msg":"Transfer already in progress"}` / `"Session or file not found"`
 
 **State Change:** IDLE → TRANSMITTING
 
@@ -820,7 +800,8 @@ AT+PAUSE
 **Response:**
 ```json
 {
-  "ok": true
+  "ok": true,
+  "data": { "paused": true }
 }
 ```
 
@@ -833,7 +814,7 @@ AT+PAUSE
 - Recording can be resumed with `AT+RESUME`
 
 **Error Cases:**
-- `5004`: Not recording
+- `{"ok":false,"msg":"Not recording"}` / `"Failed to pause recording"`
 
 ---
 
@@ -849,7 +830,8 @@ AT+RESUME
 **Response:**
 ```json
 {
-  "ok": true
+  "ok": true,
+  "data": { "resumed": true }
 }
 ```
 
@@ -861,13 +843,13 @@ AT+RESUME
 - Continues in same session
 
 **Error Cases:**
-- `5005`: Not paused
+- `{"ok":false,"msg":"Not paused"}` / `"Failed to resume recording"`
 
 ---
 
 ##### AT+CANCEL - Cancel Transfer
 
-Cancel ongoing or paused transfer.
+Cancel an ongoing file transfer.
 
 **Request:**
 ```
@@ -878,70 +860,23 @@ AT+CANCEL
 ```json
 {
   "ok": true,
-  "cancelled": true
+  "data": { "canceled": true }
 }
 ```
 
-**State Change:** TRANSMITTING/PAUSED → IDLE
+**State Change:** TRANSMITTING → IDLE
 
 **Side Effects:**
 - Closes file
 - Discards progress
 - Does NOT create .transferred marker
 
+**Error Cases:**
+- `{"ok":false,"msg":"No active transfer"}` / `"Failed to cancel transfer"`
+
 ---
 
 #### 3.3.6 Storage Management
-
-##### AT+PURGEABLE - Query Cleanable Space
-
-Get information about transferred sessions that can be deleted.
-
-**Request:**
-```
-AT+PURGEABLE
-```
-
-**Response:**
-```json
-{
-  "ok": true,
-  "count": 3,
-  "bytes": 2160000,
-  "sessions": ["20240201100000", "20240201120000", "20240201140000"]
-}
-```
-
-**Fields:**
-- `count`: Number of transferred sessions
-- `bytes`: Total bytes that would be freed
-- `sessions`: List of session IDs with .transferred marker
-
----
-
-##### AT+PURGE - Delete Transferred Sessions
-
-Delete all sessions that have been transferred (have .transferred marker).
-
-**Request:**
-```
-AT+PURGE
-```
-
-**Response:**
-```json
-{
-  "ok": true,
-  "deleted": ["20240201100000", "20240201120000"],
-  "freed": 1440000
-}
-```
-
-**Side Effects:**
-- Deletes all session directories with .transferred marker
-- Updates session count
-
----
 
 ##### AT+AUTODEL - Auto-Delete Policy
 
@@ -957,13 +892,15 @@ AT+AUTODEL=7
 AT+AUTODEL?
 ```
 
-**Response:**
+**Response (Set/Get):**
 ```json
 {
   "ok": true,
-  "value": "7"
+  "data": { "autodel": 7 }
 }
 ```
+
+> `autodel` is an integer (days) or the string `"off"`. Set echoes the applied value.
 
 **Policy Values:**
 | Value | Description |
@@ -973,7 +910,7 @@ AT+AUTODEL?
 | `1-30` | Delete N days after transfer |
 
 **Error Cases:**
-- `6002`: Invalid policy value
+- `{"ok":false,"msg":"Auto-delete must be 0-30 days or off"}` / `"Missing autodel value"`
 
 ---
 
@@ -993,11 +930,11 @@ AT+MODE=enhanced
 AT+MODE?
 ```
 
-**Response:**
+**Response (Set/Get):**
 ```json
 {
   "ok": true,
-  "value": "enhanced"
+  "data": { "mode": "enhanced" }
 }
 ```
 
@@ -1029,7 +966,7 @@ AT+BRIGHTNESS?
 ```json
 {
   "ok": true,
-  "data": {"value": 200}
+  "data": { "brightness": 200 }
 }
 ```
 
@@ -1037,12 +974,15 @@ AT+BRIGHTNESS?
 ```json
 {
   "ok": true,
-  "data": {"value": 128}
+  "data": { "brightness": 128 }
 }
 ```
 
 **Parameters:**
-- `value`: Integer 0–255 (0 = dimmest, 255 = maximum brightness, default = 128)
+- `brightness`: Integer 0–255 (0 = dimmest, 255 = maximum brightness, default = 128)
+
+**Error Cases:**
+- `{"ok":false,"msg":"Brightness must be 0-255"}` / `"Invalid brightness"` / `"Missing brightness value"`
 
 ---
 
@@ -1162,7 +1102,8 @@ AT+WIFI?
 **Response (Stop):**
 ```json
 {
-  "ok": true
+  "ok": true,
+  "data": { "wifi": "off" }
 }
 ```
 
@@ -1362,20 +1303,31 @@ AT+PAIR?
 AT+PAIR=reset
 ```
 
-**Response (Query):**
+**Response (Query, paired):**
 ```json
 {
   "ok": true,
-  "value": "paired",
-  "addr": "AA:BB:CC:DD:EE:FF"
+  "msg": "\"paired\",\"addr\":\"AA:BB:CC:DD:EE:FF\""
 }
 ```
+
+**Response (Query, unpaired):**
+```json
+{
+  "ok": true,
+  "msg": "\"unpaired\""
+}
+```
+
+> Note: unlike other query commands, `AT+PAIR?` returns its payload via the
+> `"msg"` field (the status word and, when bonded, the peer address are embedded
+> as a JSON-like string fragment inside `msg`), not under `"data"`.
 
 **Response (Reset):**
 ```json
 {
   "ok": true,
-  "rebooting": true
+  "data": { "rebooting": true }
 }
 ```
 
@@ -1384,9 +1336,15 @@ AT+PAIR=reset
 - "unpaired": Not bonded
 
 **Side Effects of Reset:**
-- Clears bond information
-- Reboots device
+- Clears BLE bond information (`ble_clear_bonds`) and persists the deletion
+  (`settings_save`) so it survives the reboot
+- **Formats the SD card** — destroys all recordings (privacy wipe on unpair)
+- Reboots the device after ~500 ms
 - Requires re-pairing
+
+> The bond clear + settings persist + SD format all run synchronously before the
+> reboot, so the device is guaranteed to come back unbonded with a clean SD card.
+
 
 ---
 
@@ -1403,7 +1361,7 @@ AT+FACTORY=confirm
 ```json
 {
   "ok": true,
-  "rebooting": true
+  "msg": "Factory reset complete, rebooting..."
 }
 ```
 
@@ -1412,6 +1370,9 @@ AT+FACTORY=confirm
 - Clears BLE pairing
 - Deletes ALL recordings from SD card
 - Reboots device
+
+**Error Cases:**
+- `{"ok":false,"msg":"Add 'confirm' or 'yes' to proceed"}` / `"Factory reset failed"`
 
 **Warning:** Requires "confirm" parameter to prevent accidental execution.
 
@@ -1430,7 +1391,7 @@ AT+REBOOT
 ```json
 {
   "ok": true,
-  "rebooting": true
+  "data": { "reboot": "restarting" }
 }
 ```
 
@@ -1438,6 +1399,73 @@ AT+REBOOT
 - Terminates current recording (if any)
 - Stops file transfer (if any)
 - Reboots device
+
+---
+
+##### AT+DFU - Enter DFU/Recovery Mode
+
+Set the boot-mode retention register and reboot into MCUboot serial recovery
+(for USB/BLE firmware upgrade).
+
+**Request:**
+```
+AT+DFU
+```
+
+**Response:**
+```json
+{
+  "ok": true,
+  "data": { "dfu": "rebooting" }
+}
+```
+
+**Error Cases:**
+- `{"ok":false,"msg":"Failed to set boot mode"}`
+
+**Side Effects:**
+- Writes `BOOT_MODE_TYPE_BOOTLOADER` to the retention register
+- Reboots into MCUboot serial recovery (~500 ms after the response)
+
+---
+
+##### AT+WIFICFG - WiFi Channel / Regulatory Domain
+
+Configure the WiFi AP channel and 2-letter regulatory domain (applied on the
+next WiFi start). 5 GHz channels only (36–165).
+
+**Request (Set):**
+```
+AT+WIFICFG=36:US
+```
+
+**Request (Get):**
+```
+AT+WIFICFG?
+```
+
+**Response (Set):**
+```json
+{
+  "ok": true,
+  "msg": "Saved (apply on next WiFi start)",
+  "data": { "channel": 36, "reg_domain": "US" }
+}
+```
+
+> Set is the only command that returns both a `"msg"` (informational) and a
+> `"data"` echo.
+
+**Response (Get):**
+```json
+{
+  "ok": true,
+  "data": { "channel": 36, "reg_domain": "US" }
+}
+```
+
+**Error Cases:**
+- `{"ok":false,"msg":"Missing argument (format: channel:CC)"}` / `"Invalid format (use: channel:CC, e.g. 36:US)"` / `"Channel must be 36-165 (5GHz)"` / `"Reg domain must be 2 uppercase letters"`
 
 ---
 
@@ -1895,15 +1923,16 @@ JSON format exported after sync for frontend visualization.
 **Format:**
 ```json
 [
-  {"offset": 30, "note": "Important point"},
+  {"offset": 30},
   {"offset": 60},
-  {"offset": 90, "note": "End"}
+  {"offset": 90}
 ]
 ```
 
 **Fields per bookmark:**
 - `offset`: Seconds from session start (for positioning in merged audio)
-- `note`: Optional note text (omitted if empty)
+
+> Bookmarks store only the offset — there is no note text.
 
 **Usage:**
 - Generated by sync tools (sync.py, record.py)
@@ -1932,7 +1961,6 @@ touch /SD:/REC/20240203100000/.transferred
 
 **Purpose:**
 - Marks session as successfully transferred
-- Used by AT+PURGEABLE to identify deletable sessions
 - Used by auto-delete policy
 
 ## 7. Notifications and Events
@@ -1996,42 +2024,25 @@ Sent when a bookmark is added during recording.
 - `session`: Session ID
 - `mark_count`: Total number of bookmarks in the session after this mark
 
-#### 7.1.3 Battery Low Warning
+#### 7.1.3 Connection / USB / Storage Events
 
+Other state-change events use the generic two-field form
+`{"event":"<name>","status":"<status>"}` (built by `ble_notify_event`):
+
+| `event` | `status` | Trigger |
+|---------|----------|---------|
+| `ble` | `connected` / `disconnected` | A central connects / disconnects |
+| `usb` | `on` / `off` | USB CDC enabled / disabled (cable, 10-min auto-off, or `AT+USB`) |
+| `storage` | `full` | SD card crosses the storage-full threshold; recording is refused |
+
+Example:
 ```json
-{
-  "ok": true,
-  "event": "battery_low",
-  "level": 10
-}
+{"event":"usb","status":"on"}
 ```
 
-**Trigger:** Battery falls below 10%
-
-#### 7.1.4 Storage Low Warning
-
-```json
-{
-  "ok": true,
-  "event": "storage_low",
-  "free_mb": 100
-}
-```
-
-**Trigger:** Free space < 100MB
-
-#### 7.1.5 Error Notification
-
-```json
-{
-  "ok": false,
-  "event": "error",
-  "code": 3003,
-  "error": "SD card write error"
-}
-```
-
-**Trigger:** Any error condition
+> Distinguish notifications from AT responses by the presence of the `"event"`
+> field. There is no generic `battery_low` / `storage_low` / `error` push
+> notification; low battery is shown on the OLED only.
 
 ### 7.2 Audio Visualization Data
 
@@ -2110,132 +2121,52 @@ USB disabled (manual or auto-disable):
 
 **Client handling:** When receiving a JSON message on the Response Send characteristic, check for the `"event"` key. If present, the message is an event notification rather than a command response.
 
-## 8. Error Codes
+## 8. Error Handling
 
 ### 8.1 Error Response Format
 
-All errors use consistent format:
+Every error is a JSON object with `"ok": false` and a human-readable `"msg"`
+string. **There are no numeric error codes** — handlers return only the message.
 
 ```json
 {
   "ok": false,
-  "error": "Human-readable error message"
+  "msg": "Human-readable error message"
 }
 ```
 
-Some errors include additional fields:
+### 8.2 Common Error Messages
 
-```json
-{
-  "ok": false,
-  "error": "Error message",
-  "code": 1001,
-  "detail": "Additional context"
-}
-```
+These message strings appear across commands (exact text from the handlers):
 
-### 8.2 Error Categories
+| Message | Typical cause |
+|---------|---------------|
+| `SD card not mounted` | SD not present / not mounted when a storage command runs |
+| `Failed to list sessions` | SD I/O error enumerating sessions |
+| `Session not found` | Unknown session id |
+| `Cannot delete current recording session` | `AT+DELETE` on the active session |
+| `Invalid session ID` | Malformed id |
+| `Already recording or invalid state` | `AT+START` while recording |
+| `No active session` / `Not recording` | `AT+STOP`/`AT+MARK`/`AT+PAUSE` with nothing running |
+| `Not paused` | `AT+RESUME` while not paused |
+| `Transfer already in progress` | `AT+DOWNLOAD` while one is active |
+| `No active transfer` | `AT+CANCEL` with nothing transferring |
+| `Mode must be normal or enhanced` | Bad `AT+MODE` value |
+| `Brightness must be 0-255` | `AT+BRIGHTNESS` out of range |
+| `Auto-delete must be 0-30 days or off` | Bad `AT+AUTODEL` value |
+| `Log mode must be off, info or debug` | Bad `AT+LOG` value |
+| `Cannot format while recording` | `AT+FORMAT` while recording |
+| `Recording in progress, stop first` | `AT+USB`/`AT+WIFI` blocked by active recording |
+| `Cannot start WiFi in current state` | `AT+WIFI=on` while recording/transferring |
 
-| Category | Range | Description |
-|----------|-------|-------------|
-| Protocol Errors | 1000-1999 | Command syntax, parsing, validation |
-| System Errors | 2000-2999 | Device initialization, hardware |
-| Storage Errors | 3000-3999 | SD card, file system |
-| Recording Errors | 4000-4999 | Audio capture, encoding |
-| Transfer Errors | 5000-5999 | BLE transfer, file download |
-| Configuration Errors | 6000-6999 | Settings, parameters |
+### 8.3 Recovery
 
-### 8.3 Complete Error Code List
-
-#### Protocol Errors (1000-1999)
-
-| Code | Message | Description |
-|------|---------|-------------|
-| 1000 | "Invalid command" | Unknown AT command |
-| 1001 | "Invalid parameter format" | Parameter syntax error |
-| 1002 | "Missing required parameter" | Command requires parameter |
-| 1003 | "Command too long" | Exceeds buffer size |
-| 1004 | "JSON parse error" | Invalid JSON in parameter |
-| 1005 | "Invalid command type" | GET/SET/EXEC mismatch |
-
-#### System Errors (2000-2999)
-
-| Code | Message | Description |
-|------|---------|-------------|
-| 2000 | "Initialization failed" | Hardware init error |
-| 2001 | "Out of memory" | Memory allocation failed |
-| 2002 | "Not implemented" | Feature not available |
-| 2003 | "Busy" | Device busy with another operation |
-| 2004 | "Timeout" | Operation timed out |
-| 2005 | "Internal error" | Unexpected internal error |
-
-#### Storage Errors (3000-3999)
-
-| Code | Message | Description |
-|------|---------|-------------|
-| 3000 | "SD card not present" | No SD card detected |
-| 3001 | "Session not found" | Session directory doesn't exist |
-| 3002 | "File not found" | Requested file doesn't exist |
-| 3003 | "File system error" | FAT filesystem error |
-| 3004 | "SD card full" | No space remaining |
-| 3005 | "Write error" | Failed to write file |
-| 3006 | "Read error" | Failed to read file |
-| 3007 | "Directory creation failed" | Cannot create directory |
-| 3008 | "File corrupted" | File data invalid |
-
-#### Recording Errors (4000-4999)
-
-| Code | Message | Description |
-|------|---------|-------------|
-| 4000 | "Recording failed" | Generic recording error |
-| 4001 | "Already recording" | Cannot start (already recording) |
-| 4002 | "Not recording" | Cannot stop/mark (not recording) |
-| 4003 | "Microphone error" | PDM microphone failure |
-| 4004 | "Encoder error" | Opus encoding failed |
-| 4005 | "Buffer overflow" | Audio buffer overflow |
-| 4006 | "Buffer underrun" | Audio buffer underrun |
-| 4007 | "Recording stopped" | Recording stopped unexpectedly |
-
-#### Transfer Errors (5000-5999)
-
-| Code | Message | Description |
-|------|---------|-------------|
-| 5000 | "Transfer failed" | Generic transfer error |
-| 5001 | "File not found" | Requested file doesn't exist |
-| 5002 | "Transfer in progress" | Another transfer active |
-| 5003 | "Transfer canceled" | Transfer was canceled |
-| 5004 | "No transfer in progress" | Cannot pause/resume (not transferring) |
-| 5005 | "Nothing to resume" | Cannot resume (not paused) |
-| 5006 | "Connection lost" | BLE disconnected during transfer |
-| 5007 | "Transfer timeout" | Transfer took too long |
-
-#### Configuration Errors (6000-6999)
-
-| Code | Message | Description |
-|------|---------|-------------|
-| 6000 | "Invalid configuration" | Generic config error |
-| 6001 | "Invalid value" | Parameter out of range |
-| 6002 | "Invalid policy" | Auto-delete policy invalid |
-| 6003 | "Invalid mode" | Recording mode invalid |
-| 6005 | "Configuration locked" | Cannot change during operation |
-| 6006 | "Read-only" | Cannot modify read-only setting |
-
-### 8.4 Error Recovery Guidelines
-
-**Recoverable Errors (can retry):**
-- Connection timeout (2004): Retry command
-- Transfer timeout (5007): Retry transfer
-- Buffer overflow (4005): Skip frame, continue
-
-**Non-Recoverable Errors (user intervention):**
-- SD card not present (3000): Insert SD card
-- SD card full (3004): Delete files
-- Battery low (4006): Charge device
-
-**Fatal Errors (require reset):**
-- Internal error (2005): AT+REBOOT
-- File system error (3003): Reformat SD card
-- Encoder error (4004): Reboot device
+- **Storage errors** (`SD card not mounted`, list/format failures): reseat or
+  replace the SD card; the SD stack lazily remounts on next access.
+- **State errors** (`Already recording`, `Transfer already in progress`): stop
+  the active operation first (`AT+STOP` / `AT+CANCEL`).
+- **Persistent/hung state**: `AT+REBOOT`, or hold the button to power off into
+  ship mode and repower.
 
 ## 9. Timing and Constraints
 
@@ -2295,7 +2226,7 @@ To prevent BLE congestion:
 **Single Bond Policy**
 - Device stores bond for one central device
 - New pairing clears previous bond
-- AT+PAIR=reset clears bond manually
+- AT+PAIR=reset clears bond manually (also formats the SD card for privacy, then reboots)
 
 ## 11. Command Sequences
 
@@ -2374,8 +2305,6 @@ To prevent BLE congestion:
 | AT+PAUSE | EXEC | Pause recording | 3.3.5 |
 | AT+RESUME | EXEC | Resume recording | 3.3.5 |
 | AT+CANCEL | EXEC | Cancel transfer | 3.3.5 |
-| AT+PURGEABLE | EXEC | Query cleanable space | 3.3.6 |
-| AT+PURGE | EXEC | Delete transferred | 3.3.6 |
 | AT+AUTODEL | GET/SET | Auto-delete policy | 3.3.6 |
 | AT+FORMAT | EXEC | Format SD card | 3.3.7 |
 | AT+POWEROFF | EXEC | Power off device | 3.3.7 |

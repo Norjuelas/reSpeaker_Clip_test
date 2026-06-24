@@ -18,9 +18,10 @@ index 54e9e3e6..98200eea 100644
 
 diff --git a/boot/zephyr/boot_serial_extension_clip.c b/boot/zephyr/boot_serial_extension_clip.c
 new file mode 100644
+index 00000000..00000000
 --- /dev/null
 +++ b/boot/zephyr/boot_serial_extension_clip.c
-@@ -0,0 +1,104 @@
+@@ -0,0 +1,108 @@
 +/*
 + * Copyright (c) 2024 Clip
 + *
@@ -48,9 +49,13 @@ new file mode 100644
 +#define CLIP_GRP_CMD_ERASE_SD    0
 +#define CLIP_GRP_CMD_ERASE_LFS   1
 +
-+/* LFS partition on external flash (from pm_static) */
++/* LFS partition on external flash (from pm_static).
++ * Erase 2 blocks (128KB) — the LittleFS superblock metadata pair is
++ * pinned at {0,1} and never relocates. LittleFS block_size == SPI NOR
++ * erase page == 64KB, so the pair spans the first 128KB. A single
++ * 64KB erase kills block 0 but leaves block 1 for recovery. */
 +#define LFS_FLASH_OFFSET  0x130000
-+#define LFS_ERASE_SIZE    0x10000  /* Erase first 64KB block to destroy LFS metadata */
++#define LFS_ERASE_SIZE    0x20000  /* 2 x 64KB blocks = superblock pair */
 +
 +static int bs_custom_erase_sd_card(zcbor_state_t *cs)
 +{

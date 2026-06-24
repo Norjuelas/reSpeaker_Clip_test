@@ -57,8 +57,6 @@
 | AT+DELETE | SET | Delete session |
 | AT+MARKS | GET/SET | Get bookmarks |
 | AT+DOWNLOAD | SET | Download file/session |
-| AT+PURGEABLE | EXEC | Query cleanable sessions |
-| AT+PURGE | EXEC | Delete transferred sessions |
 | AT+AUTODEL | GET/SET | Auto-delete policy |
 | AT+FORMAT | EXEC | Format SD card |
 | AT+POWEROFF | EXEC | Power off (ship mode) |

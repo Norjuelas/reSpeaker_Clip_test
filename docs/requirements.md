@@ -181,11 +181,7 @@ ReSpeaker Clip is a portable Bluetooth recording device that provides high-quali
 
 **FR-2.4.2**: The system shall identify fully synced sessions (synced_files == file_count) for cleanup
 
-**FR-2.4.3**: The system shall provide AT+PURGEABLE command to query deletable sessions and total bytes
-
-**FR-2.4.4**: The system shall provide AT+PURGE command to delete all sessions
-
-**FR-2.4.5**: The system shall provide AT+DELETE=<session_id> command to delete a specific session
+**FR-2.4.3**: The system shall provide AT+DELETE=<session_id> command to delete a specific session
 
 ### 3.3 Transport Layer
 
@@ -276,8 +272,6 @@ ReSpeaker Clip is a portable Bluetooth recording device that provides high-quali
 | `AT+DOWNLOAD` | SET/EXEC | Start file transfer (session or session:file) |
 | `AT+CANCEL` | EXEC | Cancel active transfer |
 | `AT+DELETE` | SET | Delete a specific session |
-| `AT+PURGE` | EXEC | Delete all sessions |
-| `AT+PURGEABLE` | EXEC | List fully synced sessions eligible for cleanup |
 | `AT+FORMAT` | EXEC | Format SD card (delete all data) |
 | `AT+WIFI` | SET/GET/EXEC | Start/stop WiFi AP, query status |
 | `AT+USB` | SET/GET | Enable/disable USB CDC (default: off, auto-off on disconnect) |

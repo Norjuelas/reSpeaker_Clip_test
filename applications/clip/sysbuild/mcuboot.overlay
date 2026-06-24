@@ -100,3 +100,8 @@
 &rfsw_reg {
 	status = "disabled";
 };
+
+/* External SPI flash power — needed for erase-settings to work */
+&flash_vdd {
+	status = "okay";
+};

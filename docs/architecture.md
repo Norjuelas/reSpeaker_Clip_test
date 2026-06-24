@@ -276,7 +276,7 @@ struct at_command {
 | BRIGHTNESS | SET, QUERY | Set/get OLED brightness (0-255) |
 | POWEROFF | EXEC | Enter PMIC ship mode |
 | FACTORY | EXEC | Factory reset (config + format SD + reboot) |
-| PAIR | SET | Clear BLE bonds |
+| PAIR | SET | Clear BLE bonds + format SD (privacy) + reboot |
 | REBOOT | EXEC | Reboot device (optionally clear bonds) |
 | START | EXEC | Start recording |
 | STOP | EXEC | Stop recording |
@@ -585,11 +585,16 @@ Event notifications are JSON objects sent over the BLE GATT Response characteris
 
 **Purpose**: Battery monitoring via NPM1300 PMIC with nRF Fuel Gauge.
 
-**Fuel Gauge**: Uses `CONFIG_NRF_FUEL_GAUGE=y` with `CONFIG_NRF_FUEL_GAUGE_VARIANT_SECONDARY_CELL=y` for accurate State of Charge (SoC) estimation. SoC is smoothed over time to avoid sudden jumps — except below the reserve band, where smoothing is bypassed so a genuine low reading is acted on immediately.
+**Fuel Gauge**: Uses `CONFIG_NRF_FUEL_GAUGE=y` with `CONFIG_NRF_FUEL_GAUGE_VARIANT_SECONDARY_CELL=y` for accurate State of Charge (SoC) estimation. SoC is smoothed over time to avoid sudden jumps — except below 10%, where smoothing is bypassed so a genuine low reading is shown immediately rather than lagging toward a PMIC undervoltage cutoff.
 
-**Reporting**: Battery level (0-100%), charging status reported via AT+GSTAT and displayed on OLED status bar.
+**Reporting**: Battery level (0-100%), charging status reported via AT+GSTAT and displayed on OLED status bar. A low-battery warning (<15%, discharging) shows a UI event; there is **no** automatic low-battery shutdown (it was removed — unreliable SoC during PMIC I2C failures caused false shutdowns). Power-off is manual (`AT+POWEROFF` / button).
 
-**Over-Discharge Protection**: A reserve capacity and early low-battery threshold trigger a graceful shutdown (ship mode) before the cell is over-discharged; the critical-level check retries every poll (not only on a displayed-percent change) so it fires reliably.
+**Charging-Recovery Watchdog**: the NPM1300 aborts a trickle/precharge that fails to lift the cell within the ~10 min safety timer, latching the charger off. With VBUS present and the cell still low, two recovery paths share one rate-limited (30 s) restart that releases the error latch (`TASKRELEASEERR` + `BCHGENABLESET`) and re-enables charging:
+1. **Error-latched**: a `CHG_ERR_*_TIMEOUT` bit is set and the cell is not full.
+2. **Idle kickstart**: no error bit, but VBUS is in, the charger is idle, and the cell is below ~2.4 V — handles a PMIC that released the error but refused to re-enter trickle (e.g. a battery whose protection circuit still looks open). This is what lets a deeply discharged *protected* cell recover that the fixed 10-min trickle could not.
+
+Triggered immediately on the PMIC `CHG_ERROR` event (2 s) plus the 60 s poll. Trickle exit threshold is 2.5 V (lowered from the 2.9 V default) so a deep cell recovers in fewer cycles. Only the safety-timer aborts are auto-recovered; other faults (NTC/sensor) are left for the user.
+
 
 ### 3.13 Button Handler (button.c)
 

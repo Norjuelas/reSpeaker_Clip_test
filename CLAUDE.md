@@ -77,6 +77,8 @@ Build with snippet: `west build ... -- -DSNIPPET_ROOT=$(pwd)/applications/clip -
 
 Two images per release: **debug** (`build-clip`, console + SD log) and **production** (`build-clip-prod`, `-- -DSNIPPET_ROOT=$(pwd)/applications/clip -DSNIPPET=production`, console off).
 
+**Automated** — `scripts/build_release.sh` applies the MCUboot patches, builds both variants (pristine), and exports the artifacts below to `output/$VERSION/`. It is what CI (`.github/workflows/release.yml`, runs on a `v*` tag) calls. The manual `cp` commands are the equivalent:
+
 ```sh
 VERSION=$(grep APP_VERSION_STRING build-clip/clip/zephyr/include/generated/zephyr/app_version.h | cut -d'"' -f2)
 mkdir -p output/$VERSION
@@ -85,11 +87,15 @@ mkdir -p output/$VERSION
 cp build-clip/merged.hex            output/$VERSION/clip-$VERSION-debug-merged.hex
 cp build-clip/merged_CPUNET.hex     output/$VERSION/clip-$VERSION-debug-merged_CPUNET.hex
 cp build-clip/dfu_application.zip   output/$VERSION/clip-$VERSION-debug-ota.zip
+cp build-clip/clip/zephyr/zephyr.signed.bin output/$VERSION/clip-$VERSION-debug-signed.bin
 # Production
 cp build-clip-prod/merged.hex            output/$VERSION/clip-$VERSION-production-merged.hex
 cp build-clip-prod/merged_CPUNET.hex     output/$VERSION/clip-$VERSION-production-merged_CPUNET.hex
 cp build-clip-prod/dfu_application.zip   output/$VERSION/clip-$VERSION-production-ota.zip
+cp build-clip-prod/clip/zephyr/zephyr.signed.bin output/$VERSION/clip-$VERSION-production-signed.bin
 ```
+
+**To publish a release:** add `docs/release_notes/v$VERSION.md`, commit, then `git tag vX.Y.Z && git push origin vX.Y.Z` — CI builds and creates the GitHub Release with all artifacts.
 
 ## Testing
 
@@ -185,6 +191,7 @@ After finding optimal values, configure in device tree:
 - `docs/development.md` - Development log
 - `docs/audio_quality_standard.md` - Audio recording quality test standard (ASR/transcription target)
 - `docs/mcuboot_app_development.md` - Building apps under the custom MCUboot, including OTA
+- `docs/usb_dfu.md` - Firmware upgrade guide (USB serial DFU via mcumgr/nrfutil, BLE OTA, programmer)
 - `docs/whitepaper.md` / `docs/patent_disclosure.md` - Firmware whitepaper and patent disclosure (CN)
 
 ## Application Architecture
@@ -218,7 +225,7 @@ All commands return JSON responses. Key commands:
 - `AT+LIST` / `AT+LIST?page&per_page` - Session listing (sorted newest-first)
 - `AT+DOWNLOAD=<session_id>` - Start file transfer
 - `AT+CANCEL` - Cancel transfer (thread-safe via volatile flag)
-- `AT+DELETE=<session_id>` / `AT+PURGE` - Session management
+- `AT+DELETE=<session_id>` - Session management
 - `AT+MODE`, `AT+NOISE`, `AT+DEREVERB`, `AT+AUTODEL`, `AT+BRIGHTNESS` - Configuration
 - `AT+WIFI=on|off` - WiFi AP control
 - `AT+LOG=off|info|debug` - SD log backend level (debug default: info); off lets the SD card idle power-gate
@@ -248,7 +255,7 @@ Binary frame protocol with per-file CRC32 verification:
 - `icons.c` - XBM-format display icons
 - `button.c` - Multi-press, long-press support via custom input driver
 - `haptic.c` - Vibration motor feedback via PMIC GPIO
-- `battery.c` - NPM1300 PMIC battery monitoring + nRF Fuel Gauge (model in `battery_model.inc`). Polls every 60 s, posts a graceful shutdown event on critical level; recent tuning adds reserve capacity and early low-battery shutdown.
+- `battery.c` - NPM1300 PMIC battery monitoring + nRF Fuel Gauge (model in `battery_model.inc`). Polls every 60 s. Charging-recovery watchdog restarts charging after a NPM1300 safety-timer abort, with an idle-kickstart path that recovers a deeply discharged *protected* cell the fixed 10-min trickle cannot (trickle exit 2.5 V). No low-battery auto-shutdown (removed); low battery shows a UI warning only.
 
 ## Known Pitfalls
 
@@ -272,6 +279,7 @@ MCUboot source is in the NCS tree (`~/ncs/<version>/bootloader/mcuboot`). Patche
 | `0003-add-serial-upload-progress-hook.patch` | Serial upload progress hook |
 | `0004-add-custom-mcumgr-commands.patch` | Custom mcumgr commands (erase SD, erase settings) |
 | `0005-add-swap-copy-progress-hook.patch` | Swap/copy progress hook |
+| `0006-add-recovery-vbus-timeout.patch` | Exit serial recovery 3 min after USB unplug (battery-drain guard) |
 
 See `patches/mcuboot/README.md` for per-patch details.
 

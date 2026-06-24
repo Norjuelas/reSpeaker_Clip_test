@@ -1,27 +1,31 @@
 # MCUboot Patches
 
 This directory contains patches to be applied to the MCUboot source tree in NCS.
-The patches are against **NCS v3.2.1** (`~/ncs/v3.2.1/bootloader/mcuboot`).
+The patches are against **NCS v3.3.0** (`~/ncs/v3.3.0/bootloader/mcuboot`).
+They are applied automatically (and idempotently) by `scripts/build_release.sh`,
+which is used by CI (`.github/workflows/release.yml`) — manual application is only
+needed for interactive development.
 
 ## Applying Patches (Required After Fresh NCS Install)
 
 ```sh
-cd ~/ncs/v3.2.1/bootloader/mcuboot
+cd ~/ncs/v3.3.0/bootloader/mcuboot
 git apply /path/to/ReSpeaker_Clip/patches/mcuboot/0001-require-vbus-for-gpio-serial-recovery.patch
 git apply /path/to/ReSpeaker_Clip/patches/mcuboot/0002-add-oled-display-support.patch
 git apply /path/to/ReSpeaker_Clip/patches/mcuboot/0003-add-serial-upload-progress-hook.patch
 git apply /path/to/ReSpeaker_Clip/patches/mcuboot/0004-add-custom-mcumgr-commands.patch
+git apply /path/to/ReSpeaker_Clip/patches/mcuboot/0005-add-swap-copy-progress-hook.patch
 ```
 
 To verify a patch is already applied:
 ```sh
-cd ~/ncs/v3.2.1/bootloader/mcuboot
+cd ~/ncs/v3.3.0/bootloader/mcuboot
 git status
 ```
 
 ## Patch Development Workflow
 
-1. **Modify source directly** in `~/ncs/v3.2.1/bootloader/mcuboot/`
+1. **Modify source directly** in `~/ncs/v3.3.0/bootloader/mcuboot/`
 2. **Build**: `west build --build-dir build-clip --pristine --board clip/nrf5340/cpuapp applications/clip`
 3. **Test**: Flash or export `dfu_application.zip`
 4. **Export patches**: `git diff` from mcuboot tree → save to `patches/mcuboot/`
@@ -131,10 +135,53 @@ Adds a weak callback `boot_serial_upload_progress_hook(img_index, curr_off, img_
 
 Adds custom mcumgr commands for ReSpeaker Clip factory reset via serial recovery:
 - **Erase SD card** (group 64 / PERUSER, command 0): Writes zeros to first sector to destroy FAT filesystem
-- **Erase LFS partition** (group 64 / PERUSER, command 1): Erases first 64KB of LFS partition on external flash to destroy BLE bonds and settings
+- **Erase LFS partition** (group 64 / PERUSER, command 1): Erases the first 128KB (2 LittleFS blocks) of the LFS partition on external flash to destroy the superblock, forcing a clean reformat that wipes BLE bonds and settings
+
+### Why 128KB (two blocks), not one
+
+The LittleFS superblock metadata pair is pinned at blocks {0,1} and never relocates under wear leveling (lfs.c: "can't relocate superblock, filesystem is now frozen"). LittleFS `block_size` equals the SPI NOR erase page (64KB here), so the {0,1} pair spans the first 128KB. Erasing a single 64KB block kills block 0 but leaves block 1, from which LittleFS recovers the superblock — so the bonds survive. Two blocks destroys the whole pair; the app's `fs_mount` then fails and Zephyr auto-formats a clean LittleFS.
 
 ### Requirements
 
 - `CONFIG_ENABLE_MGMT_PERUSER=y`
 - `CONFIG_DISK_ACCESS=y`, `CONFIG_SPI_SDHC=y` (for SD card erase)
-- NPM1300 LDO2 enabled in overlay (for SD card power)
+- NPM1300 LDO2 + GPIO enabled with `regulator-boot-on` in overlay (SD card power must be on at MCUboot init)
+- `&flash_vdd` enabled with `regulator-boot-on` in overlay (external SPI flash power)
+
+---
+
+## 0005-add-swap-copy-progress-hook.patch
+
+**File**: `boot/bootutil/src/loader.c`
+
+### Summary
+
+Adds a weak callback `boot_copy_progress_hook(total, copied)` and calls it after each
+chunk inside `boot_copy_region()` — i.e. during the OTA image swap/copy from slot1 to
+slot0. This is the hook the OLED display (patch 0002) overrides to render real-time
+swap progress (bytes_copied / total) on the CH1115 during a firmware update.
+
+---
+
+## 0006-add-recovery-vbus-timeout.patch
+
+**File**: `boot/zephyr/main.c`
+
+### Summary
+
+Exits serial recovery if USB (VBUS) has been absent for 3 minutes, so a recovery
+session accidentally left running on battery does not drain the cell. VBUS gating
+(patch 0001) only restricts *entry*; this patch adds the missing *exit*.
+
+A workqueue watchdog (separate thread, since `boot_serial_start()` blocks the main
+thread) polls VBUS via `NRF_USBREGULATOR_S->USBREGSTATUS` every 5 s. While USB is
+present the countdown stays reset, so active DFU / rescuing a broken app is never
+interrupted. After 3 min of no VBUS the chip cold-reboots; the boot-mode retention
+was already cleared on recovery entry (`io_detect_boot_mode` clears it), so the
+reboot boots the app. Re-entering recovery is always possible (hold button + USB).
+
+### Requirements
+
+- `CONFIG_MULTITHREADING=y` (for the system workqueue) — already set.
+- nRF5340 CPUAPP (uses the USBREG VBUS detect register).
+
