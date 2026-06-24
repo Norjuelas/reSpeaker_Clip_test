@@ -26,13 +26,4 @@ int battery_init(void);
  */
 void battery_poll(void);
 
-/**
- * @brief Check if battery is critically low (displayed 0%)
- *
- * Returns true if the battery level is at or below the shutdown threshold.
- * Call this after all subsystems are initialized (especially clip_event_init)
- * to post a graceful shutdown event.
- */
-bool battery_is_critical(void);
-
 #endif /* CLIP_BATTERY_H */

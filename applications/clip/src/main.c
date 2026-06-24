@@ -175,17 +175,6 @@ int clip_init(void)
         /* Continue anyway - display is optional */
     }
 
-    /* Early low-battery shutdown: silently enter ship mode without booting.
-     * No animation, no haptic — the device simply does not power on. */
-    if (battery_is_critical() && !g_ctx.status.battery_charging) {
-        LOG_WRN("Battery critically low at boot, shutting down");
-        const struct device *regs = DEVICE_DT_GET(DT_NODELABEL(npm1300_regulators));
-        if (device_is_ready(regs)) {
-            regulator_parent_ship_mode(regs);
-        }
-        return -ESHUTDOWN;
-    }
-
     /* Start boot animation (runs in background while init continues) */
     display_boot_animation_start();
 

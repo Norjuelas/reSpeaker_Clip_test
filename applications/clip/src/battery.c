@@ -32,20 +32,12 @@ LOG_MODULE_REGISTER(battery, CONFIG_CLIP_LOG_LEVEL);
 /* Battery full threshold (SoC %) */
 #define BATTERY_FULL_THRESHOLD  99
 
-/*
- * Reserved capacity at the bottom of the battery. The displayed percentage
- * is shifted so that 0% shown to the user corresponds to BATTERY_RESERVE_PERCENT
- * actual SoC. This guarantees enough energy remains at "0%" to stop a recording
- * in progress (flush to SD card) and enter ship mode gracefully, instead of
- * hard-powering off mid-write. The displayed range is still a natural 0-100%.
- */
-#define BATTERY_RESERVE_PERCENT  3
+/* Low-battery auto-shutdown removed — unreliable SoC during PMIC I2C
+ * failures caused false shutdowns / boot loops. Low battery shows a UI
+ * warning only; manual power-off via AT+POWEROFF / button still works. */
 
-/* Low battery warning/auto-shutdown are evaluated on the DISPLAYED percentage.
- * With RESERVE=3, the warning fires at actual 18% (displayed 15%) and the
- * shutdown fires at actual 3% (displayed 0%). */
+/* Low-battery warning threshold (displayed % = actual SoC; no reserve). */
 #define BATTERY_LOW_WARNING_THRESHOLD  15
-#define BATTERY_SHUTDOWN_THRESHOLD     0
 
 /* SoC smoothing configuration for stable display */
 #define SOC_SMOOTH_ALPHA    0.3f    /* EMA factor: lower = smoother (0.1-0.5) */
@@ -84,14 +76,6 @@ static struct k_work_delayable battery_delayed_update_work;
 static bool init_complete;
 
 static void read_and_update(void);
-
-bool battery_is_critical(void)
-{
-	/* Critical if displayed SoC is at the shutdown threshold (0%).
-	 * The shutdown itself is only meaningful when not charging; callers
-	 * (or the event handler) decide whether to act on it. */
-	return last_percent <= BATTERY_SHUTDOWN_THRESHOLD;
-}
 
 void battery_poll(void)
 {
@@ -256,7 +240,7 @@ static void read_and_update(void)
 		if (!soc_initialized) {
 			smoothed_soc = raw_soc;
 			soc_initialized = true;
-		} else if (raw_soc < (BATTERY_RESERVE_PERCENT + 10)) {
+		} else if (raw_soc < 10.0f) {
 			/* Low battery: bypass smoothing so fast discharge reaches the
 			 * shutdown threshold promptly instead of lagging into a hard
 			 * PMIC undervoltage cutoff. */
@@ -285,17 +269,8 @@ static void read_and_update(void)
 	}
 
 	/*
-	 * Convert raw SoC to displayed percentage with bottom reserve.
-	 * The user sees a natural 0-100% range, but 0% displayed maps to
-	 * BATTERY_RESERVE_PERCENT actual, leaving energy for graceful shutdown.
-	 */
-	uint8_t display_percent = percent;
-	if (percent > BATTERY_RESERVE_PERCENT) {
-		display_percent = percent - BATTERY_RESERVE_PERCENT;
-	} else {
-		display_percent = 0;
-	}
-
+        /* Displayed percentage = actual SoC (no bottom reserve). */
+        uint8_t display_percent = percent;
 	/* Update battery percent (display value) */
 	if (display_percent != last_percent) {
 		last_percent = display_percent;
@@ -312,17 +287,6 @@ static void read_and_update(void)
 				low_battery_warned = true;
 			}
 		}
-	}
-
-	/* Auto-shutdown: checked EVERY poll (not only when displayed % changes)
-	 * so a failed POWER_OFF_EXEC (I2C error / full event queue) is retried
-	 * until ship mode succeeds. Only after init (sem not ready during
-	 * battery_init). */
-	if (!charging && init_complete &&
-	    display_percent <= BATTERY_SHUTDOWN_THRESHOLD) {
-		LOG_WRN("Battery critically low (actual %u%%, displayed %u%%), auto shutdown",
-			percent, display_percent);
-		clip_post_event(CLIP_EVENT_POWER_OFF_EXEC);
 	}
 
 	/* Update charging status */
