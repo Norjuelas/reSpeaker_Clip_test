@@ -15,6 +15,7 @@
 #include <zephyr/sys/sys_heap.h>
 
 #include <nrfx_clock.h>
+#include <hal/nrf_oscillators.h>
 
 #include "clip.h"
 #include "config.h"
@@ -388,6 +389,34 @@ void clip_main_loop(void)
         }
     }
 }
+
+/*
+ * Crystal load-capacitor tuning.
+ *
+ * The board has no external load capacitors for the HFXO (32 MHz) or LFXO
+ * (32.768 kHz); the internal ones must be enabled through the OSCILLATORS
+ * peripheral. The values below were tuned with the tests/clip `hfxo`/`lfxo`
+ * shell and are written here the same way — as raw register fields, not via
+ * the DTS femtofarad/picofarad properties (the HFXO DTS binding cannot take a
+ * raw CAPVALUE; it derives one from per-chip FICR, which is not what we want).
+ *
+ * SoC init writes these registers once at boot (PRE_KERNEL) from the DTS;
+ * this runs afterwards (POST_KERNEL) and overrides with the tuned values.
+ * Neither register is touched again at runtime, so the override sticks.
+ */
+#define CLIP_HFXO_CAPVALUE	60	/* raw XOSC32MCAPS.CAPVALUE */
+#define CLIP_LFXO_INTCAP	1	/* 0=external, 1=6pF, 2=7pF, 3=9pF */
+
+static int clip_xo_cap_init(void)
+{
+	NRF_OSCILLATORS->XOSC32MCAPS =
+		(OSCILLATORS_XOSC32MCAPS_ENABLE_Enabled <<
+		 OSCILLATORS_XOSC32MCAPS_ENABLE_Pos) |
+		(CLIP_HFXO_CAPVALUE << OSCILLATORS_XOSC32MCAPS_CAPVALUE_Pos);
+	NRF_OSCILLATORS->XOSC32KI.INTCAP = CLIP_LFXO_INTCAP;
+	return 0;
+}
+SYS_INIT(clip_xo_cap_init, POST_KERNEL, 0);
 
 int main(void)
 {
