@@ -12,6 +12,7 @@
 #include <zephyr/fs/littlefs.h>
 #include <zephyr/storage/flash_map.h>
 #include <zephyr/settings/settings.h>
+#include <zephyr/sys/reboot.h>
 #include <time.h>
 
 #include "clip.h"
@@ -30,6 +31,13 @@ LOG_MODULE_REGISTER(config, CONFIG_CLIP_LOG_LEVEL);
 #define SETTING_WIFI_CHANNEL    "config/wifi_channel"
 #define SETTING_WIFI_REG_DOMAIN "config/wifi_reg_domain"
 #define SETTING_TIME_UNIX       "time/unix_timestamp"
+
+/* settings_load is normally <100 ms. A corrupt settings file (typically
+ * from repeated BLE pair/unpair churning bond records) makes it block for
+ * ~40 seconds, and it cannot be interrupted — so a watchdog on a separate
+ * thread wipes the file and reboots at this timeout; the next boot loads
+ * clean. Wipe loses bonds + app config + time. */
+#define SETTINGS_LOAD_TIMEOUT_MS        CONFIG_CLIP_SETTINGS_LOAD_TIMEOUT_MS
 
 /* Config entry for settings handler */
 struct config_entry {
@@ -163,6 +171,39 @@ static void config_set_defaults(struct clip_context *ctx)
     strncpy(ctx->config.wifi_reg_domain, CONFIG_CLIP_WIFI_AP_REG_DOMAIN, 3);
 }
 
+/* settings_load watchdog. `done` is set by the main thread once
+ * settings_load returns; the watchdog (on the system workqueue) reads it. */
+static volatile bool settings_load_done;
+
+static void settings_load_watchdog_handler(struct k_work *work)
+{
+    if (settings_load_done) {
+        return;
+    }
+    /* settings_load is still blocked past the timeout: the settings file
+     * is corrupt and the load can't be interrupted. Wipe and reboot so
+     * the next boot loads clean defaults in <100 ms. */
+    LOG_WRN("settings_load stuck >%dms, wiping + reboot", SETTINGS_LOAD_TIMEOUT_MS);
+    fs_unlink(CONFIG_SETTINGS_FILE_PATH);
+    sys_reboot(SYS_REBOOT_COLD);
+}
+
+K_WORK_DELAYABLE_DEFINE(settings_load_watchdog, settings_load_watchdog_handler);
+
+/* Public arm/disarm so other modules (e.g. ble.c loading BT bonds) can
+ * guard their own settings_load_subtree() calls against a corrupt file. */
+void settings_load_watchdog_arm(void)
+{
+    settings_load_done = false;
+    k_work_schedule(&settings_load_watchdog, K_MSEC(SETTINGS_LOAD_TIMEOUT_MS));
+}
+
+void settings_load_watchdog_disarm(void)
+{
+    settings_load_done = true;
+    k_work_cancel_delayable(&settings_load_watchdog);
+}
+
 int config_init(void)
 {
     struct clip_context *ctx = clip_get_context();
@@ -207,8 +248,14 @@ int config_init(void)
         LOG_WRN("Time handler register failed: %d", err);
     }
 
+    /* Arm the settings-load watchdog before the blocking load. */
+    settings_load_watchdog_arm();
+
     /* Load config settings */
     err = settings_load_subtree("config");
+
+    settings_load_watchdog_disarm();
+
     if (err) {
         LOG_WRN("Config load failed: %d, saving defaults", err);
         config_save();

@@ -219,4 +219,16 @@ int config_set_wifi_reg_domain(const char *reg_domain);
  */
 const char *config_get_wifi_reg_domain(void);
 
+/**
+ * @brief Arm/disarm the settings_load watchdog
+ *
+ * settings_load can block for ~40s on a corrupt settings file and cannot
+ * be interrupted. Arm a watchdog (on the system workqueue thread, which
+ * runs independently of the main thread where settings_load executes)
+ * before a settings_load_subtree() call; if it hasn't returned within
+ * SETTINGS_LOAD_TIMEOUT_MS, the watchdog wipes the file and reboots.
+ */
+void settings_load_watchdog_arm(void);
+void settings_load_watchdog_disarm(void);
+
 #endif /* CLIP_CONFIG_H */

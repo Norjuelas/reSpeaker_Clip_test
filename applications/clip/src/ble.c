@@ -667,8 +667,11 @@ int ble_init(void)
         return err;
     }
 
-    /* Load BT settings (bond keys) */
+    /* Load BT settings (bond keys). Guard with the watchdog: a corrupt
+     * settings file (e.g. from repeated pair/unpair) blocks ~40s. */
+    settings_load_watchdog_arm();
     settings_load_subtree("bt");
+    settings_load_watchdog_disarm();
 
     /* If not bonded, switch display to pairing guide */
     if (!ble_is_bonded()) {

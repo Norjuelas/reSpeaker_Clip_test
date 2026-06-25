@@ -99,6 +99,10 @@ config CLIP_DISPLAY_PAIRING_TIMEOUT_MS
 	int "Pairing guide display timeout (ms)"
 	default 60000
 
+config CLIP_SETTINGS_LOAD_TIMEOUT_MS
+	int "settings_load watchdog timeout (ms)"
+	default 3000
+
 config CLIP_SD_IDLE_DELAY_MS
 	int "SD card idle power-off delay (ms)"
 	default 45000
