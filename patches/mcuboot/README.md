@@ -134,7 +134,7 @@ Adds a weak callback `boot_serial_upload_progress_hook(img_index, curr_off, img_
 ### Summary
 
 Adds custom mcumgr commands for ReSpeaker Clip factory reset via serial recovery:
-- **Erase SD card** (group 64 / PERUSER, command 0): Writes zeros to first sector to destroy FAT filesystem
+- **Erase SD card** (group 64 / PERUSER, command 0): Powers the SD card on-demand (LDO2 `regulator_enable` → write zeros → `regulator_disable`), destroying the FAT filesystem header
 - **Erase LFS partition** (group 64 / PERUSER, command 1): Erases the first 128KB (2 LittleFS blocks) of the LFS partition on external flash to destroy the superblock, forcing a clean reformat that wipes BLE bonds and settings
 
 ### Why 128KB (two blocks), not one
@@ -145,8 +145,8 @@ The LittleFS superblock metadata pair is pinned at blocks {0,1} and never reloca
 
 - `CONFIG_ENABLE_MGMT_PERUSER=y`
 - `CONFIG_DISK_ACCESS=y`, `CONFIG_SPI_SDHC=y` (for SD card erase)
-- NPM1300 LDO2 + GPIO enabled with `regulator-boot-on` in overlay (SD card power must be on at MCUboot init)
-- `&flash_vdd` enabled with `regulator-boot-on` in overlay (external SPI flash power)
+- NPM1300 LDO2 + GPIO enabled in overlay (**NOT** `regulator-boot-on`). The erase-SD command powers the card on-demand (`regulator_enable` → erase → `regulator_disable`). `regulator-boot-on` would leak a permanent +1 into the app's regulator refcount (the NPM1300 regulator init seeds refcount from the physical PMIC register via `get_enabled()`), preventing the app's SD idle-power-gating from ever turning LDO2 off.
+- `&flash_vdd` enabled in overlay (external SPI flash power; `regulator-boot-on` is fine here — the app keeps flash powered anyway)
 
 ---
 
@@ -160,28 +160,4 @@ Adds a weak callback `boot_copy_progress_hook(total, copied)` and calls it after
 chunk inside `boot_copy_region()` — i.e. during the OTA image swap/copy from slot1 to
 slot0. This is the hook the OLED display (patch 0002) overrides to render real-time
 swap progress (bytes_copied / total) on the CH1115 during a firmware update.
-
----
-
-## 0006-add-recovery-vbus-timeout.patch
-
-**File**: `boot/zephyr/main.c`
-
-### Summary
-
-Exits serial recovery if USB (VBUS) has been absent for 3 minutes, so a recovery
-session accidentally left running on battery does not drain the cell. VBUS gating
-(patch 0001) only restricts *entry*; this patch adds the missing *exit*.
-
-A workqueue watchdog (separate thread, since `boot_serial_start()` blocks the main
-thread) polls VBUS via `NRF_USBREGULATOR_S->USBREGSTATUS` every 5 s. While USB is
-present the countdown stays reset, so active DFU / rescuing a broken app is never
-interrupted. After 3 min of no VBUS the chip cold-reboots; the boot-mode retention
-was already cleared on recovery entry (`io_detect_boot_mode` clears it), so the
-reboot boots the app. Re-entering recovery is always possible (hold button + USB).
-
-### Requirements
-
-- `CONFIG_MULTITHREADING=y` (for the system workqueue) — already set.
-- nRF5340 CPUAPP (uses the USBREG VBUS detect register).
 

@@ -55,7 +55,7 @@ minicom -D /dev/ttyACM0 -b 115200
 
 **The debug UART console still leaks ~570µA at idle** — the UARTE peripheral stays enabled between log outputs (baud-independent; 115200 and 921600 both leak the same). The `production` snippet disables the console + UART log backend, bringing idle to ~170µA. The debug build (console on) idles higher. This was the single largest idle leak after the regulators and SD card were fixed.
 
-Idle power budget (3V3 rail, v0.0.5): nRF5340 main/radio regulators on **DCDC** (`vregmain`/`vregradio` = `NRF5X_REG_MODE_DCDC`, ~500–600µA vs LDO); SD card **idle power-gated** after 45s (unmount → disk deinit → SPI4 runtime-PM suspend → CS parked low → LDO2 off; lazy remount via `storage_ensure_mounted()`); SPI `bias-pull-up` removed from `spi3`/`spi4` (push-pull needs none) with `bias-pull-down` on `spi4_sleep`. Production (console off) reaches ~170µA.
+Idle power budget (3V3 rail, v0.0.5): nRF5340 main/radio regulators on **DCDC** (`vregmain`/`vregradio` = `NRF5X_REG_MODE_DCDC`, ~500–600µA vs LDO); SD card **idle power-gated** after `CLIP_SD_IDLE_DELAY_MS` (45s) (unmount → disk deinit → SPI4 runtime-PM suspend → CS parked low → LDO2 off; lazy remount via `storage_ensure_mounted()`); SPI `bias-pull-up` removed from `spi3`/`spi4` (push-pull needs none) with `bias-pull-down` on `spi4_sleep`. Production (console off) reaches ~170µA.
 
 `CONFIG_NRF70_QSPI_LOW_POWER=y` puts QSPI in low power when WiFi is not in use.
 
@@ -255,7 +255,7 @@ Binary frame protocol with per-file CRC32 verification:
 - `icons.c` - XBM-format display icons
 - `button.c` - Multi-press, long-press support via custom input driver
 - `haptic.c` - Vibration motor feedback via PMIC GPIO
-- `battery.c` - NPM1300 PMIC battery monitoring + nRF Fuel Gauge (model in `battery_model.inc`). Polls every 60 s. Charging-recovery watchdog restarts charging after a NPM1300 safety-timer abort, with an idle-kickstart path that recovers a deeply discharged *protected* cell the fixed 10-min trickle cannot (trickle exit 2.5 V). No low-battery auto-shutdown (removed); low battery shows a UI warning only.
+- `battery.c` - NPM1300 PMIC battery monitoring + nRF Fuel Gauge (model in `battery_model.inc`). Polls every 60 s. Displayed % = actual SoC (no reserve); pinned to 100% on charge complete. Charge termination 4.25V. `vbatlow-charge-enable` lets the charger recover a deeply discharged/protected cell. No low-battery auto-shutdown (removed); low battery shows a UI warning only.
 
 ## Known Pitfalls
 
@@ -265,6 +265,7 @@ Binary frame protocol with per-file CRC32 verification:
 - **FAT directory order**: Not chronological. Session listing uses a cached sorted buffer invalidated on mutations.
 - **Transfer thread safety**: AT commands and transfer run on different threads. Use volatile flags for coordination (e.g., `transfer_cancel_requested`).
 - **Logs persist to SD card**: `CONFIG_LOG_BACKEND_FS=y` writes logs to `/SD:/LOG` (rotating 64 KiB files). `CONFIG_LOG_DEFAULT_LEVEL=0` compiles logs out at runtime — enable via `LOG_RUNTIME_FILTERING` / per-module level when debugging. Inspect the SD `/LOG/` files post-mortem.
+- **Corrupt settings boot loop**: A corrupt `/lfs/settings/run` (typically from repeated pair/unpair) blocks `settings_load` ~40s. A watchdog on the system workqueue thread wipes the file + reboots if it doesn't return in `CLIP_SETTINGS_LOAD_TIMEOUT_MS` (3s). Guards both the `config` and `bt` bond-key loads.
 
 ## MCUboot Patch Development
 
@@ -277,9 +278,8 @@ MCUboot source is in the NCS tree (`~/ncs/<version>/bootloader/mcuboot`). Patche
 | `0001-require-vbus-for-gpio-serial-recovery.patch` | Only allow GPIO/serial recovery when VBUS is present |
 | `0002-add-oled-display-support.patch` | OLED status UI in the bootloader (new `io_display.c`) |
 | `0003-add-serial-upload-progress-hook.patch` | Serial upload progress hook |
-| `0004-add-custom-mcumgr-commands.patch` | Custom mcumgr commands (erase SD, erase settings) |
+| `0004-add-custom-mcumgr-commands.patch` | Custom mcumgr commands (erase SD on-demand LDO2, erase settings 128KB) |
 | `0005-add-swap-copy-progress-hook.patch` | Swap/copy progress hook |
-| `0006-add-recovery-vbus-timeout.patch` | Exit serial recovery 3 min after USB unplug (battery-drain guard) |
 
 See `patches/mcuboot/README.md` for per-patch details.
 
@@ -372,7 +372,7 @@ The DTS is split across includes: `clip-pinctrl.dtsi`, `clip-cpuapp_partitioning
 
 **The debug UART console still leaks ~570µA at idle** — the UARTE peripheral stays enabled between log outputs (baud-independent; 115200 and 921600 both leak the same). The `production` snippet disables the console + UART log backend, bringing idle to ~170µA. The debug build (console on) idles higher. This was the single largest idle leak after the regulators and SD card were fixed.
 
-Idle power budget (3V3 rail, v0.0.5): nRF5340 main/radio regulators on **DCDC** (`vregmain`/`vregradio` = `NRF5X_REG_MODE_DCDC`, ~500–600µA vs LDO); SD card **idle power-gated** after 45s (unmount → disk deinit → SPI4 runtime-PM suspend → CS parked low → LDO2 off; lazy remount via `storage_ensure_mounted()`); SPI `bias-pull-up` removed from `spi3`/`spi4` (push-pull needs none) with `bias-pull-down` on `spi4_sleep`. Production (console off) reaches ~170µA.
+Idle power budget (3V3 rail, v0.0.5): nRF5340 main/radio regulators on **DCDC** (`vregmain`/`vregradio` = `NRF5X_REG_MODE_DCDC`, ~500–600µA vs LDO); SD card **idle power-gated** after `CLIP_SD_IDLE_DELAY_MS` (45s) (unmount → disk deinit → SPI4 runtime-PM suspend → CS parked low → LDO2 off; lazy remount via `storage_ensure_mounted()`); SPI `bias-pull-up` removed from `spi3`/`spi4` (push-pull needs none) with `bias-pull-down` on `spi4_sleep`. Production (console off) reaches ~170µA.
 
 `CONFIG_NRF70_QSPI_LOW_POWER=y` puts QSPI in low power when WiFi is not in use.
 

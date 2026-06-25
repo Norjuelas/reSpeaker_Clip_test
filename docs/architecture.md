@@ -585,15 +585,13 @@ Event notifications are JSON objects sent over the BLE GATT Response characteris
 
 **Purpose**: Battery monitoring via NPM1300 PMIC with nRF Fuel Gauge.
 
-**Fuel Gauge**: Uses `CONFIG_NRF_FUEL_GAUGE=y` with `CONFIG_NRF_FUEL_GAUGE_VARIANT_SECONDARY_CELL=y` for accurate State of Charge (SoC) estimation. SoC is smoothed over time to avoid sudden jumps — except below 10%, where smoothing is bypassed so a genuine low reading is shown immediately rather than lagging toward a PMIC undervoltage cutoff.
+**Fuel Gauge**: Uses `CONFIG_NRF_FUEL_GAUGE=y` with `CONFIG_NRF_FUEL_GAUGE_VARIANT_SECONDARY_CELL=y` for accurate State of Charge (SoC) estimation. Displayed % equals actual SoC (the bottom reserve that capped the top at 97% was removed). SoC is smoothed over time — except below 10%, where smoothing is bypassed so a genuine low reading is shown immediately. When the charger reports COMPLETE, the display is pinned to 100% (the fuel-gauge model plateaus at ~99% even after termination).
 
-**Reporting**: Battery level (0-100%), charging status reported via AT+GSTAT and displayed on OLED status bar. A low-battery warning (<15%, discharging) shows a UI event; there is **no** automatic low-battery shutdown (it was removed — unreliable SoC during PMIC I2C failures caused false shutdowns). Power-off is manual (`AT+POWEROFF` / button).
+**Reporting**: Battery level (0-100%), charging status reported via AT+GSTAT and displayed on OLED status bar. A low-battery warning (<15%, discharging) shows a UI event; there is **no** automatic low-battery shutdown (removed — unreliable SoC during PMIC I2C failures caused false shutdowns). Power-off is manual (`AT+POWEROFF` / button).
 
-**Charging-Recovery Watchdog**: the NPM1300 aborts a trickle/precharge that fails to lift the cell within the ~10 min safety timer, latching the charger off. With VBUS present and the cell still low, two recovery paths share one rate-limited (30 s) restart that releases the error latch (`TASKRELEASEERR` + `BCHGENABLESET`) and re-enables charging:
-1. **Error-latched**: a `CHG_ERR_*_TIMEOUT` bit is set and the cell is not full.
-2. **Idle kickstart**: no error bit, but VBUS is in, the charger is idle, and the cell is below ~2.4 V — handles a PMIC that released the error but refused to re-enter trickle (e.g. a battery whose protection circuit still looks open). This is what lets a deeply discharged *protected* cell recover that the fixed 10-min trickle could not.
+**Charge Termination**: 4.25V (raised from 4.20V) so the fuel gauge reaches ~100% instead of settling at ~99%. The cell (240/HSZ 362123) is 4.20V-rated; 4.25V is a mild overcharge (reduced cycle life, accepted for accurate 100%).
 
-Triggered immediately on the PMIC `CHG_ERROR` event (2 s) plus the 60 s poll. Trickle exit threshold is 2.5 V (lowered from the 2.9 V default) so a deep cell recovers in fewer cycles. Only the safety-timer aborts are auto-recovered; other faults (NTC/sensor) are left for the user.
+**Deep-Discharge Recovery**: `vbatlow-charge-enable` in the DTS allows the charger to activate even when the cell is below the VBATLOW threshold (~2.4V), e.g. after the protection IC trips. The NPM1300 then trickle-charges (10% ICHG) until the cell recovers. No software watchdog is needed — the PMIC handles it in hardware.
 
 
 ### 3.13 Button Handler (button.c)
