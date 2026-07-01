@@ -40,8 +40,15 @@ LOG_MODULE_REGISTER(battery, CONFIG_CLIP_LOG_LEVEL);
 #define BATTERY_LOW_WARNING_THRESHOLD  15
 
 /* SoC smoothing configuration for stable display */
-#define SOC_SMOOTH_ALPHA    0.3f    /* EMA factor: lower = smoother (0.1-0.5) */
-#define SOC_MAX_DELTA       3       /* Max SoC change allowed per poll cycle (%) */
+#define SOC_SMOOTH_ALPHA    0.15f   /* EMA factor: lower = smoother (0.1-0.5) */
+#define SOC_MAX_DELTA       1       /* Max SoC change allowed per poll cycle (%) */
+
+/*
+ * Sticky-full: once charging reports complete, the display is held at 100%
+ * (even after VBUS is unplugged) until the real SoC drops below this
+ * threshold, so a full charge doesn't immediately fall to 99% on unplug.
+ */
+#define FULL_RELEASE_THRESHOLD  96.0f
 
 /* Battery model - using Nordic's preset model */
 static const struct battery_model battery_model = {
@@ -64,6 +71,7 @@ static bool fg_initialized;
 /* SoC smoothing state */
 static float smoothed_soc = 0.0f;  /* Will be initialized on first read */
 static bool soc_initialized = false;
+static bool full_latch = false;    /* Sticky 100% after charge complete */
 
 /* 60-second periodic battery level polling */
 static struct k_work_delayable battery_level_work;
@@ -229,9 +237,16 @@ static void read_and_update(void)
 		charging = charger_connected && (!charger_complete || !battery_full);
 	}
 
-	/* When charge complete, force 100% — the fuel-gauge plateaus at ~99% */
+	/* Real SoC before the charge-complete force (used by the sticky-full
+	 * release check below). */
+	float real_soc = (float)percent;
+
+	/* When charge complete, force 100% and latch it (fuel-gauge plateaus at
+	 * ~99%). The latch holds 100% on the display even after VBUS is removed,
+	 * until the real SoC drops below FULL_RELEASE_THRESHOLD. */
 	if (charger_complete && vbus_connected) {
 		percent = 100;
+		full_latch = true;
 	}
 
 	/* Apply SoC smoothing: EMA + rate limiting to reduce display jumping */
@@ -245,9 +260,6 @@ static void read_and_update(void)
 			 * shutdown threshold promptly instead of lagging into a hard
 			 * PMIC undervoltage cutoff. */
 			smoothed_soc = raw_soc;
-		} else if (raw_soc >= 99.5f && charger_complete) {
-			/* Charge complete: pin at 100% without smoothing lag. */
-			smoothed_soc = raw_soc;
 		} else {
 			float delta = raw_soc - smoothed_soc;
 			/* Rate limit: cap maximum change per update cycle */
@@ -259,6 +271,18 @@ static void read_and_update(void)
 			/* Exponential moving average */
 			smoothed_soc += SOC_SMOOTH_ALPHA * delta;
 		}
+
+		/* Sticky 100%: keep the display at 100% after charge complete (even
+		 * unplugged) until the cell actually discharges below the release
+		 * threshold, so a full charge doesn't drop to 99% on unplug. */
+		if (full_latch) {
+			if (real_soc < FULL_RELEASE_THRESHOLD) {
+				full_latch = false;
+			} else {
+				smoothed_soc = 100.0f;
+			}
+		}
+
 		if (smoothed_soc < 0.0f) {
 			smoothed_soc = 0.0f;
 		}
