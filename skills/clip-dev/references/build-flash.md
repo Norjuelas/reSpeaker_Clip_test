@@ -3,7 +3,7 @@
 ## Environment Setup
 
 ```sh
-source ~/ncs/v3.2.1/zephyr/zephyr-env.sh
+source ~/ncs/v3.3.0/zephyr/zephyr-env.sh
 export ZEPHYR_EXTRA_MODULES=$(pwd)   # MUST be env var, not CMake
 ```
 
@@ -53,7 +53,7 @@ Use `--recover` when: readback protection is enabled, flashing MCUboot itself, o
 ## Serial Output
 
 ```sh
-minicom -D /dev/ttyACM0 -b 115200
+minicom -D /dev/ttyACM0 -b 921600
 ```
 
 ## Output Firmware Files

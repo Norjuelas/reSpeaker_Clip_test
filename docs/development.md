@@ -106,7 +106,7 @@ west build --build-dir build-clip --board clip/nrf5340/cpuapp applications/clip
 west flash --build-dir build-clip && nrfutil device reset
 
 # Serial output
-minicom -D /dev/ttyACM0 -b 115200
+minicom -D /dev/ttyACM0 -b 921600
 ```
 
 ### Not Yet Implemented

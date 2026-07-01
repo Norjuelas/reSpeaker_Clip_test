@@ -44,7 +44,7 @@ west build --build-dir build-clip --pristine --board clip/nrf5340/cpuapp applica
 west flash --build-dir build-clip && nrfutil device reset
 
 # View serial output
-minicom -D /dev/ttyACM0 -b 115200
+minicom -D /dev/ttyACM0 -b 921600
 ```
 
 **Board identifier**: `clip/nrf5340/cpuapp` (NOT `respeaker/...`)

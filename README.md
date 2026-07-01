@@ -74,7 +74,7 @@ west flash --build-dir build-clip && nrfutil device reset
 ### Serial Console
 
 ```sh
-minicom -D /dev/ttyACM0 -b 115200
+minicom -D /dev/ttyACM0 -b 921600
 ```
 
 ## Project Structure
@@ -123,14 +123,15 @@ and known pitfalls.
 # BLE protocol tests
 python tests/ble_test.py --interactive
 
-# WiFi UDP file sync (connect to ClipAP_XXXX first, password 12345678)
+# WiFi UDP file sync (connect to ClipAP_XXXX first; password 12345678 by default,
+# becomes a random one after the first BLE pairing)
 python applications/clip/tests/tools/udp_sync.py --session <session_id>
 
 # Hardware test firmware
 west build --build-dir build-test --board clip/nrf5340/cpuapp --pristine tests/clip
 ```
 
-WiFi AP: SSID `ClipAP_XXXX` (last 4 hex of chip ID) · Password `12345678` · IP `192.168.4.1` · UDP Port `8089`
+WiFi AP: SSID `ClipAP_XXXX` (last 4 hex of chip ID) · Password `12345678` (default; random after first pairing) · IP `192.168.4.1` · UDP Port `8089`
 
 ## License
 

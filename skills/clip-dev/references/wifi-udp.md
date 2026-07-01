@@ -5,7 +5,7 @@
 | Parameter | Value |
 |-----------|-------|
 | SSID | `ClipAP_XXXX` (last 4 hex of chip ID) |
-| Password | `12345678` |
+| Password | `12345678` (default; random after first BLE pairing) |
 | IP Address | `192.168.4.1/24` |
 | UDP Port | `8089` |
 | Band | 5GHz channel 36 |

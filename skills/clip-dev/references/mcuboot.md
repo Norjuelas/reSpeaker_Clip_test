@@ -129,6 +129,6 @@ west flash --build-dir build-clip --recover && nrfutil device reset
 
 ## MCUboot Patch Development
 
-MCUboot source: `~/ncs/v3.2.1/bootloader/mcuboot`. Patches stored in `patches/mcuboot/`.
+MCUboot source: `~/ncs/v3.3.0/bootloader/mcuboot`. Patches stored in `patches/mcuboot/`.
 
 Workflow: **modify source → pristine build → verify → export patch** (see CLAUDE.md "MCUboot Patch Development" for full `git diff`/`git apply` workflow). Must build pristine for any mcuboot change. OLED display changes touch `boot/zephyr/io_display.c` and `boot/zephyr/main.c`.

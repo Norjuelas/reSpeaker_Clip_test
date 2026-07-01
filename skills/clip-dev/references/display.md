@@ -75,7 +75,7 @@ Icons source: `applications/clip/src/icons.c` (XBM format bitmaps).
 ## MCUboot Boot Animation
 
 MCUboot also uses the CH1115 OLED. The boot animation is implemented in:
-- `~/ncs/v3.2.1/bootloader/mcuboot/boot/zephyr/io_display.c` (patched)
+- `~/ncs/v3.3.0/bootloader/mcuboot/boot/zephyr/io_display.c` (patched)
 
 Patches: `patches/mcuboot/` — see CLAUDE.md "MCUboot Patch Development" section.
 

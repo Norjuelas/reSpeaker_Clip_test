@@ -7,7 +7,7 @@ description: |
   SD card storage, PMIC power management, or nRF5340 dual-core architecture.
   Trigger on board name clip/nrf5340/cpuapp, wireless coexistence, OTA DFU,
   and Chinese terms such as 录音, 烧录, 固件, 麦克风.
-compatibility: Requires NCS v3.2.1, Zephyr RTOS, west build tool, nRF Connect SDK.
+compatibility: Requires NCS v3.3.0, Zephyr RTOS, west build tool, nRF Connect SDK.
 version: 1.0.0
 ---
 
@@ -22,12 +22,12 @@ PDM microphone array, SD card storage, and OTA firmware updates.
 ### Step 1: Confirm the build environment
 
 Before building or modifying firmware, confirm:
-- NCS v3.2.1 installed at `~/ncs/v3.2.1/`
+- NCS v3.3.0 installed at `~/ncs/v3.3.0/`
 - Zephyr environment sourced
 - `ZEPHYR_EXTRA_MODULES` set to project root
 
 ```bash
-source ~/ncs/v3.2.1/zephyr/zephyr-env.sh
+source ~/ncs/v3.3.0/zephyr/zephyr-env.sh
 export ZEPHYR_EXTRA_MODULES=$(pwd)
 ```
 
@@ -146,7 +146,7 @@ Modes: `mono` (L only), `merge` (L+R average), `stereo` (L+R)
 ### WiFi AP Configuration
 
 - SSID: `ClipAP_XXXX` (last 4 hex of chip ID)
-- Password: `12345678`
+- Password: `12345678` (default; becomes random after the first BLE pairing — `config_generate_wifi_password()`)
 - IP: `192.168.4.1`
 - UDP Port: `8089`
 
@@ -204,7 +204,7 @@ See `docs/mcuboot_app_development.md` for full guide.
 ## MCUboot Patch Development
 
 Patches in `patches/mcuboot/`. Workflow:
-1. Edit source in `~/ncs/v3.2.1/bootloader/mcuboot/`
+1. Edit source in `~/ncs/v3.3.0/bootloader/mcuboot/`
 2. Build with `--pristine`
 3. Export: `git diff > patches/mcuboot/NNNN-name.patch`
 4. New files: use `sed 's/^/+'/` prefix
@@ -252,4 +252,4 @@ Detailed subsystem documentation in `references/` directory:
 
 ---
 
-**Version**: 1.0.0 | **Board**: clip/nrf5340/cpuapp | **RTOS**: Zephyr v3.2.1
+**Version**: 1.0.0 | **Board**: clip/nrf5340/cpuapp | **RTOS**: Zephyr v3.3.0
