@@ -45,6 +45,7 @@ static bool wifi_ready;
 static struct net_mgmt_event_callback wifi_mgmt_cb;
 static K_SEM_DEFINE(wifi_ready_sem, 0, 1);
 static K_SEM_DEFINE(ap_enabled_sem, 0, 1);
+static K_SEM_DEFINE(ap_disabled_sem, 0, 1);
 
 static void wifi_timeout_handler(struct k_work *work)
 {
@@ -149,6 +150,7 @@ static void wifi_mgmt_event_handler(struct net_mgmt_event_callback *cb,
 		LOG_INF("WiFi AP disabled");
 		ap_running = false;
 		sta_connected = false;
+		k_sem_give(&ap_disabled_sem);
 		break;
 	case NET_EVENT_WIFI_AP_STA_CONNECTED:
 	{
@@ -384,7 +386,10 @@ int wifi_on(void)
 	}
 
 	/* Start DHCP server */
-	wifi_start_dhcp_server(iface);
+	ret = wifi_start_dhcp_server(iface);
+	if (ret) {
+		LOG_WRN("DHCP server start failed: %d", ret);
+	}
 
 	/* Start UDP server */
 	ret = wifi_udp_start();
@@ -427,8 +432,15 @@ int wifi_off(void)
 	/* Stop DHCP server */
 	net_dhcpv4_server_stop(iface);
 
-	/* Disable AP mode */
+	/* Disable AP mode — wait for the result before powering down,
+	 * otherwise a fast re-enable (wifi_on) can race the still-pending
+	 * disable and fail. */
+	k_sem_reset(&ap_disabled_sem);
 	net_mgmt(NET_REQUEST_WIFI_AP_DISABLE, iface, NULL, 0);
+	ret = k_sem_take(&ap_disabled_sem, K_SECONDS(3));
+	if (ret) {
+		LOG_WRN("WiFi AP disable timeout: %d", ret);
+	}
 	ap_running = false;
 	sta_connected = false;
 

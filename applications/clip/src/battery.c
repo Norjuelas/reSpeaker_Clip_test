@@ -68,6 +68,11 @@ static int64_t fg_ref_time;
 /* Fuel gauge state */
 static bool fg_initialized;
 
+/* Mutex serializing read_and_update() — called from display_thread and the
+ * system workqueue; the nRF Fuel Gauge is non-reentrant and fg_ref_time /
+ * smoothed_soc are shared. */
+static K_MUTEX_DEFINE(battery_mutex);
+
 /* SoC smoothing state */
 static float smoothed_soc = 0.0f;  /* Will be initialized on first read */
 static bool soc_initialized = false;
@@ -83,6 +88,7 @@ static struct k_work_delayable battery_delayed_update_work;
  * the event dispatcher (semaphore) is initialized. */
 static bool init_complete;
 
+static void read_and_update_locked(void);
 static void read_and_update(void);
 
 void battery_poll(void)
@@ -147,7 +153,7 @@ static bool poll_vbus_status(void)
 	return val.val1 != 0;
 }
 
-static void read_and_update(void)
+static void read_and_update_locked(void)
 {
 	struct clip_context *ctx = clip_get_context();
 	float voltage, current, temp;
@@ -357,12 +363,28 @@ static void read_and_update(void)
 	display_update_status(&ds);
 }
 
+/* Wrapper: serialize read_and_update_locked() across threads (display_thread
+ * and system workqueue both call it; the fuel gauge is non-reentrant). */
+static void read_and_update(void)
+{
+	k_mutex_lock(&battery_mutex, K_FOREVER);
+	read_and_update_locked();
+	k_mutex_unlock(&battery_mutex);
+}
+
 /* NPM1300 event callback — called from system work queue context */
 static struct gpio_callback pmic_cb;
 
 static void pmic_event_callback(const struct device *dev, struct gpio_callback *cb,
 				uint32_t pins)
 {
+	/* Don't post events or read sensors before the system is initialized
+	 * (event_notify_sem may not be set up yet — battery_init runs before
+	 * clip_event_init in main.c). */
+	if (!init_complete) {
+		return;
+	}
+
 	if (pins & BIT(NPM13XX_EVENT_VBUS_DETECTED)) {
 		LOG_INF("PMIC event: VBUS detected");
 		clip_post_event(CLIP_EVENT_USB_CONNECTED);
