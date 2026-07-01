@@ -621,8 +621,11 @@ static int cmd_pair_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
         }
 
         /* Clear bonds and persist before reboot. ble_clear_bonds may
-         * drop the BLE link, so send the response first. */
+         * drop the BLE link, so send the response first. Rotate the BLE
+         * identity first so iOS (which caches stale bonds) sees a new device
+         * and re-pairs fresh after the reboot. */
         int ret = create_json_response(true, NULL, "{\"rebooting\":true}", response, len);
+        ble_rotate_identity();
         ble_clear_bonds();
         settings_save();
         storage_format_card();

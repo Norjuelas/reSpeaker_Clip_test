@@ -137,6 +137,17 @@ int ble_get_bond_addr(char *addr_buf, size_t len);
 int ble_clear_bonds(void);
 
 /**
+ * @brief Rotate the BLE identity address (AT+PAIR=reset)
+ *
+ * Creates a second local identity (id 1) with a new random address on the
+ * first call, or resets id 1 to a new address on later calls. Used so a peer
+ * that caches a stale bond (iOS) sees a new device and re-pairs fresh.
+ *
+ * @return 0 on success, negative error code on failure
+ */
+int ble_rotate_identity(void);
+
+/**
  * @brief Get BLE connection
  *
  * @return Connection pointer or NULL if not connected
