@@ -292,9 +292,8 @@ static void read_and_update(void)
 		percent = (uint8_t)(smoothed_soc + 0.5f);
 	}
 
-	/*
-        /* Displayed percentage = actual SoC (no bottom reserve). */
-        uint8_t display_percent = percent;
+	/* Displayed percentage = actual SoC (no bottom reserve). */
+	uint8_t display_percent = percent;
 	/* Update battery percent (display value) */
 	if (display_percent != last_percent) {
 		last_percent = display_percent;

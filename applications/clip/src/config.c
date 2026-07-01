@@ -76,12 +76,11 @@ static int config_settings_set(const char *name, size_t len,
         const char *key = entry->name + 7;  /* Skip "config/" */
 
         if (strcmp(name, key) == 0) {
-            uint8_t buffer[32];
-            int rc = read_cb(cb_arg, buffer, entry->size);
+            int rc = read_cb(cb_arg, (uint8_t *)&ctx->config + entry->offset,
+                             entry->size);
             if (rc < 0) {
                 return rc;
             }
-            memcpy((uint8_t *)&ctx->config + entry->offset, buffer, entry->size);
             return 0;
         }
     }

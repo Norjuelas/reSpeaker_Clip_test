@@ -44,10 +44,8 @@ static uint16_t next_seq;
 static struct k_sem file_ack_sem;
 static volatile int8_t file_ack_result;  /* -1=none, 0=OK, 1=NACK */
 
-/* Heartbeat */
+/* Connection activity tracking (for UDP inactivity timeout) */
 static int64_t last_activity_time;
-static struct k_timer heartbeat_timer;
-static struct k_work heartbeat_work;
 
 /* Per-file transfer state */
 static uint32_t current_file_crc;
@@ -60,7 +58,6 @@ static int udp_send_file_end_impl(const char *filename);
 static int udp_send_transfer_done_impl(const char *session_id, uint32_t file_count);
 static bool udp_is_connected(void);
 static void *udp_get_conn(void);
-static void send_heartbeat(struct k_work *work);
 static void update_activity(void);
 static int raw_sendto(const void *buf, size_t len);
 
@@ -222,25 +219,6 @@ static int build_transfer_done_frame(uint8_t *buf, const char *session_id, uint3
     buf[2 + sid_len + 3] = (file_count >> 24) & 0xFF;
 
     return 2 + sid_len + 4;
-}
-
-/* ========================================================================== */
-/* Heartbeat                                                                   */
-/* ========================================================================== */
-
-static void send_heartbeat(struct k_work *work)
-{
-    ARG_UNUSED(work);
-
-    uint8_t hb[UDP_HEARTBEAT_SIZE];
-    hb[0] = UDP_FRAME_HEARTBEAT;
-    int64_t ts = k_uptime_get();
-    memcpy(&hb[1], &ts, 4);
-
-    raw_sendto(hb, sizeof(hb));
-
-    /* Schedule next heartbeat */
-    k_timer_start(&heartbeat_timer, K_MSEC(CONFIG_CLIP_UDP_HEARTBEAT_INTERVAL_MS), K_NO_WAIT);
 }
 
 /* ========================================================================== */
@@ -411,9 +389,6 @@ int transport_udp_init(void)
     file_ack_result = -1;
     k_sem_init(&file_ack_sem, 0, 1);
 
-    /* Heartbeat */
-    k_timer_init(&heartbeat_timer, NULL, NULL);
-    k_work_init(&heartbeat_work, send_heartbeat);
     last_activity_time = k_uptime_get();
 
     /* File state */
@@ -491,9 +466,6 @@ void transport_udp_update_active(bool active)
         /* Wake transfer thread if blocked waiting for FILE_ACK */
         file_ack_result = -1;
         k_sem_give(&file_ack_sem);
-    } else {
-        /* Start heartbeat when becoming active */
-        k_timer_start(&heartbeat_timer, K_MSEC(CONFIG_CLIP_UDP_HEARTBEAT_INTERVAL_MS), K_NO_WAIT);
     }
     update_activity();
 }
