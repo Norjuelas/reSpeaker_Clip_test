@@ -120,6 +120,12 @@ static struct audio_stats stats = {0};
 static uint64_t encode_time_total_us = 0;
 static uint64_t dsp_time_total_us = 0;
 
+/* Hand-rolled AGC / high-pass filter state (MERGE mode). Reset on each
+ * new recording to avoid stale gain from a loud prior session. */
+static int32_t agc_hp_x1 = 0;
+static int32_t agc_envelope = 0;
+static int32_t agc_gain_q8 = 256;
+
 /* CPU cycle counter helpers (DWT->CYCCNT at 128 MHz) */
 #define CPU_FREQ_HZ 128000000
 static inline uint32_t cyc_to_us(uint32_t cycles)
@@ -462,29 +468,14 @@ static int audio_start_recording_internal(enum audio_mode mode)
     encode_time_total_us = 0;
     dsp_time_total_us = 0;
 
+    /* Reset hand-rolled AGC / high-pass filter state */
+    agc_hp_x1 = 0;
+    agc_envelope = 0;
+    agc_gain_q8 = 256;
+
     /* Reset file index */
     current_file_index = 1;
     file_start_frame_count = 0;
-
-    /* Create storage session */
-    uint8_t channels = (mode == AUDIO_MODE_STEREO) ? 2 : 1;
-    const char *mode_str = (mode == AUDIO_MODE_STEREO) ? "stereo" : "mono";
-    ret = storage_create_session(current_session_id, channels,
-                                 AUDIO_SAMPLE_RATE, mode_str);
-    if (ret != 0 && ret != -EEXIST) {
-        LOG_WRN("Failed to create storage session: %d", ret);
-        /* Continue anyway - storage is optional */
-    }
-
-    /* Create first file */
-    ret = storage_create_file(&current_storage_file, current_session_id, current_file_index);
-    if (ret != 0) {
-        LOG_WRN("Failed to create storage file: %d", ret);
-        /* Continue anyway - storage is optional */
-    } else {
-        file_start_frame_count = 0;
-        LOG_DBG("Recording to: %s", current_storage_file.filename);
-    }
 
     /* Boost CPU to 128MHz for encoding, before mic power-on.
      * The 10ms mic stabilization delay also serves as CPU frequency
@@ -539,6 +530,26 @@ static int audio_start_recording_internal(enum audio_mode mode)
 
     /* Discard initial frames to eliminate mic power-up pop */
     dmic_flush_initial();
+
+    /* Create storage session + first file — done AFTER mic/opus/dmic init
+     * so a failure in those steps doesn't leak an orphan session. */
+    {
+        uint8_t channels = (mode == AUDIO_MODE_STEREO) ? 2 : 1;
+        const char *mode_str = (mode == AUDIO_MODE_STEREO) ? "stereo" : "mono";
+        ret = storage_create_session(current_session_id, channels,
+                                     AUDIO_SAMPLE_RATE, mode_str);
+        if (ret != 0 && ret != -EEXIST) {
+            LOG_WRN("Failed to create storage session: %d", ret);
+        }
+
+        ret = storage_create_file(&current_storage_file, current_session_id,
+                                  current_file_index);
+        if (ret != 0) {
+            LOG_WRN("Failed to create storage file: %d", ret);
+        } else {
+            LOG_DBG("Recording to: %s", current_storage_file.filename);
+        }
+    }
 
     recording_active = true;
     is_paused = false;
@@ -788,7 +799,7 @@ void audio_recording_thread(void *p1, void *p2, void *p3)
 
             /* Update statistics */
             stats.frames_encoded++;
-            stats.recording_time_ms = stats.frames_encoded * AUDIO_FRAME_MS;
+            stats.recording_time_ms = (uint64_t)stats.frames_encoded * AUDIO_FRAME_MS;
             stats.total_bytes += encoded_bytes;
             recording_frame_count++;
 
@@ -1164,11 +1175,10 @@ static int16_t *process_pcm_frame(int16_t *stereo_input, int frame_size)
 #ifdef CONFIG_SPEEXDSP
         /* First-order high-pass filter (fc≈100Hz at 16kHz) */
         {
-            static int32_t hp_x1 = 0;
             for (int i = 0; i < frame_size; i++) {
                 int32_t x = processed_buffer[i];
-                processed_buffer[i] = (int16_t)(x - hp_x1);
-                hp_x1 += (x - hp_x1) * 39 >> 10;
+                processed_buffer[i] = (int16_t)(x - agc_hp_x1);
+                agc_hp_x1 += (x - agc_hp_x1) * 39 >> 10;
             }
         }
 
@@ -1187,8 +1197,7 @@ static int16_t *process_pcm_frame(int16_t *stereo_input, int frame_size)
          * Uses arm_absmax_q15() for fast peak detection (CMSIS-DSP).
          */
         {
-            static int32_t agc_envelope = 0;   /* Peak envelope (amplitude) */
-            static int32_t agc_gain_q8 = 256;  /* Current gain, Q8.8 (256=1.0x) */
+            /* AGC state is file-scope (reset on each new recording) */
 
             /* Step 1: Envelope detector - find peak in frame */
             int32_t peak = 0;
