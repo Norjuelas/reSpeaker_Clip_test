@@ -28,7 +28,7 @@ USBD_DEVICE_DEFINE(clip_usbd,
 /* String descriptors */
 USBD_DESC_LANG_DEFINE(clip_lang);
 USBD_DESC_MANUFACTURER_DEFINE(clip_mfr, "Seeed");
-USBD_DESC_PRODUCT_DEFINE(clip_product, "ReSpeaker Clip");
+USBD_DESC_PRODUCT_DEFINE(clip_product, "reSpeaker Clip");
 
 /* Configuration descriptor (bus-powered, 100mA) */
 USBD_DESC_CONFIG_DEFINE(clip_fs_cfg, "Default");

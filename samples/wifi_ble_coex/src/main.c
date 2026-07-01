@@ -719,7 +719,7 @@ int main(void)
                     K_PRIO_COOP(-1), 0, K_NO_WAIT);
 
     printk("\n================================================\n");
-    printk("  ReSpeaker Clip: WiFi AP + BLE Coex Test\n");
+    printk("  reSpeaker Clip: WiFi AP + BLE Coex Test\n");
     printk("================================================\n\n");
 
     /* BLE starts first so phone can connect immediately */

@@ -176,7 +176,7 @@ class OggOpusWriter:
         # OpusTags packet
         opus_tags = bytearray()
         opus_tags.extend(b'OpusTags')         # Magic signature (8)
-        vendor = b'ReSpeaker Clip'
+        vendor = b'reSpeaker Clip'
         opus_tags.extend(struct.pack('<I', len(vendor)))
         opus_tags.extend(vendor)
         opus_tags.extend(struct.pack('<I', 0))  # User comment list length (4)

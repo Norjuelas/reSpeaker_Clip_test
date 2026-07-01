@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
-# ReSpeaker Lav custom libraries CMakeLists.txt
+# reSpeaker Lav custom libraries CMakeLists.txt
 
 # Add Opus audio codec library
 add_subdirectory_ifdef(CONFIG_OPUS_CODEC opus)

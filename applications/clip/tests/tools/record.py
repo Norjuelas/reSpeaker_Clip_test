@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-ReSpeaker Clip Record Tool
+reSpeaker Clip Record Tool
 
 Record and sync in real-time. Press SPACE to pause/resume, M to add bookmarks.
 
@@ -286,7 +286,7 @@ async def record_and_sync(
 
     try:
         print("=" * 60)
-        print("ReSpeaker Clip - Record & Sync")
+        print("reSpeaker Clip - Record & Sync")
         print("=" * 60)
 
         print("\nConnecting to device...")
@@ -684,7 +684,7 @@ async def record_and_sync(
 async def main():
     import argparse
     parser = argparse.ArgumentParser(
-        description="ReSpeaker Clip Record & Sync Tool",
+        description="reSpeaker Clip Record & Sync Tool",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:

@@ -1,5 +1,5 @@
 sample:
-  description: WiFi AP + iperf throughput test sample for ReSpeaker Clip
+  description: WiFi AP + iperf throughput test sample for reSpeaker Clip
   name: WiFi AP + iperf
 common:
   build_only: true

@@ -1,6 +1,6 @@
 # HSZ 362123 Battery Model (170mAh)
 
-Battery fuel gauge example for ReSpeaker Clip using Nordic nRF Fuel Gauge Library.
+Battery fuel gauge example for reSpeaker Clip using Nordic nRF Fuel Gauge Library.
 
 ## Battery Specifications
 
@@ -17,7 +17,7 @@ Battery fuel gauge example for ReSpeaker Clip using Nordic nRF Fuel Gauge Librar
 ## Building
 
 ```sh
-cd /home/shaolin/hello_world/ReSpeaker_Clip
+cd /home/shaolin/hello_world/reSpeaker_Clip
 source ~/ncs/v3.2.1/zephyr/zephyr-env.sh
 export ZEPHYR_EXTRA_MODULES=$(pwd)
 west build --build-dir build/battery_170 --pristine --board clip/nrf5340/cpuapp samples/battery_170

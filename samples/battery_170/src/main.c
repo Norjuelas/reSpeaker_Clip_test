@@ -1,5 +1,5 @@
 /*
- * Battery Model with NPM1300 Fuel Gauge for ReSpeaker Clip
+ * Battery Model with NPM1300 Fuel Gauge for reSpeaker Clip
  * Using Nordic nRF Fuel Gauge Library
  *
  * Battery: HSZ 362123

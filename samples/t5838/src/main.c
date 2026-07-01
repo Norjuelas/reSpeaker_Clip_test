@@ -82,7 +82,7 @@ int main(void)
 	void *buffer = NULL;
 	uint32_t size;
 
-	LOG_INF("ReSpeaker Lav T5838 PDM Test");
+	LOG_INF("reSpeaker Lav T5838 PDM Test");
 
 	if (!device_is_ready(dmic)) {
 		LOG_ERR("DMIC device not ready");

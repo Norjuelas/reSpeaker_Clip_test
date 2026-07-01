@@ -9,7 +9,7 @@ Overview
 ========
 
 This sample demonstrates how to use the nRF7002 WiFi chip on the
-ReSpeaker Clip board in Access Point (AP) mode combined with zperf
+reSpeaker Clip board in Access Point (AP) mode combined with zperf
 client for network throughput testing.
 
 The device acts as a WiFi hotspot. After connecting a PC to the AP,
@@ -29,7 +29,7 @@ Features
 Requirements
 ============
 
-- ReSpeaker Clip board with nRF5340 and nRF7002
+- reSpeaker Clip board with nRF5340 and nRF7002
 - PC with iperf/iperf2/iperf3 installed
 - Serial console for shell commands
 
@@ -151,7 +151,7 @@ Serial Output Example
 
    *** Booting Zephyr OS build v3.2.1-ncs1 ***
    ================================================
-      ReSpeaker Clip WiFi AP + iperf Sample
+      reSpeaker Clip WiFi AP + iperf Sample
    ================================================
 
    AP SSID: ClipAP_A1B2

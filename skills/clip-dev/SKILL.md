@@ -1,7 +1,7 @@
 ---
 name: clip-dev
 description: |
-  ReSpeaker Clip firmware development guide for Zephyr RTOS on nRF5340.
+  reSpeaker Clip firmware development guide for Zephyr RTOS on nRF5340.
   Use when building firmware, configuring MCUboot, working with audio pipeline
   (PDM/Opus/SpeexDSP), BLE AT commands, WiFi AP/UDP transfer, OLED display,
   SD card storage, PMIC power management, or nRF5340 dual-core architecture.
@@ -11,9 +11,9 @@ compatibility: Requires NCS v3.2.1, Zephyr RTOS, west build tool, nRF Connect SD
 version: 1.0.0
 ---
 
-# ReSpeaker Clip Development Skill
+# reSpeaker Clip Development Skill
 
-Zephyr RTOS firmware for the Seeed ReSpeaker Clip voice recording device,
+Zephyr RTOS firmware for the Seeed reSpeaker Clip voice recording device,
 based on Nordic nRF5340 dual-core MCU with BLE, WiFi AP, OLED display,
 PDM microphone array, SD card storage, and OTA firmware updates.
 

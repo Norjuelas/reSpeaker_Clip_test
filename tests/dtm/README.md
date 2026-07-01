@@ -1,6 +1,6 @@
 # BLE Direct Test Mode (DTM) for Clip
 
-Bluetooth Direct Test Mode firmware for RF testing and certification on the ReSpeaker Clip board.
+Bluetooth Direct Test Mode firmware for RF testing and certification on the reSpeaker Clip board.
 
 ## Overview
 

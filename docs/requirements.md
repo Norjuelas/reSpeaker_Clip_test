@@ -1,10 +1,10 @@
-# ReSpeaker Clip - Product Requirements Document
+# reSpeaker Clip - Product Requirements Document
 
 ## 1. Product Overview
 
 ### 1.1 Product Vision
 
-ReSpeaker Clip is a portable Bluetooth recording device that provides high-quality audio capture with seamless mobile app integration. The device enables users to record lectures, meetings, and personal notes with intelligent audio processing, convenient bookmarking, and wireless synchronization via BLE or WiFi UDP.
+reSpeaker Clip is a portable Bluetooth recording device that provides high-quality audio capture with seamless mobile app integration. The device enables users to record lectures, meetings, and personal notes with intelligent audio processing, convenient bookmarking, and wireless synchronization via BLE or WiFi UDP.
 
 ### 1.2 Target Users
 

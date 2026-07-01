@@ -5,7 +5,7 @@
  */
 
 /*
- * HTTP Server Sample for ReSpeaker Clip
+ * HTTP Server Sample for reSpeaker Clip
  *
  * Features:
  * - WiFi AP mode with DHCP server
@@ -289,14 +289,14 @@ static void handle_root(struct http_req *request)
 
     static const char html[] =
         "<!DOCTYPE html>"
-        "<html><head><title>ReSpeaker Clip</title>"
+        "<html><head><title>reSpeaker Clip</title>"
         "<meta name='viewport' content='width=device-width,initial-scale=1'>"
         "<style>body{font-family:Arial,sans-serif;margin:40px;background:#f5f5f5}"
         "h1{color:#333}.endpoint{background:#fff;padding:15px;margin:10px 0;"
         "border-radius:8px;box-shadow:0 2px 4px rgba(0,0,0,0.1)}"
         "code{background:#e8e8e8;padding:2px 6px;border-radius:3px}"
         "a{color:#0066cc;text-decoration:none}a:hover{text-decoration:underline}</style></head>"
-        "<body><h1>ReSpeaker Clip HTTP Server</h1>"
+        "<body><h1>reSpeaker Clip HTTP Server</h1>"
         "<div class='endpoint'><h3>API Endpoints</h3>"
         "<p><code>GET /</code> - This page</p>"
         "<p><code>GET /status</code> - System status (JSON)</p>"
@@ -1190,7 +1190,7 @@ int main(void)
     net_mgmt_add_event_callback(&l4_mgmt_cb);
 
     printk("\n================================================\n");
-    printk("  ReSpeaker Clip: HTTP Server Sample\n");
+    printk("  reSpeaker Clip: HTTP Server Sample\n");
     printk("================================================\n\n");
 
     /* Wait for WiFi driver to initialize */

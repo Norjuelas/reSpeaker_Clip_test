@@ -9,13 +9,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-ReSpeaker Clip is a Zephyr RTOS firmware project for the Seeed ReSpeaker Clip board, based on the Nordic nRF5340 dual-core MCU. It is a voice recording device with BLE, WiFi AP, and USB connectivity, AT command control, and UDP file transfer.
+reSpeaker Clip is a Zephyr RTOS firmware project for the Seeed reSpeaker Clip board, based on the Nordic nRF5340 dual-core MCU. It is a voice recording device with BLE, WiFi AP, and USB connectivity, AT command control, and UDP file transfer.
 
 - **RTOS**: Zephyr RTOS v3.3.0 (via Nordic nRF Connect SDK) — active on `main`. v3.2.1 is no longer supported (`main` requires v3.3.0-only Kconfig).
 - **Hardware**: nRF5340 (dual-core: Application core + Network core)
 - **Key Features**: PDM microphone array, OLED display (CH1115), SD card, WiFi (nRF7002), external SPI flash, haptic motor, battery monitoring (NPM1300 + nRF Fuel Gauge, custom "240"/HSZ 362123 model), USB CDC serial + USB MSC (SD card mass storage)
 
-This repo (`module.yml` → `board_root`/`dts_root`) also carries the lineage of the related **ReSpeaker Lav** lavalier product (see the `reSpeaker Lav/` tree, the `240` battery, and DTS comments referencing "Lav"). The Clip is the active target.
+This repo (`module.yml` → `board_root`/`dts_root`) also carries the lineage of the related **reSpeaker Lav** lavalier product (see the `reSpeaker Lav/` tree, the `240` battery, and DTS comments referencing "Lav"). The Clip is the active target.
 
 ## Environment Setup
 
@@ -315,7 +315,7 @@ cp build-clip/dfu_application.zip output/
 cd ~/ncs/v3.2.1/bootloader/mcuboot
 
 # For existing tracked files (main.c, Kconfig, CMakeLists, etc.)
-git diff boot/zephyr/main.c > /path/to/ReSpeaker_Clip/patches/mcuboot/XXXX.patch
+git diff boot/zephyr/main.c > /path/to/reSpeaker_Clip/patches/mcuboot/XXXX.patch
 
 # For new files (io_display.c), use sed to prefix '+'
 { echo "diff --git a/boot/zephyr/io_display.c b/boot/zephyr/io_display.c"
@@ -324,7 +324,7 @@ git diff boot/zephyr/main.c > /path/to/ReSpeaker_Clip/patches/mcuboot/XXXX.patch
   echo "+++ b/boot/zephyr/io_display.c"
   printf "@@ -0,0 +1,%d @@\n" $(wc -l < boot/zephyr/io_display.c)
   sed 's/^/+/' boot/zephyr/io_display.c
-} >> /path/to/ReSpeaker_Clip/patches/mcuboot/XXXX.patch
+} >> /path/to/reSpeaker_Clip/patches/mcuboot/XXXX.patch
 
 # Multiple file changes can be combined into one patch:
 git diff boot/zephyr/CMakeLists.txt boot/zephyr/Kconfig boot/zephyr/main.c >> patch.diff

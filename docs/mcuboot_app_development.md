@@ -1,10 +1,10 @@
-# MCUboot Application Development for ReSpeaker Clip
+# MCUboot Application Development for reSpeaker Clip
 
-This guide explains how to build Zephyr RTOS applications that run under the ReSpeaker Clip's custom MCUboot bootloader, including OTA (Over-The-Air) firmware updates.
+This guide explains how to build Zephyr RTOS applications that run under the reSpeaker Clip's custom MCUboot bootloader, including OTA (Over-The-Air) firmware updates.
 
 ## Overview
 
-The ReSpeaker Clip uses a customized MCUboot bootloader that provides:
+The reSpeaker Clip uses a customized MCUboot bootloader that provides:
 
 - **Secure boot**: RSA-2048 signed image verification
 - **Dual-core OTA**: Simultaneous updates for Application core and Network core
@@ -126,7 +126,7 @@ Once MCUboot is on the device, use OTA to update just the application:
 ```bash
 # Use the dfu_application.zip with nRF Connect or mcumgr
 mcumgr image upload build-hello/dfu_application.zip \
-    --conntype ble --connstring peer_name="ReSpeaker Clip"
+    --conntype ble --connstring peer_name="reSpeaker Clip"
 ```
 
 **USB Serial DFU (recovery mode):**

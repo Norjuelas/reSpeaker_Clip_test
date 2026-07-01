@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /*
- * Overlay for ReSpeaker Lav to set UART baudrate to 921600
+ * Overlay for reSpeaker Lav to set UART baudrate to 921600
  * for faster data transfer in T5838 PDM microphone test
  */
 

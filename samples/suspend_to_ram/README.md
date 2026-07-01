@@ -1,7 +1,7 @@
 # suspend_to_ram
 
 Minimal Zephyr sample for measuring the **System ON suspend-to-RAM
-(`PM_STATE_SUSPEND_TO_RAM`) current** of the ReSpeaker Clip (nRF5340).
+(`PM_STATE_SUSPEND_TO_RAM`) current** of the reSpeaker Clip (nRF5340).
 
 The application does nothing in the main thread. Once it yields, the
 Zephyr idle thread enters the deepest available PM state, which on

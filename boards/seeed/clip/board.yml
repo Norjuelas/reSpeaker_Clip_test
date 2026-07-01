@@ -1,6 +1,6 @@
 board:
   name: clip
-  full_name: ReSpeaker Clip
+  full_name: reSpeaker Clip
   vendor: seeed
   socs:
   - name: nrf5340

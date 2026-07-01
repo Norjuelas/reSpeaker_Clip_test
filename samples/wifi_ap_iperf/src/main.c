@@ -5,7 +5,7 @@
  */
 
 /*
- * WiFi AP + iperf Throughput Test Sample for ReSpeaker Clip
+ * WiFi AP + iperf Throughput Test Sample for reSpeaker Clip
  *
  * WiFi-only sample (no BLE). Device acts as a WiFi AP hotspot with
  * configurable channel (2.4G/5G) and zperf UDP throughput testing.

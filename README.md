@@ -1,9 +1,9 @@
-# ReSpeaker Clip Firmware
+# reSpeaker Clip Firmware
 
-This is a Zephyr RTOS based firmware project for ReSpeaker Clip. It is designed for voice recognition, audio processing and other embedded applications.
+This is a Zephyr RTOS based firmware project for reSpeaker Clip. It is designed for voice recognition, audio processing and other embedded applications.
 
 ## Overview
-- **Platform**: ReSpeaker Clip
+- **Platform**: reSpeaker Clip
 - **RTOS**: Zephyr RTOS
 - **Purpose**: Audio capture, voice recognition, device control
 
@@ -67,7 +67,7 @@ west flash
 
 ## Documentation
 - [Zephyr Project Documentation](https://docs.zephyrproject.org/latest/)
-- [ReSpeaker Clip Hardware Documentation]
+- [reSpeaker Clip Hardware Documentation]
 
 ## License
 This project is licensed under the Apache 2.0 License.

@@ -1,8 +1,8 @@
-# ReSpeaker Clip 硬件测试套件
+# reSpeaker Clip 硬件测试套件
 
 ## 概述
 
-此测试套件为基于 nRF5340 的 ReSpeaker Clip 板提供全面的硬件组件测试。
+此测试套件为基于 nRF5340 的 reSpeaker Clip 板提供全面的硬件组件测试。
 
 ## 构建
 

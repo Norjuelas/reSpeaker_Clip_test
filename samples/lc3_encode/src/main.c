@@ -548,7 +548,7 @@ int main(void)
 	int64_t dsp_time_max = 0;
 	int64_t dsp_time_total = 0;
 
-	LOG_INF("ReSpeaker Clip LC3 Streaming Encoder");
+	LOG_INF("reSpeaker Clip LC3 Streaming Encoder");
 
 	if (!device_is_ready(dmic)) {
 		LOG_ERR("DMIC device not ready");

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Test ReSpeaker Clip MCUboot factory erase commands.
+"""Test reSpeaker Clip MCUboot factory erase commands.
 
 Requires: pip install smpclient
 

@@ -648,7 +648,7 @@ int main(void)
 	uint32_t dsp_time_max_us = 0;
 	uint64_t dsp_time_total_us = 0;
 
-	LOG_INF("ReSpeaker Lav Opus Streaming Encoder");
+	LOG_INF("reSpeaker Lav Opus Streaming Encoder");
 
 	if (!device_is_ready(dmic)) {
 		LOG_ERR("DMIC device not ready");

@@ -7,7 +7,7 @@ index 3cdbf4df..60b489d2 100644
      }
  
 +#if defined(CONFIG_SOC_NRF5340_CPUAPP)
-+    /* ReSpeaker Clip patch: require USB VBUS to be present before entering serial recovery
++    /* reSpeaker Clip patch: require USB VBUS to be present before entering serial recovery
 +     * via GPIO. The button doubles as an 8-second hardware reset; without this guard,
 +     * every button-reset would trigger DFU. With USB connected = intentional DFU entry. */
 +    if (pin_active) {

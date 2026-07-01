@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Serial AT Command Terminal for ReSpeaker Clip
+Serial AT Command Terminal for reSpeaker Clip
 
 Interactive terminal for testing AT commands over USB CDC serial.
 Device appears as a virtual serial port when connected via USB.
@@ -137,7 +137,7 @@ class SerialTerminal:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Serial AT Terminal for ReSpeaker Clip")
+    parser = argparse.ArgumentParser(description="Serial AT Terminal for reSpeaker Clip")
     parser.add_argument("port", nargs="?", help="Serial port (auto-detect if omitted)")
     parser.add_argument("-b", "--baudrate", type=int, default=115200,
                         help="Baud rate (default: 115200)")

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-ReSpeaker Clip Sync Tool
+reSpeaker Clip Sync Tool
 
 Sync/Download files from the device using the clip library.
 
@@ -32,7 +32,7 @@ except ImportError:
 async def main():
     import argparse
     parser = argparse.ArgumentParser(
-        description="ReSpeaker Clip Sync Tool",
+        description="reSpeaker Clip Sync Tool",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:

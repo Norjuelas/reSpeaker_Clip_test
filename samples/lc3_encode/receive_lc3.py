@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-LC3 Audio Receiver for ReSpeaker Clip
+LC3 Audio Receiver for reSpeaker Clip
 
 Receives LC3 encoded audio data from UART and decodes it to WAV file.
 Supports multiple start/stop sessions, auto-names files by datetime.
@@ -373,7 +373,7 @@ class LC3UARTReceiver:
 
 def main():
     parser = argparse.ArgumentParser(
-        description='LC3 Audio Receiver for ReSpeaker Clip',
+        description='LC3 Audio Receiver for reSpeaker Clip',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog='''
 Audio modes:

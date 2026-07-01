@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
-# ReSpeaker Lav custom drivers CMakeLists.txt
+# reSpeaker Lav custom drivers CMakeLists.txt
 
 # Add input driver
 add_subdirectory_ifdef(CONFIG_GPIO_BUTTON input)

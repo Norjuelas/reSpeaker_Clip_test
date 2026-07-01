@@ -1,7 +1,7 @@
 /*
  * SPDX-License-Identifier: Apache-2.0
  *
- * PM_STATE_SUSPEND_TO_RAM test for ReSpeaker Clip (nRF5340) with the
+ * PM_STATE_SUSPEND_TO_RAM test for reSpeaker Clip (nRF5340) with the
  * peripheral rails turned off. No nRF7002 / MPSL / WiFi / BT stack.
  *
  * Tests SD card mount/unmount/poweroff in a loop every 30s to verify

@@ -2,11 +2,11 @@
 
 ## Overview
 
-This sample demonstrates PDM (Pulse Density Modulation) microphone recording on the ReSpeaker Lav board.
+This sample demonstrates PDM (Pulse Density Modulation) microphone recording on the reSpeaker Lav board.
 
 ## Hardware
 
-- **Board**: ReSpeaker Lav (nRF5340)
+- **Board**: reSpeaker Lav (nRF5340)
 - **Microphone**: T5838 PDM microphone or compatible PDM microphone array
 
 ## Features
@@ -59,4 +59,4 @@ The sample will:
 ## Requirements
 
 - Zephyr RTOS NCS v3.2.1
-- ReSpeaker Lav board with PDM microphone
+- reSpeaker Lav board with PDM microphone

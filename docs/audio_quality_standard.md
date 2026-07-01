@@ -2,7 +2,7 @@
 
 ## 1. Overview
 
-This document defines the testing standards and methods for evaluating the audio recording quality of the ReSpeaker Clip device. Clip recordings are primarily used for **speech-to-text (ASR)** and **content summarization**. The core requirements are speech intelligibility and transcription accuracy. The target language is **Chinese and English mixed**.
+This document defines the testing standards and methods for evaluating the audio recording quality of the reSpeaker Clip device. Clip recordings are primarily used for **speech-to-text (ASR)** and **content summarization**. The core requirements are speech intelligibility and transcription accuracy. The target language is **Chinese and English mixed**.
 
 ### 1.1 Audio Signal Chain
 

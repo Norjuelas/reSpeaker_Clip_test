@@ -1,4 +1,4 @@
-# Opus Streaming Encoder for ReSpeaker Lav
+# Opus Streaming Encoder for reSpeaker Lav
 
 实时音频编码和流式传输应用，使用 Opus 编码器将麦克风数据编码后通过 UART 发送。
 

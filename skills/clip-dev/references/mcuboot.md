@@ -113,7 +113,7 @@ my_app/
 
 ```sh
 mcumgr image upload build-clip/dfu_application.zip \
-    --conntype ble --connstring peer_name="ReSpeaker Clip"
+    --conntype ble --connstring peer_name="reSpeaker Clip"
 ```
 
 ### USB Serial DFU (recovery mode)

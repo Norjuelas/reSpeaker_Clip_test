@@ -1,6 +1,6 @@
 # WiFi Radio Test for Clip
 
-WiFi radio test firmware for RF testing and certification on the ReSpeaker Clip board.
+WiFi radio test firmware for RF testing and certification on the reSpeaker Clip board.
 
 ## Overview
 

@@ -1,6 +1,6 @@
 # Firmware Upgrade Guide
 
-Host-side procedures for upgrading ReSpeaker Clip firmware — no debug probe needed for
+Host-side procedures for upgrading reSpeaker Clip firmware — no debug probe needed for
 the USB and BLE paths. All host tools talk the **mcumgr Simple Management Protocol
 (SMP)** over the bootloader's USB CDC-ACM serial port or over BLE.
 

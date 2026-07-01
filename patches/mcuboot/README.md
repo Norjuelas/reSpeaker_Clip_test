@@ -10,11 +10,11 @@ needed for interactive development.
 
 ```sh
 cd ~/ncs/v3.3.0/bootloader/mcuboot
-git apply /path/to/ReSpeaker_Clip/patches/mcuboot/0001-require-vbus-for-gpio-serial-recovery.patch
-git apply /path/to/ReSpeaker_Clip/patches/mcuboot/0002-add-oled-display-support.patch
-git apply /path/to/ReSpeaker_Clip/patches/mcuboot/0003-add-serial-upload-progress-hook.patch
-git apply /path/to/ReSpeaker_Clip/patches/mcuboot/0004-add-custom-mcumgr-commands.patch
-git apply /path/to/ReSpeaker_Clip/patches/mcuboot/0005-add-swap-copy-progress-hook.patch
+git apply /path/to/reSpeaker_Clip/patches/mcuboot/0001-require-vbus-for-gpio-serial-recovery.patch
+git apply /path/to/reSpeaker_Clip/patches/mcuboot/0002-add-oled-display-support.patch
+git apply /path/to/reSpeaker_Clip/patches/mcuboot/0003-add-serial-upload-progress-hook.patch
+git apply /path/to/reSpeaker_Clip/patches/mcuboot/0004-add-custom-mcumgr-commands.patch
+git apply /path/to/reSpeaker_Clip/patches/mcuboot/0005-add-swap-copy-progress-hook.patch
 ```
 
 To verify a patch is already applied:
@@ -41,7 +41,7 @@ git status
 
 ### Problem
 
-The ReSpeaker Clip board uses a single button (`gpio1.15`) for two purposes:
+The reSpeaker Clip board uses a single button (`gpio1.15`) for two purposes:
 - **Short press**: user interaction (next track, toggle, etc.)
 - **Long press (8s)**: hardware reset via `BOOT_SERIAL_ENTRANCE_GPIO` detect delay
 
@@ -133,7 +133,7 @@ Adds a weak callback `boot_serial_upload_progress_hook(img_index, curr_off, img_
 
 ### Summary
 
-Adds custom mcumgr commands for ReSpeaker Clip factory reset via serial recovery:
+Adds custom mcumgr commands for reSpeaker Clip factory reset via serial recovery:
 - **Erase SD card** (group 64 / PERUSER, command 0): Powers the SD card on-demand (LDO2 `regulator_enable` → write zeros → `regulator_disable`), destroying the FAT filesystem header
 - **Erase LFS partition** (group 64 / PERUSER, command 1): Erases the first 128KB (2 LittleFS blocks) of the LFS partition on external flash to destroy the superblock, forcing a clean reformat that wipes BLE bonds and settings
 

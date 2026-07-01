@@ -1,8 +1,8 @@
-# ReSpeaker Clip Hardware Test Suite
+# reSpeaker Clip Hardware Test Suite
 
 ## Overview
 
-This test suite provides comprehensive testing for all hardware components on the ReSpeaker Clip board based on nRF5340.
+This test suite provides comprehensive testing for all hardware components on the reSpeaker Clip board based on nRF5340.
 
 ## Building
 

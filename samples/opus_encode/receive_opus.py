@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Opus Audio Receiver for ReSpeaker Lav
+Opus Audio Receiver for reSpeaker Lav
 
 Receives Opus encoded audio data from UART and decodes it to WAV file.
 Supports multiple start/stop sessions, auto-names files by datetime.
@@ -273,7 +273,7 @@ class OpusUARTReceiver:
 
 def main():
     parser = argparse.ArgumentParser(
-        description='Opus Audio Receiver for ReSpeaker Lav',
+        description='Opus Audio Receiver for reSpeaker Lav',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog='''
 Audio modes:
