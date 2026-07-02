@@ -1,4 +1,4 @@
-name: respeaker_lav
+name: respeaker_clip
 build:
   cmake: .
   kconfig: Kconfig

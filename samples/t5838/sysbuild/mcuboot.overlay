@@ -1,1 +1,1 @@
-../../_mcuboot/sysbuild/mcuboot.overlay
+../../../boards/seeed/clip/sysbuild/mcuboot.overlay
