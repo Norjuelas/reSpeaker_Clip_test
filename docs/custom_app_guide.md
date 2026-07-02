@@ -1,8 +1,8 @@
 # Custom App Development Guide for reSpeaker Clip
 
-This guide explains how to build your own Zephyr RTOS applications that run
-under the reSpeaker Clip's custom MCUboot bootloader — including how to flash,
-upgrade over BLE, and recover from a broken app.
+This guide explains how to build your own Zephyr RTOS applications for the
+reSpeaker Clip — and have them **automatically boot under the platform's custom
+MCUboot bootloader**, with no bootloader boilerplate of your own.
 
 > **Audience**: developers building custom firmware for the reSpeaker Clip
 > platform. The official clip app (`applications/clip/`) is one such app;
@@ -11,17 +11,38 @@ upgrade over BLE, and recover from a broken app.
 ## Overview
 
 The reSpeaker Clip is a **platform**: it ships with a full-featured voice
-recorder app, but you can write your own. Every app runs under the same
-custom MCUboot bootloader, which provides:
+recorder app, but you can write your own. The board itself provides the entire
+boot/upgrade infrastructure, so a custom app is just three files:
 
-- **Secure boot**: RSA-2048 signed image verification
-- **Dual-core OTA**: simultaneous app-core + network-core updates
-- **OLED display**: boot animation, "Recovery Mode", OTA progress bar
-- **USB serial DFU**: firmware recovery via USB CDC (always available, even
-  if your app is broken — this is your safety net)
-- **VBUS gating**: serial recovery only enters when USB is plugged in
-  (prevents accidental DFU from a long-press reset on battery)
-- **Factory reset commands**: erase SD card / erase settings from recovery
+```
+my_app/
+├── CMakeLists.txt
+├── prj.conf
+└── src/main.c
+```
+
+Build it, and you get a complete signed image that boots under the custom
+MCUboot — no `sysbuild.conf`, no `sysbuild/` folder, no signing-key setup.
+Everything the bootloader needs is defaulted by the board.
+
+### What the board provides automatically
+
+| Concern | Provided by | Where |
+|---------|-------------|-------|
+| Bootloader (custom MCUboot, RSA-signed, OLED, USB serial recovery) | board sysbuild Kconfig | `boards/seeed/clip/Kconfig.sysbuild` |
+| Dual-image OTA (app core + network core) | board sysbuild Kconfig | same |
+| Network-core BLE controller image | board sysbuild Kconfig | same |
+| MCUboot config (OLED, CDC, SD erase, PMIC) + device-tree overlay | board sysbuild glue | `boards/seeed/clip/sysbuild/{mcuboot.conf,mcuboot.overlay}` |
+| Network-core radio config | board sysbuild glue | `boards/seeed/clip/sysbuild/ipc_radio/prj.conf` |
+| Fixed flash partition layout | board (auto-discovered) | `boards/seeed/clip/pm_static_clip_nrf5340_cpuapp.yml` |
+| RSA-2048 signing key | board sysbuild Kconfig | `boards/seeed/clip/sysbuild/root-rsa-2048.pem` |
+| Console UART baud (921600) | board device tree | `clip_nrf5340_cpuapp.dts` `&uart0` |
+
+The mechanism: `boards/seeed/clip/Kconfig.sysbuild` sets every `SB_CONFIG_*`
+default for the board (Zephyr auto-sources it), and the module's
+`sysbuild/CMakeLists.txt` (registered via `sysbuild-cmake:` in
+`zephyr/module.yml`) points the mcuboot and ipc_radio images at the board's
+shared config. An app inherits all of this for free.
 
 ### Firmware Upgrade Paths
 
@@ -29,7 +50,7 @@ custom MCUboot bootloader, which provides:
 |------|------------|----------|
 | **BLE OTA** | Production wireless upgrades | Your app includes mcumgr (see [§5](#5-ble-ota-optional-recommended)) |
 | **USB Serial DFU** | App won't boot, BLE is dead, recovery | USB cable + `nrfutil` (see [§6](#6-usb-serial-dfu-the-safety-net)) |
-| **J-Link** | First-time flash, MCUboot update | J-Link probe + `west` (advanced, see [§4](#4-first-time-flash-j-link)) |
+| **J-Link** | First-time flash, MCUboot update | J-Link probe + `west` (see [§4](#4-first-time-flash-j-link)) |
 
 ### Boot Flow
 
@@ -37,47 +58,15 @@ custom MCUboot bootloader, which provides:
 Power On
   │
   ▼
-MCUboot (88KB @ 0x00000000)
-  │
-  ├─ Verify signature of slot0 image (RSA-2048)
-  ├─ Display boot animation on OLED
-  │
+MCUboot (88KB @ 0x00000000)        ← custom, RSA-signed, OLED boot animation
+  │  Verify signature of slot0 image (RSA-2048, project key)
   ▼
 Application (slot0 @ 0x00016000)
 ```
 
 If the image fails signature verification (or no valid image exists), MCUboot
-enters **serial recovery mode** — the OLED shows "Recovery Mode" and the
-device accepts firmware upload over USB.
-
-### Flash Partition Layout
-
-```
-Internal Flash (1MB)
-┌─────────────────────────────────┐ 0x00000000
-│  MCUboot (88KB)                 │
-├─────────────────────────────────┤ 0x00016000
-│  Image-0 Secure (264KB)         │  ← Primary app slot
-├─────────────────────────────────┤ 0x00058000
-│  Image-0 Non-Secure (192KB)     │
-├─────────────────────────────────┤ 0x00088000
-│  Image-1 Secure (256KB)         │  ← Secondary slot (OTA)
-├─────────────────────────────────┤ 0x000C8000
-│  Image-1 Non-Secure (192KB)     │
-└─────────────────────────────────┘ 0x00100000
-
-External SPI Flash (8MB, SPI3)
-┌─────────────────────────────────┐ 0x00000000
-│  Image-0 Secondary (~960KB)     │  ← OTA staging area
-├─────────────────────────────────┤ 0x000F0000
-│  Image-1 Secondary (~256KB)     │  ← Netcore OTA staging
-├─────────────────────────────────┤ 0x00130000
-│  LittleFS (~6.8MB)              │
-└─────────────────────────────────┘
-```
-
-> During OTA, the new firmware is written to the external flash first, then
-> MCUboot copies it to the internal flash slot during the next boot.
+enters **serial recovery mode** — the OLED shows "Recovery Mode" and the device
+accepts firmware upload over USB.
 
 ## 1. Prerequisites
 
@@ -85,7 +74,7 @@ External SPI Flash (8MB, SPI3)
 - Zephyr SDK (toolchain)
 - `west` (Zephyr's meta-tool)
 - `nrfutil` (for serial DFU — see [§6](#6-usb-serial-dfu-the-safety-net))
-- J-Link probe + nRF Connect for Desktop (for first-time flash only)
+- J-Link probe (for first-time flash only)
 
 ```bash
 source ~/ncs/v3.3.0/zephyr/zephyr-env.sh
@@ -97,45 +86,24 @@ export ZEPHYR_EXTRA_MODULES=$(pwd)
 
 ## 2. Create a Custom App
 
-The easiest way to start is to copy an existing sample:
+The easiest way to start is to copy a sample:
 
 ```bash
 cp -r samples/hello_world samples/my_app
 ```
 
-### Required File Structure
+A custom app needs only:
 
-```
-my_app/
-├── CMakeLists.txt
-├── prj.conf                        ← Your app's Kconfig
-├── src/
-│   └── main.c
-├── pm_static_clip_nrf5340_cpuapp.yml  ← REQUIRED (symlink)
-├── sysbuild.conf                   ← MCUboot settings (pick a tier)
-└── sysbuild/                       ← Symlinks to shared MCUboot config
-    ├── mcuboot.conf    → ../../_mcuboot/sysbuild/mcuboot.conf
-    ├── mcuboot.overlay → ../../_mcuboot/sysbuild/mcuboot.overlay
-    └── ipc_radio/
-        └── prj.conf    → ../../../_mcuboot/sysbuild/ipc_radio/prj.conf
-```
+| File | Purpose |
+|------|---------|
+| `CMakeLists.txt` | Standard Zephyr app CMake (`find_package(Zephyr)`) |
+| `prj.conf` | Your app's Kconfig |
+| `src/main.c` | Your code |
+| `boards/clip_nrf5340_cpuapp.overlay` | *(optional)* app-specific device-tree tweaks |
 
-> **`pm_static_clip_nrf5340_cpuapp.yml` is required.** It tells the
-> Partition Manager to use the fixed flash layout. Without it, the build
-> fails with a FLASH overflow error.
-
-### Sample Tiers
-
-Samples are organized by wireless requirements. Pick the `sysbuild.conf`
-from a sample matching your needs:
-
-| Tier | Features | Samples |
-|------|----------|---------|
-| **1** (Basic) | MCUboot only, no wireless | `hello_world`, `button_demo`, `lua_repl`, `battery_170`, `t5838` |
-| **2** (BLE) | MCUboot + BLE network core | `opus_encode`, `lc3_encode`, `suspend_to_ram` |
-| **3** (WiFi) | MCUboot + BLE + WiFi (nRF7002) | `http_server`, `wifi_ap_iperf`, `wifi_ble_coex` |
-
-To switch tiers, copy the `sysbuild.conf` from a sample in the desired tier.
+That's it — **no `sysbuild.conf`, no `sysbuild/` folder, no symlinks.** The
+board supplies the bootloader, signing key, network-core image, and flash
+layout automatically.
 
 ### Build
 
@@ -151,28 +119,24 @@ The build produces three images (sysbuild):
 | `build-myapp/merged.hex` | MCUboot + app core + net core (full flash) |
 | `build-myapp/merged_CPUNET.hex` | Network core only |
 | `build-myapp/dfu_application.zip` | BLE OTA package (app + net core) |
-| `build-myapp/<name>/zephyr/zephyr.signed.bin` | Signed app image (for USB serial DFU) |
+| `build-myapp/my_app/zephyr/zephyr.signed.bin` | Signed app image (for USB serial DFU) |
 
 ## 3. Signing Key
 
-All apps **must** be signed with the project's RSA-2048 key:
+Every app is signed with the project's RSA-2048 key, automatically:
 
 ```
-samples/_mcuboot/sysbuild/root-rsa-2048.pem
+boards/seeed/clip/sysbuild/root-rsa-2048.pem
 ```
 
-MCUboot verifies the signature at boot — images signed with a different key
-are rejected. The `sysbuild.conf` references the key via:
-
-```
-SB_CONFIG_BOOT_SIGNATURE_KEY_FILE="${APPLICATION_CONFIG_DIR}/../_mcuboot/sysbuild/root-rsa-2048.pem"
-```
+MCUboot verifies the signature at boot — images signed with a different key are
+rejected. The board's `Kconfig.sysbuild` sets this as the default
+(`$(ZEPHYR_RESPEAKER_CLIP_MODULE_DIR)/boards/seeed/clip/sysbuild/root-rsa-2048.pem`),
+so you do not configure it.
 
 > **Do NOT lose or change this key.** Devices already in the field have the
 > public key baked into MCUboot — they cannot accept images signed with a
 > different key without reflashing the bootloader (J-Link).
->
-> Do NOT use `bootloader/root-rsa-2048.pem` — it is a different key.
 
 ## 4. First-Time Flash (J-Link)
 
@@ -188,10 +152,14 @@ west flash --build-dir build-myapp && nrfutil device reset
 This installs MCUboot + your app + the network core in one shot. Only needed
 once — subsequent upgrades are wireless.
 
+> If flashing fails with "debug port unavailable" / "access port protected",
+> the core is asleep or locked. Recover with
+> `west flash --build-dir build-myapp --recover && nrfutil device reset`.
+
 ## 5. BLE OTA (optional, recommended)
 
-If your app needs wireless upgrade capability, add these Kconfig flags to
-your `prj.conf`:
+If your app needs wireless upgrade capability, add these Kconfig flags to your
+`prj.conf`:
 
 ```kconfig
 # BLE
@@ -215,16 +183,14 @@ nrfutil mcu-manager ble image-upload \
     --device <BLE_ADDRESS>
 ```
 
-> The `dfu_application.zip` can also be used for app + net core combined OTA.
-
-After upload, reset the device (or the app can call `sys_reboot`). MCUboot
-verifies the new image's signature and swaps it into the primary slot on
-the next boot. The OLED shows an OTA progress bar during the swap.
+After upload, reset the device. MCUboot verifies the new image's signature and
+swaps it into the primary slot on the next boot. The OLED shows an OTA progress
+bar during the swap.
 
 ## 6. USB Serial DFU (the safety net)
 
-**This always works** — even if your custom app won't boot, BLE is dead, or
-the device is in a boot loop. MCUboot's serial recovery mode runs from the
+**This always works** — even if your custom app won't boot, BLE is dead, or the
+device is in a boot loop. MCUboot's serial recovery mode runs from the
 bootloader partition, independent of the application.
 
 ### When to use
@@ -238,8 +204,8 @@ bootloader partition, independent of the application.
 **Hold the user button** while connecting USB. The OLED shows "Recovery Mode"
 and the device enumerates as a USB CDC serial port.
 
-> The VBUS gating patch ensures serial recovery only enters when USB power
-> is present — a long-press reset on battery does **not** trigger DFU.
+> The VBUS gating patch ensures serial recovery only enters when USB power is
+> present — a long-press reset on battery does **not** trigger DFU.
 
 ### Reflash
 
@@ -250,13 +216,15 @@ nrfutil install mcu-manager
 # Upload the signed image
 nrfutil mcu-manager serial image-upload \
     --firmware build-myapp/my_app/zephyr/zephyr.signed.bin \
-    --serial-port /dev/ttyACM0
+    --serial-port /dev/ttyACM1
 
 # Reset to apply (MCUboot verifies the signature and swaps on next boot)
-nrfutil mcu-manager serial reset --serial-port /dev/ttyACM0
+nrfutil mcu-manager serial reset --serial-port /dev/ttyACM1
 ```
 
-> On Windows, replace `/dev/ttyACM0` with `COM12` (or the actual COM port).
+> On this machine the Clip's UART0 debug console enumerates as `/dev/ttyACM1`
+> (the J-Link probe is `/dev/ttyACM0`). In MCUboot serial-recovery mode the
+> DFU CDC port is the same ACM device.
 >
 > **nrfutil docs**: <https://docs.nordicsemi.com/bundle/nrfutil/latest/page/guides/device_tools/mcu_manager_serial.html>
 
@@ -271,60 +239,69 @@ While in recovery mode, MCUboot also exposes custom mcumgr commands:
 
 These are accessible via mcumgr SMP over the same USB CDC serial port.
 
-## 7. Shared MCUboot Configuration
+## 7. Deviating from the board defaults
 
-The `samples/_mcuboot/` directory contains shared config that all samples
-reference via symlinks:
+The board defaults are a fallback — your app can override any of them:
 
-| File | Purpose |
-|------|---------|
-| `pm_static_clip_nrf5340_cpuapp.yml` | Fixed flash partition layout |
-| `sysbuild/mcuboot.conf` | MCUboot Kconfig (OLED, USB CDC, SD erase, PMIC) |
-| `sysbuild/mcuboot.overlay` | Device tree overlay (OLED, PMIC, SD; no WiFi/PDM/ADC) |
-| `sysbuild/ipc_radio/prj.conf` | Network core BLE controller config |
-| `sysbuild/root-rsa-2048.pem` | RSA-2048 signing key |
+### Building WITHOUT MCUboot (factory / RF-cert / direct-flash image)
+
+By default every clip app boots under MCUboot. For a **factory, RF-certification,
+or power-measurement image** that you flash directly over J-Link (no bootloader,
+no OTA, no USB serial recovery), add a `sysbuild.conf` to the app:
+
+```kconfig
+# sysbuild.conf — build without the MCUboot bootloader
+SB_CONFIG_BOOTLOADER_NONE=y            # no MCUboot (app core)
+SB_CONFIG_SECURE_BOOT_NETCORE=n        # also skip b0n (network-core secure boot)
+# SB_CONFIG_NETCORE_NONE=y             # optional: also drop the BLE network-core image
+                                       #           (set this if the app doesn't use BLE)
+```
+
+This is exactly what the `tests/` targets do (`tests/clip`, `tests/dtm`,
+`tests/wifi_radio`, `tests/re`). The result is a direct-flash image — flash it
+with `west flash` and `nrfutil device reset`. There is no signature check and no
+recovery mode, so keep a J-Link available.
+
+### Other deviations
+
+- **Different MCUboot config**: provide `my_app/sysbuild/mcuboot.conf` and/or
+  `my_app/sysbuild/mcuboot.overlay`. The board's versions are skipped when your
+  app supplies its own.
+- **WiFi (nRF7002)**: just enable `CONFIG_WIFI=y` (+ the nRF70 driver flags) in
+  your `prj.conf`. NCS adds the WiFi firmware image automatically — no
+  `sysbuild.conf` change needed (see `samples/http_server`).
+- **Console baud / other device-tree**: use a `boards/clip_nrf5340_cpuapp.overlay`.
 
 ## 8. Troubleshooting
 
 ### "Signature verification failed" on boot
 
 The signing key in your build doesn't match the key in MCUboot on the device.
-
-1. Ensure `sysbuild.conf` references `samples/_mcuboot/sysbuild/root-rsa-2048.pem`
-2. Reflash everything: `west flash --build-dir build-myapp && nrfutil device reset`
-
-### "region FLASH overflowed by N bytes"
-
-The `pm_static_clip_nrf5340_cpuapp.yml` symlink is missing. Without it, the
-Partition Manager allocates a smaller MCUboot partition (48KB instead of 88KB).
-
-```bash
-ls -la samples/my_app/pm_static_clip_nrf5340_cpuapp.yml
-# Should point to ../_mcuboot/pm_static_clip_nrf5340_cpuapp.yml
-```
+This should not happen with the board default key. If you overrode the key,
+revert to `boards/seeed/clip/sysbuild/root-rsa-2048.pem` and reflash.
 
 ### Boot loop (MCUboot keeps restarting)
 
-The app image is too large for the slot:
-- Secure slot (image-0): 264KB max
-- Non-secure slot (image-0-ns): 192KB max
+The app image is too large for the slot. Reduce features or enable size
+optimizations:
 
-Reduce features or enable size optimizations:
 ```
 CONFIG_SIZE_OPTIMIZATIONS_AGGRESSIVE=y
 CONFIG_LTO=y
 ```
 
-### "Network core access port is protected"
+### "Network core access port is protected" / "debug port unavailable"
 
-Readback protection is enabled. Use `--recover`:
+The core is asleep or locked. Recover:
+
 ```bash
 west flash --build-dir build-myapp --recover && nrfutil device reset
 ```
 
-### Build fails with "unknown SB_CONFIG_*" variable
+### "unknown SB_CONFIG_*" variable
 
 The Zephyr environment isn't sourced:
+
 ```bash
 source ~/ncs/v3.3.0/zephyr/zephyr-env.sh
 export ZEPHYR_EXTRA_MODULES=$(pwd)
@@ -333,6 +310,5 @@ export ZEPHYR_EXTRA_MODULES=$(pwd)
 ### Can't enter recovery mode
 
 - **Hold the button BEFORE plugging USB** — not after
-- The button must be held through the power-on reset
 - USB must be plugged in (VBUS gating — battery-only won't enter DFU)
-- If the device is in a deep sleep, unplug USB first, then hold button + replug
+- If the device is in deep sleep, unplug USB first, then hold button + replug

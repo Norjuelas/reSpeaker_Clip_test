@@ -18,7 +18,3 @@
 &i2c2 {
     status = "okay";
 };
-
-&uart0 {
-    current-speed = <921600>;
-};

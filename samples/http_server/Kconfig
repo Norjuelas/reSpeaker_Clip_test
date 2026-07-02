@@ -1,5 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
+source "Kconfig.zephyr"
+
 menu "HTTP Server Sample Configuration"
 
 config HTTP_SERVER_PORT

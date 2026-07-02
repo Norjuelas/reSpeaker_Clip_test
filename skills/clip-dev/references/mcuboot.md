@@ -60,15 +60,13 @@ The `pm_static_clip_nrf5340_cpuapp.yml` defines the 88KB MCUboot / 936KB app / e
 
 ## Signing Key
 
-**Location:** `samples/_mcuboot/sysbuild/root-rsa-2048.pem`
-(app copy: `applications/clip/sysbuild/root-rsa-2048.pem`)
+**Location:** `boards/seeed/clip/sysbuild/root-rsa-2048.pem`
 
-Referenced in `sysbuild.conf`:
-```
-SB_CONFIG_BOOT_SIGNATURE_KEY_FILE="${APPLICATION_CONFIG_DIR}/../_mcuboot/sysbuild/root-rsa-2048.pem"
-```
+The board's `Kconfig.sysbuild` defaults `SB_CONFIG_BOOT_SIGNATURE_KEY_FILE` to this path (via `$(ZEPHYR_RESPEAKER_CLIP_MODULE_DIR)`), so apps don't configure it.
 
-**Warning:** Do NOT use `bootloader/root-rsa-2048.pem` — it is a different key. If you change the key, you must reflash MCUboot (`west flash --recover`).
+The current key is a **copy of the mcuboot default key** (the well-known `root-rsa-2048.pem` shipped with mcuboot). That's fine for development, but for **production you MUST generate your own key** (`imgtool keygen --key root-rsa-2048.pem --type rsa-2048`), commit it here, and reflash MCUboot (`west flash --recover && nrfutil device reset`) — the default key is public, so otherwise anyone can sign images your devices will accept.
+
+If you change the key, every device already in the field has the OLD public key baked into MCUboot and must be reflashed (J-Link).
 
 ## Sample Tier Configuration
 

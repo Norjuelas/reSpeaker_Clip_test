@@ -1,0 +1,50 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Board-level sysbuild defaults for the reSpeaker Clip.
+#
+# Every application that targets clip/nrf5340/cpuapp is built as a sysbuild
+# (mcuboot + app core + network-core radio) by default. An app therefore needs
+# NO sysbuild.conf to run under the bootloader — these defaults cover it. An app
+# only adds its own sysbuild.conf when it wants to deviate (e.g. enable WiFi).
+
+# Bootloader: MCUboot (custom, RSA-signed, with OLED + USB serial recovery).
+choice BOOTLOADER
+	default BOOTLOADER_MCUBOOT
+endchoice
+
+# Overwrite-only mode (no rollback / no scratch swap).
+choice MCUBOOT_MODE
+	default MCUBOOT_MODE_OVERWRITE_ONLY
+endchoice
+
+# Dual-image update: application core + network core, staged in external flash.
+config MCUBOOT_UPDATEABLE_IMAGES
+	default 2
+config MCUBOOT_NRF53_MULTI_IMAGE_UPDATE
+	default y
+config NETCORE_APP_UPDATE
+	default y
+
+# External SPI flash holds the DFU secondary slot.
+config PM_EXTERNAL_FLASH_MCUBOOT_SECONDARY
+	default y
+config PM_OVERRIDE_EXTERNAL_DRIVER_CHECK
+	default y
+
+# Network core runs the IPC BLE controller (required on the nRF5340 dual-core).
+# NETCORE_IPC_RADIO is a choice symbol, so it must be selected via its choice.
+choice NETCORE
+	default NETCORE_IPC_RADIO
+endchoice
+
+config NETCORE_IPC_RADIO_BT_HCI_IPC
+	default y
+
+# Secure boot for the network-core image.
+config SECURE_BOOT_NETCORE
+	default y
+
+# RSA-2048 signing with the project key (the public half is baked into the
+# MCUboot on every shipped device). BOOT_SIGNATURE_TYPE defaults to RSA.
+config BOOT_SIGNATURE_KEY_FILE
+	default "$(ZEPHYR_RESPEAKER_CLIP_MODULE_DIR)/boards/seeed/clip/sysbuild/root-rsa-2048.pem"

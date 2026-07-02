@@ -29,7 +29,14 @@ export ZEPHYR_EXTRA_MODULES=$(pwd)
 
 > **v3.2.1 is dropped.** `main` migrated to v3.3.0-only Kconfig (e.g. the WPA3 `..._WPA3_IMPLEMENTATION_NONE` choice, commit `099f62f`) and will no longer build against NCS v3.2.1. The `ncs/v3.3.0` branch is an older, diverged v3.3.0 line (~12 commits behind `main`); the local `master` is only the ancient initial import.
 
-The app builds as a Zephyr **sysbuild** (see `applications/clip/sysbuild/`): `mcuboot.conf`/`mcuboot.overlay` build the customized bootloader, `ipc_radio/prj.conf` builds the network-core BLE radio image, and `root-rsa-2048.pem` signs the app image. A normal `west build` against `applications/clip` pulls all three in automatically.
+Every app on this board builds as a Zephyr **sysbuild** (MCUboot + app core + network-core radio) **by default, with no per-app sysbuild config**. The board provides it all:
+
+- `boards/seeed/clip/Kconfig.sysbuild` — auto-sourced by sysbuild (Zephyr `hwm_v2.cmake`). Defaults `BOOTLOADER_MCUBOOT`, overwrite-only mode, dual-image OTA, `NETCORE_IPC_RADIO` (note: a `choice` symbol — set via `choice NETCORE`, not `config ... default y`), `SECURE_BOOT_NETCORE`, and the RSA signing key (`$(ZEPHYR_RESPEAKER_CLIP_MODULE_DIR)/boards/seeed/clip/sysbuild/root-rsa-2048.pem`).
+- `sysbuild/CMakeLists.txt` (module root, registered via `sysbuild-cmake:` in `zephyr/module.yml`) — points the `mcuboot` and `ipc_radio` images at the board's shared config as a **fallback** (an app overrides by providing its own `<app>/sysbuild/<image>.{conf,overlay}`).
+- `boards/seeed/clip/sysbuild/` — the real shared files: `mcuboot.conf`, `mcuboot.overlay`, `ipc_radio/prj.conf`, `root-rsa-2048.pem`.
+- `boards/seeed/clip/pm_static_clip_nrf5340_cpuapp.yml` — auto-discovered by the NCS partition manager.
+
+So a sample is just `CMakeLists.txt` + `prj.conf` + `src/` and still boots under the custom signed MCUboot. See `docs/custom_app_guide.md`. Pattern copied from `xiao_esp32c6`.
 
 ## Building & Flashing
 
@@ -44,7 +51,7 @@ west build --build-dir build-clip --pristine --board clip/nrf5340/cpuapp applica
 west flash --build-dir build-clip && nrfutil device reset
 
 # View serial output
-minicom -D /dev/ttyACM0 -b 921600
+minicom -D /dev/ttyACM0 -b 921600  # Clip UART0 debug console @921600 (board default). When a J-Link probe is also connected, the J-Link takes ttyACM0 and the Clip's UART0 bridge is ttyACM1 — adjust to whichever is the "USB Single Serial" / non-J-Link port.
 ```
 
 **Board identifier**: `clip/nrf5340/cpuapp` (NOT `respeaker/...`)
@@ -146,18 +153,16 @@ See `tests/otp/README.md` for full usage.
 
 ### Factory & RF Test Firmware
 
-Each is a standalone sysbuild image under `tests/<name>`, built like the hardware test above (`west build --build-dir build-<name> --pristine --board clip/nrf5340/cpuapp tests/<name>`):
+Each is a standalone sysbuild image under `tests/<name>`, built like the hardware test above (`west build --build-dir build-<name> --pristine --board clip/nrf5340/cpuapp tests/<name>`). **Tests opt out of MCUboot** (factory/cert firmware, flashed directly via J-Link) via a per-test `sysbuild.conf` setting `SB_CONFIG_BOOTLOADER_NONE=y` (+ `SB_CONFIG_SECURE_BOOT_NETCORE=n`, and `SB_CONFIG_NETCORE_NONE=y` for tests that don't need BLE).
 
 | Test | Purpose |
 |------|---------|
 | `tests/clip` | Multi-image hardware test suite (also hosts the `lfxo`/`hfxo` shell below) |
-| `tests/otp` | nRF70 OTP / MAC factory programming |
-| `tests/battery_profile` | NPM1300 battery profiler — logs V/I/T over UART to regenerate `battery_model.inc` via Nordic nPM PowerUP |
 | `tests/dtm` | BLE Direct Test Mode for RF conformance/certification (2-wire UART @19200; cpunet runs DTM, cpuapp bridges IPC→UART) |
 | `tests/wifi_radio` | nRF70 WiFi radio test for RF certification (TX/RX, tone, IQ, FICR) |
-| `tests/sysoff` | System-OFF lowest-power measurement |
+| `tests/re` | Reference-board bring-up variant |
 
-`tests/dk` and `tests/re` are dev-kit / reference-board bring-up variants. `tests/tools/poweroff.py` is a host-side helper.
+`tests/tools/poweroff.py` is a host-side helper.
 
 ### Crystal Capacitance Tuning (tests/clip)
 
@@ -269,7 +274,7 @@ Binary frame protocol with per-file CRC32 verification:
 
 ## MCUboot Patch Development
 
-MCUboot source is in the NCS tree (`~/ncs/<version>/bootloader/mcuboot`). Patches are stored in `patches/mcuboot/` and the bootloader image is configured by the sysbuild files in `applications/clip/sysbuild/` (`mcuboot.conf`, `mcuboot.overlay`, `ipc_radio/prj.conf`, signing key `root-rsa-2048.pem`). See `docs/custom_app_guide.md` for the full custom app / OTA / recovery guide. The workflow is: **modify source → build → verify → export patches**.
+MCUboot source is in the NCS tree (`~/ncs/<version>/bootloader/mcuboot`). Patches are stored in `patches/mcuboot/` and the bootloader image is configured by the board sysbuild files in `boards/seeed/clip/sysbuild/` (`mcuboot.conf`, `mcuboot.overlay`, `ipc_radio/prj.conf`, signing key `root-rsa-2048.pem` — a copy of the mcuboot default key; generate your own for production). See `docs/custom_app_guide.md` for the full custom app / OTA / recovery guide. The workflow is: **modify source → build → verify → export patches**.
 
 ### Current patches (`patches/mcuboot/`)
 
@@ -410,8 +415,8 @@ GPIO-controlled: mic_vdd (gpio1.14), oled_vdd (gpio1.8), rfsw_vdd (gpio0.29), fl
   - `tests/tools/` - Tools: record.py, udp_sync.py, udp_terminal.py, clip-cli.py, clip-web.py
   - `tests/tests/` - Application tests
   - `prj.conf` - Kconfig
-- `samples/` - Examples (hello_world, button_demo, lua_repl, opus_encode, lc3_encode, t5838, battery_170, http_server, wifi_ap_iperf, wifi_ble_coex, suspend_to_ram)
+- `samples/` - Examples (hello_world, button_demo, lua_repl, opus_encode, t5838, http_server, wifi_ap_iperf, wifi_ble_coex, suspend_to_ram)
 - `drivers/` - Custom device drivers (input)
 - `lib/` - Third-party libraries (opus, speexdsp, lua)
-- `tests/` - Firmware test/bench tools: `clip` (HW suite), `otp`, `battery_profile`, `dtm`, `wifi_radio`, `sysoff`, `dk`/`re` (bring-up); `tests/ble_test.py` (BLE protocol test)
+- `tests/` - Firmware test/bench tools (all opt out of MCUboot — direct J-Link flash): `clip` (HW suite), `dtm` (BLE DTM RF cert), `wifi_radio` (nRF70 WiFi RF cert), `re` (reference bring-up); `tests/ble_test.py` (BLE protocol test)
 - `docs/` - Protocol, architecture, requirements, development, audio quality, MCUboot/OTA, whitepaper docs

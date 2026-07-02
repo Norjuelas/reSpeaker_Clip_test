@@ -18,22 +18,20 @@
 };
 
 &wlan0 {
-	status = "okay";
+	status = "disabled";
 };
 
-/* Disable SPI flash and its power for idle current baseline */
+/* Disable the external SPI flash bus and its power rail for the idle
+ * current baseline. The external flash stays in the partition map (it is
+ * mcuboot's secondary slot — mcuboot enables it in its own overlay), so do
+ * NOT delete nordic,pm-ext-flash here or mcuboot fails to find its
+ * secondary slot (PM_MCUBOOT_SECONDARY_ID undeclared). */
 &spi3 {
 	status = "disabled";
 };
 
 &flash_vdd {
 	status = "disabled";
-};
-
-/ {
-	chosen {
-		/delete-property/ nordic,pm-ext-flash;
-	};
 };
 
 /*

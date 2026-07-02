@@ -2,11 +2,11 @@
 
 ## Overview
 
-This sample demonstrates PDM (Pulse Density Modulation) microphone recording on the reSpeaker Lav board.
+This sample demonstrates PDM (Pulse Density Modulation) microphone recording on the reSpeaker Clip board.
 
 ## Hardware
 
-- **Board**: reSpeaker Lav (nRF5340)
+- **Board**: reSpeaker Clip (nRF5340)
 - **Microphone**: T5838 PDM microphone or compatible PDM microphone array
 
 ## Features
@@ -24,26 +24,25 @@ This sample demonstrates PDM (Pulse Density Modulation) microphone recording on 
 
 From project root:
 ```bash
-./build.sh samples/t5838
+source ~/ncs/v3.3.0/zephyr/zephyr-env.sh
+export ZEPHYR_EXTRA_MODULES=$(pwd)
+west build --build-dir build --pristine --board clip/nrf5340/cpuapp samples/t5838
 ```
 
-Or manually:
-```bash
-source ~/ncs/v3.2.1/zephyr/zephyr-env.sh
-export ZEPHYR_EXTRA_MODULES=$(pwd)
-west build --build-dir build --pristine --board respeaker/nrf5340/cpuapp samples/t5838 \
-  -DSB_CONFIG_BOOTLOADER_MCUBOOT=n
-```
+This sample boots under the reSpeaker Clip's custom MCUboot by default (the board
+supplies the bootloader, signing, and network-core radio automatically — no
+per-app `sysbuild.conf` needed). To build **without** MCUboot, add a
+`sysbuild.conf` (`SB_CONFIG_BOOTLOADER_NONE=y`); see `docs/custom_app_guide.md` §7.
 
 ## Flashing
 
 ```bash
-west flash --build-dir build
+west flash --build-dir build && nrfutil device reset
 ```
 
 ## Running
 
-1. Connect via serial (115200 baud)
+1. Connect via serial (**921600 baud**, the Clip UART0 debug console)
 2. Reset the board
 3. Speak or play audio near the microphone
 4. View captured audio data on console
@@ -58,5 +57,5 @@ The sample will:
 
 ## Requirements
 
-- Zephyr RTOS NCS v3.2.1
-- reSpeaker Lav board with PDM microphone
+- Zephyr RTOS NCS v3.3.0
+- reSpeaker Clip board with PDM microphone

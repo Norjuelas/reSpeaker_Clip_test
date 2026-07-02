@@ -1,9 +1,0 @@
-/* SPDX-License-Identifier: Apache-2.0 */
-/*
- * Overlay for reSpeaker Lav to set UART baudrate to 921600
- * for faster Opus encoded data transfer
- */
-
-&uart0 {
-	current-speed = <921600>;
-};
