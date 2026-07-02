@@ -190,7 +190,7 @@ After finding optimal values, configure in device tree:
 - `docs/requirements.md` - Product requirements
 - `docs/development.md` - Development log
 - `docs/audio_quality_standard.md` - Audio recording quality test standard (ASR/transcription target)
-- `docs/mcuboot_app_development.md` - Building apps under the custom MCUboot, including OTA
+- `docs/custom_app_guide.md` - Custom app development guide (build, flash, BLE OTA, USB serial DFU recovery, signing key, MCUboot features)
 - `docs/usb_dfu.md` - Firmware upgrade guide (USB serial DFU via mcumgr/nrfutil, BLE OTA, programmer)
 - `docs/whitepaper.md` / `docs/patent_disclosure.md` - Firmware whitepaper and patent disclosure (CN)
 
@@ -269,7 +269,7 @@ Binary frame protocol with per-file CRC32 verification:
 
 ## MCUboot Patch Development
 
-MCUboot source is in the NCS tree (`~/ncs/<version>/bootloader/mcuboot`). Patches are stored in `patches/mcuboot/` and the bootloader image is configured by the sysbuild files in `applications/clip/sysbuild/` (`mcuboot.conf`, `mcuboot.overlay`, `ipc_radio/prj.conf`, signing key `root-rsa-2048.pem`). See `docs/mcuboot_app_development.md` for the full app-under-MCUboot / OTA guide. The workflow is: **modify source → build → verify → export patches**.
+MCUboot source is in the NCS tree (`~/ncs/<version>/bootloader/mcuboot`). Patches are stored in `patches/mcuboot/` and the bootloader image is configured by the sysbuild files in `applications/clip/sysbuild/` (`mcuboot.conf`, `mcuboot.overlay`, `ipc_radio/prj.conf`, signing key `root-rsa-2048.pem`). See `docs/custom_app_guide.md` for the full custom app / OTA / recovery guide. The workflow is: **modify source → build → verify → export patches**.
 
 ### Current patches (`patches/mcuboot/`)
 

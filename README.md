@@ -108,7 +108,7 @@ minicom -D /dev/ttyACM0 -b 921600
 | [protocol.md](docs/protocol.md) | BLE AT command protocol specification |
 | [udp_protocol.md](docs/udp_protocol.md) | WiFi UDP file transfer protocol |
 | [requirements.md](docs/requirements.md) | Product requirements |
-| [mcuboot_app_development.md](docs/mcuboot_app_development.md) | Building apps under the custom MCUboot (OTA guide) |
+| [custom_app_guide.md](docs/custom_app_guide.md) | **Custom app development guide** — build, flash, BLE OTA, USB serial DFU recovery |
 | [usb_dfu.md](docs/usb_dfu.md) | Firmware upgrade guide (USB / BLE / programmer) |
 | [audio_quality_standard.md](docs/audio_quality_standard.md) | Audio recording quality standard |
 | [development.md](docs/development.md) | Development log |
