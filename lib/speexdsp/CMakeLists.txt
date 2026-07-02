@@ -28,7 +28,7 @@ zephyr_library_sources_ifdef(CONFIG_SPEEXDSP
     speexdsp/libspeexdsp/smallft.c
 )
 
-# Fixed-point mode for fast FFT processing.
+# Compile options for SpeexDSP.
 # AGC is implemented as a lightweight integer AGC in audio.c instead of
 # SpeexDSP's float AGC (which takes ~15ms/frame even with hardware FPU).
 zephyr_library_compile_options(
