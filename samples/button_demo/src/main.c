@@ -1,5 +1,5 @@
 /*
- * GPIO Button Demo for reSpeaker Lav
+ * GPIO Button Demo for reSpeaker Clip
  *
  * Copyright (c) 2025 Seeed Technology Co., Ltd.
  *
@@ -55,7 +55,7 @@ int main(void)
 	int ret;
 
 	LOG_INF("=============================================");
-	LOG_INF("  reSpeaker Lav Button Demo");
+	LOG_INF("  reSpeaker Clip Button Demo");
 	LOG_INF("=============================================");
 	LOG_INF("Button device: %s", button->name);
 

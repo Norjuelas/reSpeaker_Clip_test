@@ -17,17 +17,18 @@
 #include "transport.h"
 #include "ble.h"
 #include "transfer.h"
+#include "clip_usb_dfu.h"
 
 LOG_MODULE_REGISTER(usb, CONFIG_CLIP_LOG_LEVEL);
 
 /* USB device definition (Seeed VID 0x2886) */
 USBD_DEVICE_DEFINE(clip_usbd,
 		   DEVICE_DT_GET(DT_NODELABEL(usbd)),
-		   0x2886, 0x0020);
+		   0x2886, 0x0069);
 
 /* String descriptors */
 USBD_DESC_LANG_DEFINE(clip_lang);
-USBD_DESC_MANUFACTURER_DEFINE(clip_mfr, "Seeed");
+USBD_DESC_MANUFACTURER_DEFINE(clip_mfr, "Seeed Studio");
 USBD_DESC_PRODUCT_DEFINE(clip_product, "reSpeaker Clip");
 
 /* Configuration descriptor (bus-powered, 100mA) */
@@ -131,6 +132,9 @@ static void usb_msg_cb(struct usbd_context *const ctx,
 		       const struct usbd_msg *msg)
 {
 	LOG_INF("USB: %s", usbd_msg_type_string(msg->type));
+
+	/* 1200-baud -> mcuboot DFU recovery (board-level trigger). */
+	clip_usb_dfu_check(msg);
 
 	if (msg->type == USBD_MSG_VBUS_READY) {
 		usb_vbus_present = true;

@@ -201,11 +201,22 @@ bootloader partition, independent of the application.
 
 ### How to enter recovery mode
 
-**Hold the user button** while connecting USB. The OLED shows "Recovery Mode"
-and the device enumerates as a USB CDC serial port.
+Two ways (USB connected):
 
-> The VBUS gating patch ensures serial recovery only enters when USB power is
-> present — a long-press reset on battery does **not** trigger DFU.
+- **1200 baud** (easiest — every app has it, no button): open the app's USB CDC-ACM
+  port at **1200 baud** and the app reboots into recovery automatically. The clip app
+  needs `AT+USB=on` over BLE first (its USB is BLE-gated); samples and custom apps
+  with the default CDC (`CONFIG_CLIP_USB_DFU_DEFAULT_CDC=y`) auto-enable USB, so no
+  BLE step. See [usb_dfu.md](usb_dfu.md#1200-baud-auto-trigger-app-update).
+- **Button**: hold the **user button** while connecting USB. The OLED shows
+  "Recovery Mode" and the device enumerates as a USB CDC serial port.
+
+In either case the recovery CDC-ACM port has PID `0x8069` (the `0x8000` bit marks
+bootloader mode; the running app uses PID `0x0069`, both Seeed VID `0x2886`).
+
+> The VBUS gating patch ensures the **button** path only enters when USB power is
+> present — a long-press reset on battery does **not** trigger DFU. The 1200-baud
+> path is not VBUS-gated (VBUS is present anyway — the trigger arrives over USB).
 
 ### Reflash
 
