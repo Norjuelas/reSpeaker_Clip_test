@@ -23,7 +23,7 @@ USB, AT-command control, and UDP file transfer.
 - **Audio**: PDM mic → SpeexDSP preprocessing (noise suppression / AGC / dereverb) → Opus encoding
 - **BLE**: AT-command protocol, OTA DFU (MCUmgr), GATT notifications
 - **WiFi**: AP mode (`ClipAP_XXXX`) with UDP file transfer (CRC32-verified)
-- **USB**: CDC ACM serial (3rd AT channel) + MSC mass storage (SD card)
+- **USB**: CDC ACM serial (3rd AT channel) + MSC mass storage (SD card) + 1200-baud → DFU recovery trigger
 - **Power**: Production idle ~170µA (DCDC, SD power-gating, console off)
 - **Battery**: NPM1300 charging + nRF Fuel Gauge SoC, custom "240" cell model
 - **OTA**: MCUboot (custom) with signed images, BLE/USB serial DFU
@@ -61,7 +61,38 @@ west build --build-dir build-clip-prod --board clip/nrf5340/cpuapp applications/
 
 > **Board identifier**: `clip/nrf5340/cpuapp` (NOT `respeaker/...`)
 
-### Flash
+### Firmware Upgrade (USB — no J-Link needed)
+
+The reSpeaker Clip ships in an **enclosed housing**, so the SWD/J-Link pads are
+not reachable for end users. Firmware upgrades happen over **USB** (or BLE) with
+mcumgr — no probe, no opening the case. Every clip app has the **1200-baud DFU
+trigger** built in (board-level, `lib/clip_usb_dfu`).
+
+1. Enter MCUboot serial recovery — open the device's USB CDC-ACM port at
+   **1200 baud** (the app reboots into recovery automatically):
+   ```sh
+   python3 -c "import serial; s=serial.Serial('/dev/ttyACMx',1200); s.close()"
+   ```
+   The clip app keeps USB off by default — send `AT+USB=on` over BLE first.
+   Samples and custom apps with the default CDC auto-enable USB (no BLE step).
+   (Holding the user button while plugging USB also enters recovery.)
+2. A new CDC-ACM port appears — **PID `0x8069`** (the running app is `0x0069`;
+   the `0x8000` bit marks bootloader mode; both Seeed VID `0x2886`). Upload the
+   signed app:
+   ```sh
+   nrfutil mcu-manager serial image-upload --firmware clip-<v>-signed.bin --serial-port /dev/ttyACMx
+   nrfutil mcu-manager serial reset     --serial-port /dev/ttyACMx
+   ```
+   MCUboot verifies the signature and boots the new app; the bootloader partition
+   is never touched.
+
+Full guide (BLE OTA, the button path, `mcumgr`/nRF Connect, troubleshooting):
+[docs/usb_dfu.md](docs/usb_dfu.md).
+
+### Flash (development — J-Link/SWD)
+
+For development with a debug probe. The enclosed device has no user-accessible SWD
+— end users use USB DFU (above).
 
 ```sh
 # west flash handles the dual-core routing (app + net core)
@@ -69,7 +100,8 @@ west flash --build-dir build-clip && nrfutil device reset
 ```
 
 > `west flash --reset` does NOT work on this board — use `nrfutil device reset`
-> after flashing.
+> after flashing. If the net-core access port is b0n-locked (after a prior boot),
+> add `--recover`.
 
 ### Serial Console
 
@@ -84,7 +116,7 @@ minicom -D /dev/ttyACM0 -b 921600
 | `applications/clip/` | Main application (AT commands, audio, BLE, WiFi, storage) |
 | `boards/seeed/clip/` | Board support package (device trees, Kconfig) |
 | `drivers/` | Custom drivers (GPIO button) |
-| `lib/` | Libraries (Opus, SpeexDSP, Lua) |
+| `lib/` | Libraries (Opus, SpeexDSP, Lua, 1200-baud USB DFU trigger) |
 | `samples/` | Example apps (hello_world, opus_encode, wifi_ap_iperf, etc.) |
 | `tests/` | Factory/RF test firmware (`clip`, `otp`, `dtm`, `wifi_radio`, `re`, ...) |
 | `patches/mcuboot/` | MCUboot customization patches (applied to the NCS tree) |
