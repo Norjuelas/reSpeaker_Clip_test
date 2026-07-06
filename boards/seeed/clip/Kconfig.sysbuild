@@ -48,3 +48,12 @@ config SECURE_BOOT_NETCORE
 # MCUboot on every shipped device). BOOT_SIGNATURE_TYPE defaults to RSA.
 config BOOT_SIGNATURE_KEY_FILE
 	default "$(ZEPHYR_RESPEAKER_CLIP_MODULE_DIR)/boards/seeed/clip/sysbuild/root-rsa-2048.pem"
+
+# NSIB (b0n) signing key for the network-core image. b0n on the nRF5340 signs
+# with ECDSA-P256 (CryptoCell; RSA is not a b0n option), so the mcuboot
+# root-rsa-2048.pem cannot be reused. This project key replaces NCS's
+# auto-generated default key pair, which is insecure AND regenerated every
+# build -- the b0n public-key hash baked into the device would not match
+# later netcore images, breaking network-core OTA across builds.
+config SECURE_BOOT_SIGNING_KEY_FILE
+	default "$(ZEPHYR_RESPEAKER_CLIP_MODULE_DIR)/boards/seeed/clip/sysbuild/b0-ecdsa-p256.pem"
