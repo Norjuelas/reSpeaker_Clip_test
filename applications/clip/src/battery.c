@@ -402,6 +402,10 @@ static void read_and_update_locked(void)
 		}
 	}
 
+	/* Expose voltage + temp for AT+GSTAT / AT+BATT (refreshed every poll). */
+	ctx->status.battery_mv = (uint16_t)(voltage * 1000.0f);
+	ctx->status.battery_temp = (int8_t)temp;
+
 	/* Update display with current status */
 	struct display_status ds = {
 		.battery_percent = last_percent,

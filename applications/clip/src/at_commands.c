@@ -123,6 +123,26 @@ static bool is_valid_session_id(const char *id)
 }
 
 /* GSTAT Command Handler - Get device status */
+/* BATT Command Handler - Get battery status (%, charging, voltage, temp).
+ * Exposes the NPM1300 voltage + NTC temperature that battery.c refreshes every
+ * poll, alongside the SoC % and charging state. Useful for field/debug thermal
+ * monitoring and verifying the 45C charge cutoff. */
+static int cmd_batt_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
+{
+    struct clip_context *c = clip_get_context();
+    int n = snprintf(response, len,
+        "{\"ok\":true,\"data\":{\"battery\":%u,\"charging\":%s,\"voltage\":%u,\"temp\":%d}}",
+        c->status.battery_percent,
+        c->status.battery_charging ? "true" : "false",
+        c->status.battery_mv,
+        c->status.battery_temp);
+    if (n < 0 || n >= len - 2) {
+        return AT_ERR_NOMEM;
+    }
+    response[n] = '\n';
+    return n + 1;
+}
+
 static int cmd_gstat_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
 {
     struct clip_context *c = clip_get_context();
@@ -158,6 +178,8 @@ static int cmd_gstat_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
                      "\"duration\":%u,"
                      "\"battery\":%u,"
                      "\"charging\":%s,"
+                     "\"temp\":%d,"
+                     "\"voltage\":%u,"
                      "\"mode\":\"%s\","
                      "\"bitrate\":%u,"
                      "\"free_space\":%u,"
@@ -168,6 +190,8 @@ static int cmd_gstat_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
                      recording_duration,
                      c->status.battery_percent,
                      c->status.battery_charging ? "true" : "false",
+                     c->status.battery_temp,
+                     c->status.battery_mv,
                      mode_str,
                      (c->config.mode == MODE_NORMAL) ? CONFIG_CLIP_NORMAL_BITRATE : CONFIG_CLIP_ENHANCED_BITRATE,
                      free_space,
@@ -1641,6 +1665,15 @@ int at_commands_register(void)
         .handler = cmd_gstat_handler,
     };
     err = at_server_register_cmd(&gstat_cmd);
+    if (err) return err;
+
+    /* BATT - Get battery status (%, charging, voltage mV, temp C) */
+    static const struct at_command batt_cmd = {
+        .name = "BATT",
+        .flags = AT_CMD_QUERY | AT_CMD_EXEC,
+        .handler = cmd_batt_handler,
+    };
+    err = at_server_register_cmd(&batt_cmd);
     if (err) return err;
 
     /* DEVICE - Get device name */

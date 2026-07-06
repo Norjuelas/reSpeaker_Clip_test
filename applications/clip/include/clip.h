@@ -82,6 +82,8 @@ struct clip_context {
     struct clip_status {
         uint8_t battery_percent;
         bool battery_charging;
+        int8_t battery_temp;        /* Battery temperature (°C, NTC) */
+        uint16_t battery_mv;        /* Battery voltage (mV) */
         uint32_t recording_time;
         uint32_t free_space;
         uint16_t session_count;
