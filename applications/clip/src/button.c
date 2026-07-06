@@ -37,7 +37,7 @@ static void button_event_callback(const struct device *dev, enum button_action a
     switch (action) {
     case BUTTON_SINGLE_CLICK:
         if (state == CLIP_STATE_RECORDING || state == CLIP_STATE_PAUSED) {
-            clip_post_event(CLIP_EVENT_MARK);
+            clip_post_event(CLIP_EVENT_MARK);  /* MARK event handler vibrates */
         } else if (state == CLIP_STATE_IDLE || state == CLIP_STATE_ERROR
                    || state == CLIP_STATE_WIFI_SYNC || state == CLIP_STATE_OTA) {
             clip_post_event(CLIP_EVENT_STATUS_SHOW);
@@ -51,8 +51,7 @@ static void button_event_callback(const struct device *dev, enum button_action a
 		 * User can continue holding for power-off (LEVEL_1/2/3).
 		 */
 		struct clip_event_result_info info;
-		clip_post_event_sync(CLIP_EVENT_STOP, &info);
-		haptic_play_pattern(HAPTIC_SHORT);
+		clip_post_event_sync(CLIP_EVENT_STOP, &info);  /* STOP event handler vibrates */
 		atomic_set(&recording_stopped, 1);
 	} else if (state == CLIP_STATE_IDLE || state == CLIP_STATE_ERROR
 		   || state == CLIP_STATE_WIFI_SYNC) {
@@ -85,8 +84,7 @@ static void button_event_callback(const struct device *dev, enum button_action a
 	    /* Should not reach here — recording is stopped in LONG_PRESS.
 	     * But handle as safety fallback.
 	     */
-	    clip_post_event(CLIP_EVENT_STOP);
-	    haptic_play_pattern(HAPTIC_SHORT);
+	    clip_post_event(CLIP_EVENT_STOP);  /* STOP event handler vibrates */
 	} else if (state == CLIP_STATE_IDLE || state == CLIP_STATE_ERROR
 		   || state == CLIP_STATE_WIFI_SYNC) {
 	    clip_post_event(CLIP_EVENT_START);

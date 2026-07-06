@@ -558,6 +558,7 @@ static enum clip_event_result execute_transition(enum clip_event event,
             LOG_ERR("audio_stop_recording failed: %d", err);
             return CLIP_EVENT_ERROR;
         }
+        haptic_play_pattern(HAPTIC_DOUBLE);  /* stop = 2 buzzes (button or AT) */
         display_post_event(UI_EVENT_REC_STOP);
         display_set_recording(false, false);
         {
@@ -614,6 +615,7 @@ static enum clip_event_result execute_transition(enum clip_event event,
             LOG_ERR("audio_add_bookmark failed: %d", err);
             return CLIP_EVENT_ERROR;
         }
+        haptic_play_pattern(HAPTIC_SHORT);  /* mark = 1 buzz (button or AT) */
         display_post_event(UI_EVENT_MARK);
         {
             int count = storage_count_bookmarks(audio_get_session_id());
