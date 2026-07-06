@@ -39,6 +39,16 @@ LOG_MODULE_REGISTER(battery, CONFIG_CLIP_LOG_LEVEL);
 /* Low-battery warning threshold (displayed % = actual SoC; no reserve). */
 #define BATTERY_LOW_WARNING_THRESHOLD  15
 
+/* High-temperature charge cutoff. The NPM1300 hot threshold
+ * (thermistor-hot-millidegrees=45C in DTS) is the autonomous HW safety net
+ * (trips even if the MCU hangs, within the 60s poll window). Because the NTC
+ * path has no register hysteresis, software latches charging OFF at STOP and
+ * only re-enables at RESUME (5C below) to stop rapid on/off oscillation right
+ * at the boundary. Defense-in-depth: HW hot threshold + this SW hysteresis. */
+#define CHARGE_STOP_TEMP_C     45.0f
+#define CHARGE_RESUME_TEMP_C   40.0f   /* 5C hysteresis */
+#define CHARGE_CURRENT_MA      220     /* matches DTS current-microamp; any non-zero re-enables */
+
 /* SoC smoothing configuration for stable display */
 #define SOC_SMOOTH_ALPHA    0.15f   /* EMA factor: lower = smoother (0.1-0.5) */
 #define SOC_MAX_DELTA       1       /* Max SoC change allowed per poll cycle (%) */
@@ -63,6 +73,7 @@ static const struct device *charger_dev;
 static uint8_t last_percent = 255; /* Sentinel: forces first update to always trigger */
 static bool last_charging;
 static bool low_battery_warned;
+static bool thermal_charge_disabled;  /* sticky: latched hot, held off until resume temp */
 static int64_t fg_ref_time;
 
 /* Fuel gauge state */
@@ -177,6 +188,40 @@ static void read_and_update_locked(void)
 
 	/* Get VBUS status */
 	vbus_connected = poll_vbus_status();
+
+	/* ---- High-temperature charge gating (software hysteresis) ----
+	 * The HW hot threshold (45C, thermistor-hot-millidegrees in DTS)
+	 * autonomously inhibits charging, but the NTC path has no silicon
+	 * hysteresis so a cell resting at ~45C would oscillate charge on/off.
+	 * Latch charging OFF once temp hits STOP, and only re-enable once temp
+	 * drops to RESUME (5C below). vbus_connected is checked so we never
+	 * toggle the charger enable while unplugged. The HW threshold remains
+	 * as a safety net if this poll is late. */
+	if (vbus_connected) {
+		struct sensor_value cur = {0};
+		if (temp >= CHARGE_STOP_TEMP_C && !thermal_charge_disabled) {
+			cur.val1 = 0;  /* GAUGE_DESIRED_CHARGING_CURRENT=0 -> CHGR_EN_CLR */
+			if (sensor_attr_set(charger_dev,
+					    SENSOR_CHAN_GAUGE_DESIRED_CHARGING_CURRENT,
+					    SENSOR_ATTR_CONFIGURATION, &cur) == 0) {
+				thermal_charge_disabled = true;
+				LOG_WRN("Charge disabled: temp %dC >= %dC (hot cutoff)",
+					(int)temp, (int)CHARGE_STOP_TEMP_C);
+			} else {
+				LOG_ERR("Charge disable failed (temp %dC)", (int)temp);
+			}
+		} else if (temp < CHARGE_RESUME_TEMP_C && thermal_charge_disabled) {
+			/* non-zero -> ERR_CLR + EN_SET; chip uses DTS current (220mA) */
+			cur.val1 = CHARGE_CURRENT_MA;
+			if (sensor_attr_set(charger_dev,
+					    SENSOR_CHAN_GAUGE_DESIRED_CHARGING_CURRENT,
+					    SENSOR_ATTR_CONFIGURATION, &cur) == 0) {
+				thermal_charge_disabled = false;
+				LOG_INF("Charge re-enabled: temp %dC < %dC (resume)",
+					(int)temp, (int)CHARGE_RESUME_TEMP_C);
+			}
+		}
+	}
 
 	/* Parse charger status bits */
 	is_trickle = (chg_status & CHG_STATUS_TRICKLE_MASK) != 0;

@@ -220,6 +220,31 @@
 			vbus-limit-microamp = <500000>;
 			thermistor-ohms = <10000>;
 			thermistor-beta = <3380>;
+			/* JEITA battery-temperature profile (TS-pin NTC). The NPM1300
+			 * classifies the cell into cold/cool/normal/warm/hot zones
+			 * autonomously (works even if the MCU hangs) — defense in depth
+			 * alongside the software gate in battery.c.
+			 *   cold <0C   : charge inhibit (Li-Po plating protection)
+			 *   cool 0-10C : reduced current (ICOOL)
+			 *   warm 40-45C: charge to term-warm-microvolt (4.10V, not 4.25V)
+			 *   hot  >45C  : HARD charge inhibit
+			 * NOTE: the NTC path has NO register hysteresis (only the
+			 * die-temp pair below does), so battery.c latches OFF at 45C
+			 * and only re-enables at 40C to stop boundary oscillation.
+			 * term-warm-microvolt (4.10V above) only takes effect once
+			 * thermistor-warm-millidegrees is set. */
+			thermistor-cold-millidegrees = <0>;
+			thermistor-cool-millidegrees = <10000>;
+			thermistor-warm-millidegrees = <40000>;
+			thermistor-hot-millidegrees   = <45000>;
+			/* PMIC die (silicon) overheat protection — the charger IC's own
+			 * temperature, separate from the cell. Explicit stop/resume
+			 * hysteresis (the only thermal pair with register-level
+			 * hysteresis on the NPM1300). Conservative values; 85C is well
+			 * below the chip's max junction temp and won't trip in normal
+			 * charging. */
+			dietemp-stop-millidegrees   = <85000>;
+			dietemp-resume-millidegrees = <75000>;
 			charging-enable;
 			/* Allow charging a deeply discharged battery (below VBATLOW),
 			 * e.g. after the protection IC trips at ~2.4V. Without this the
