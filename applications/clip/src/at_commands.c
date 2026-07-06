@@ -882,12 +882,12 @@ static int cmd_mark_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
     }
 
     uint32_t recording_sec = audio_stats.recording_time_ms / 1000;
-    int err = storage_add_bookmark(session_id, recording_sec);
-    if (err) {
-        return create_json_response(false, "Failed to add bookmark", NULL, response, len);
-    }
 
-    /* Trigger display update (non-blocking) */
+    /* Post the MARK event — the event handler adds the bookmark (via
+     * audio_add_bookmark) AND vibrates + updates the display. Doing the add
+     * only in the event handler (not here too) avoids a double bookmark on
+     * AT+MARK (this handler used to call storage_add_bookmark directly, which
+     * conflicted with the event handler's own add). */
     clip_post_event(CLIP_EVENT_MARK);
 
     char data[64];
