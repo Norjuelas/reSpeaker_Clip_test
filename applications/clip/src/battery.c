@@ -252,8 +252,12 @@ static void read_and_update_locked(void)
 		/* Calculate time delta */
 		float delta = (float)k_uptime_delta(&fg_ref_time) / 1000.f;
 
-		/* Process fuel gauge to get SoC */
-		float soc = nrf_fuel_gauge_process(voltage, current, temp, delta, NULL);
+		/* Process fuel gauge to get SoC.
+		 * Zephyr sensor API: GAUGE_AVG_CURRENT negative = discharging;
+		 * nrf_fuel_gauge lib expects the opposite (negative = charging),
+		 * so negate the current. Without this the Coulomb count runs
+		 * backwards and the SoC jumps (voltage correction fights it). */
+		float soc = nrf_fuel_gauge_process(voltage, -current, temp, delta, NULL);
 		percent = (uint8_t)soc;
 
 		/* Determine charging status for display/BLE:
@@ -492,10 +496,14 @@ int battery_init(void)
 		LOG_WRN("Failed to read sensors for fuel gauge init: %d", ret);
 		/* Continue with basic battery monitoring */
 	} else {
-		/* Print initial readings */
+		/* Print initial readings (sensor convention: I negative = discharging) */
 		LOG_INF("init: V=%.3f I=%.3f T=%.1f chg=0x%02x",
 			init_params.v0, init_params.i0, init_params.t0,
 			(unsigned int)chg_status);
+
+		/* Zephyr sensor API: negative = discharging; nrf_fuel_gauge expects
+		 * negative = charging -- negate i0 so the fuel gauge starts correct. */
+		init_params.i0 = -init_params.i0;
 
 		/* Get charge current limits */
 		sensor_channel_get(charger_dev, SENSOR_CHAN_GAUGE_DESIRED_CHARGING_CURRENT, &value);
