@@ -39,6 +39,15 @@ LOG_MODULE_REGISTER(discharge, LOG_LEVEL_INF);
  * slowly, so going below ~500 ms just adds I2C/OLED traffic for no benefit. */
 #define POLL_INTERVAL_MS		1000U
 
+/* High-temperature charge cutoff (software hysteresis). The NPM1300 HW hot
+ * threshold (thermistor-hot-millidegrees=45C in the board DTS) inhibits
+ * charging autonomously, but the NTC path has no register hysteresis, so a
+ * cell resting at ~45C would oscillate charge on/off. Software latches OFF
+ * at STOP and re-enables at RESUME (5C gap). Matches the clip app. Active
+ * only during CHARGE (during DISCHARGE the charger is already off). */
+#define CHARGE_STOP_TEMP_C		45	/* stop charging at/above */
+#define CHARGE_RESUME_TEMP_C		40	/* resume charging below */
+
 enum cycle_state {
 	STATE_DISCHARGE,
 	STATE_CHARGE,
@@ -52,6 +61,7 @@ void discharge_run(void)
 	uint32_t mv = 0U;
 	int32_t temp = 0;
 	bool charging = false;
+	bool thermal_charge_disabled = false;  /* sticky: latched hot, held off until resume */
 
 	printk("\n=== Battery discharge/charge cycle test ===\n");
 	printk("Discharging to %u mV, then charging to %u mV, repeat.\n\n",
@@ -90,6 +100,26 @@ void discharge_run(void)
 					pmic_charger_set(false);
 					wifi_discharge_load_enable(true);
 					sdcard_discharge_load_enable(true);
+				}
+			}
+
+			/* Thermal charge gating (software hysteresis). The HW
+			 * NPM1300 hot threshold (45C, board DTS) is the
+			 * autonomous safety net; this adds the 5C resume gap the
+			 * NTC path lacks so a cell at ~45C doesn't oscillate.
+			 * Active only during CHARGE. */
+			if (state == STATE_CHARGE) {
+				if (temp >= CHARGE_STOP_TEMP_C && !thermal_charge_disabled) {
+					pmic_charger_set(false);
+					thermal_charge_disabled = true;
+					LOG_WRN("Thermal: charge off (temp %dC >= %dC)",
+						(int)temp, CHARGE_STOP_TEMP_C);
+				} else if (thermal_charge_disabled &&
+					   temp <= CHARGE_RESUME_TEMP_C) {
+					pmic_charger_set(true);
+					thermal_charge_disabled = false;
+					LOG_INF("Thermal: charge resume (temp %dC <= %dC)",
+						(int)temp, CHARGE_RESUME_TEMP_C);
 				}
 			}
 		} else {
