@@ -405,8 +405,6 @@ static void read_and_update_locked(void)
 	/* Expose voltage + temp for AT+GSTAT / AT+BATT (refreshed every poll). */
 	ctx->status.battery_mv = (uint16_t)(voltage * 1000.0f);
 	ctx->status.battery_temp = (int8_t)temp;
-	/* ESS (Environmental Sensing) temperature char: int16 in 0.01 degC. */
-	ble_set_temperature((int16_t)(temp * 100.0f));
 
 	/* Update display with current status */
 	struct display_status ds = {

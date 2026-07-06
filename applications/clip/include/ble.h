@@ -185,18 +185,6 @@ void ble_adv_restart_fast(void);
  */
 void ble_activity_refresh(void);
 
-/**
- * @brief Update the ESS (Environmental Sensing) temperature characteristic
- *
- * Called by battery.c each poll. Stores the cell temperature (int16, 0.01 degC
- * per BLE spec) and pushes a notification to subscribers when it changes.
- * Readable as the standard Temperature characteristic (0x2A6E) under the
- * Environmental Sensing Service (0x181A) -- visible in nRF Connect etc.
- *
- * @param centideg Temperature in 0.01 degC (e.g. 25.50C -> 2550)
- */
-void ble_set_temperature(int16_t centideg);
-
 /* Zero-copy response buffer size */
 #define BLE_RESPONSE_BUFFER_SIZE 1024
 

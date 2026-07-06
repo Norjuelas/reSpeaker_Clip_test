@@ -270,46 +270,6 @@ BT_GATT_SERVICE_DEFINE(clip_svc,
                 BT_GATT_PERM_READ | BT_GATT_PERM_WRITE_ENCRYPT),
 );
 
-/* === Environmental Sensing Service (ESS, 0x181A) -- battery temperature ===
- * Standard service so generic BLE tools (nRF Connect) can read the cell
- * temperature without the AT protocol. Temperature char (0x2A6E) is int16
- * in units of 0.01 degC (BLE Assigned Numbers). Refreshed by battery.c. */
-static int16_t battery_temp_centideg;  /* 0.01 degC */
-
-static ssize_t read_ess_temp(struct bt_conn *conn, const struct bt_gatt_attr *attr,
-			     void *buf, uint16_t len, uint16_t offset)
-{
-	return bt_gatt_attr_read(conn, attr, buf, len, offset,
-				 &battery_temp_centideg, sizeof(battery_temp_centideg));
-}
-
-static void ess_temp_ccc_changed(const struct bt_gatt_attr *attr, uint16_t value)
-{
-	/* Notify enable/disable is tracked per-client by the framework;
-	 * bt_gatt_notify() no-ops if no client has subscribed. */
-}
-
-BT_GATT_SERVICE_DEFINE(ess_svc,
-	BT_GATT_PRIMARY_SERVICE(BT_UUID_ESS),
-	BT_GATT_CHARACTERISTIC(BT_UUID_TEMPERATURE,
-			       BT_GATT_CHRC_READ | BT_GATT_CHRC_NOTIFY,
-			       BT_GATT_PERM_READ,
-			       read_ess_temp, NULL, NULL),
-	BT_GATT_CCC(ess_temp_ccc_changed, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
-);
-
-/* Called by battery.c each poll to refresh the exposed temperature. Pushes a
- * notification to subscribers when the value changes (no-op if none). */
-void ble_set_temperature(int16_t centideg)
-{
-	if (centideg == battery_temp_centideg) {
-		return;
-	}
-	battery_temp_centideg = centideg;
-	bt_gatt_notify(NULL, &ess_svc.attrs[2], &battery_temp_centideg,
-		       sizeof(battery_temp_centideg));
-}
-
 /* CCC callback */
 static void resp_ccc_cfg_changed(const struct bt_gatt_attr *attr, uint16_t value)
 {
