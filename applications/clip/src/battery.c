@@ -13,6 +13,7 @@
 #include <zephyr/bluetooth/services/bas.h>
 #include <zephyr/logging/log.h>
 #include <nrf_fuel_gauge.h>
+#include <zephyr/settings/settings.h>
 
 #include "battery.h"
 #include "clip.h"
@@ -76,6 +77,34 @@ static bool low_battery_warned;
 static bool thermal_charge_disabled;  /* sticky: latched hot, held off until resume temp */
 static int64_t fg_ref_time;
 
+/* Fuel gauge state persistence (across reboot). The nRF Fuel Gauge is a
+ * software library (state in RAM); without saving, every reboot re-estimates
+ * SoC from the resting voltage -> the displayed % jumps (e.g. 38% -> 53%).
+ * Save the state blob to settings (LittleFS) and restore on boot so the SoC
+ * is continuous. Saved infrequently (on SoC change, + on graceful shutdown). */
+#define FG_STATE_BUF_SIZE 512U
+static uint8_t fg_state_buf[FG_STATE_BUF_SIZE];
+static size_t fg_state_len;
+static bool fg_state_loaded;
+static uint8_t last_saved_soc = 255U;  /* last SoC% persisted (255 = force first save) */
+
+static int fg_state_settings_set(const char *key, size_t len,
+				 settings_read_cb read_cb, void *cb_arg)
+{
+	ARG_UNUSED(key);
+	if (len > sizeof(fg_state_buf)) {
+		return -EFBIG;
+	}
+	ssize_t n = read_cb(cb_arg, fg_state_buf, len);
+	if (n > 0) {
+		fg_state_len = n;
+		fg_state_loaded = true;
+	}
+	return 0;
+}
+SETTINGS_STATIC_HANDLER_DEFINE(fg_state, "battery/fg_state", NULL,
+			      fg_state_settings_set, NULL, NULL);
+
 /* Fuel gauge state */
 static bool fg_initialized;
 
@@ -106,6 +135,30 @@ void battery_poll(void)
 {
 	read_and_update();
 	LOG_INF("Battery poll: %u%%, charging=%d", last_percent, last_charging);
+}
+
+/* Save the fuel gauge state to settings (LittleFS). Call on SoC change + on
+ * graceful shutdown/reboot so the SoC is continuous across reboots. */
+void battery_save_fg_state(void)
+{
+	if (!fg_initialized) {
+		return;
+	}
+	if (nrf_fuel_gauge_state_size > sizeof(fg_state_buf)) {
+		LOG_WRN("fg_state buf too small (%u < %u)",
+			(unsigned)sizeof(fg_state_buf), (unsigned)nrf_fuel_gauge_state_size);
+		return;
+	}
+	int ret = nrf_fuel_gauge_state_get(fg_state_buf, sizeof(fg_state_buf));
+	if (ret != 0) {
+		LOG_WRN("fg_state_get failed: %d", ret);
+		return;
+	}
+	ret = settings_save_one("battery/fg_state", fg_state_buf,
+				nrf_fuel_gauge_state_size);
+	if (ret) {
+		LOG_WRN("fg_state save failed: %d", ret);
+	}
 }
 
 static int read_sensors(float *voltage, float *current, float *temp, int32_t *chg_status)
@@ -468,6 +521,14 @@ static void battery_delayed_update_handler(struct k_work *work)
 static void battery_level_handler(struct k_work *work)
 {
 	read_and_update();
+	/* Persist the fuel gauge state when the displayed SoC changes (>=1%).
+	 * The SoC moves slowly, so this writes infrequently — not every poll —
+	 * to avoid wearing the LittleFS settings flash. The graceful shutdown/
+	 * reboot paths also save (a fresh copy) via battery_save_fg_state(). */
+	if (last_percent != last_saved_soc) {
+		battery_save_fg_state();
+		last_saved_soc = last_percent;
+	}
 	k_work_schedule(&battery_level_work, K_SECONDS(60));
 }
 
@@ -477,7 +538,7 @@ int battery_init(void)
 	struct nrf_fuel_gauge_init_parameters init_params = {
 		.model = &battery_model,
 		.opt_params = NULL,
-		.state = NULL,
+		.state = fg_state_loaded ? fg_state_buf : NULL,
 	};
 	float max_charge_current;
 	float term_charge_current;

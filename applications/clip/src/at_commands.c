@@ -22,6 +22,7 @@
 #include "clip.h"
 #include "clip_event.h"
 #include "config.h"
+#include "battery.h"
 #include "app_version.h"
 #include "audio.h"
 #include "storage.h"
@@ -49,6 +50,8 @@ static void reboot_work_handler(struct k_work *work)
     if (reboot_clear_bonds) {
         ble_clear_bonds();
     }
+    /* Persist fuel gauge state so the SoC is continuous across this reboot. */
+    battery_save_fg_state();
     sys_reboot(SYS_REBOOT_COLD);
 }
 

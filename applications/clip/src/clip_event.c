@@ -23,6 +23,7 @@
 #include "audio.h"
 #include "haptic.h"
 #include "display.h"
+#include "battery.h"
 #include "ble.h"
 #include "wifi.h"
 #include "storage.h"
@@ -692,6 +693,10 @@ static enum clip_event_result execute_transition(enum clip_event event,
             LOG_ERR("Regulators not ready for ship mode");
             return CLIP_EVENT_ERROR;
         }
+
+        /* Persist fuel gauge state before power-off so the SoC is continuous
+         * on the next boot (avoids the reboot % jump). */
+        battery_save_fg_state();
 
         err = regulator_parent_ship_mode(regulators);
         if (err) {

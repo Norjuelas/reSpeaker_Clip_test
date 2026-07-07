@@ -26,4 +26,14 @@ int battery_init(void);
  */
 void battery_poll(void);
 
+/**
+ * @brief Persist the nRF Fuel Gauge state to settings (LittleFS)
+ *
+ * Saves the fuel gauge internal state so the SoC is continuous across reboots
+ * (without this, every reboot re-estimates SoC from the resting voltage and
+ * the displayed % jumps). Called on SoC change (infrequent) + on graceful
+ * shutdown/reboot (a fresh copy before power-off).
+ */
+void battery_save_fg_state(void);
+
 #endif /* CLIP_BATTERY_H */
