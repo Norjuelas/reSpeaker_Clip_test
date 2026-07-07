@@ -120,6 +120,27 @@ config CLIP_WIFI_AP_REG_DOMAIN
 	default "US"
 
 # =============================================================================
+# Hardware Configuration (crystal caps, low-battery boot gate)
+# =============================================================================
+
+config CLIP_HFXO_CAPVALUE
+	int "HFXO (32 MHz) crystal capacitance (raw XOSC32MCAPS.CAPVALUE)"
+	default 60
+	help
+	  Raw CAPVALUE register field for the 32 MHz crystal internal load caps.
+	  Set by clip_xo_cap_init() (SYS_INIT POST_KERNEL) — the HFXO DTS binding
+	  can't take a raw CAPVALUE (it derives from FICR), so we override here.
+	  Tune with the tests/clip "hfxo set" shell, then set here.
+
+config CLIP_LFXO_INTCAP
+	int "LFXO (32.768 kHz) internal capacitance (0=ext, 1=6pF, 2=7pF, 3=9pF)"
+	range 0 3
+	default 1
+	help
+	  INTCAP for the 32.768 kHz crystal (XOSC32KI.INTCAP). 0 = external caps,
+	  1 = 6 pF, 2 = 7 pF, 3 = 9 pF internal. Set by clip_xo_cap_init().
+
+# =============================================================================
 # Button Configuration
 # =============================================================================
 

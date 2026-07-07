@@ -404,16 +404,13 @@ void clip_main_loop(void)
  * this runs afterwards (POST_KERNEL) and overrides with the tuned values.
  * Neither register is touched again at runtime, so the override sticks.
  */
-#define CLIP_HFXO_CAPVALUE	60	/* raw XOSC32MCAPS.CAPVALUE */
-#define CLIP_LFXO_INTCAP	1	/* 0=external, 1=6pF, 2=7pF, 3=9pF */
-
 static int clip_xo_cap_init(void)
 {
 	NRF_OSCILLATORS->XOSC32MCAPS =
 		(OSCILLATORS_XOSC32MCAPS_ENABLE_Enabled <<
 		 OSCILLATORS_XOSC32MCAPS_ENABLE_Pos) |
-		(CLIP_HFXO_CAPVALUE << OSCILLATORS_XOSC32MCAPS_CAPVALUE_Pos);
-	NRF_OSCILLATORS->XOSC32KI.INTCAP = CLIP_LFXO_INTCAP;
+		(CONFIG_CLIP_HFXO_CAPVALUE << OSCILLATORS_XOSC32MCAPS_CAPVALUE_Pos);
+	NRF_OSCILLATORS->XOSC32KI.INTCAP = CONFIG_CLIP_LFXO_INTCAP;
 	return 0;
 }
 SYS_INIT(clip_xo_cap_init, POST_KERNEL, 0);
