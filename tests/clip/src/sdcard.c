@@ -238,6 +238,268 @@ cleanup:
 	return rc;
 }
 
+/* ============================================================================
+ * SD reliability test: write a pattern to a file, read back, verify
+ * byte-for-byte. Multi-round + pattern sweep for repeated verification of a
+ * new card. Test file SD_TEST_FILE is deleted after each pass. File-level
+ * (FAT) -- tests the card through the same path the app uses.
+ * ============================================================================ */
+#define SD_TEST_FILE    "/SD:/sdtest.bin"
+#define SD_TEST_CHUNK   4096
+
+enum sd_pattern {
+	SD_PAT_ZERO = 0, SD_PAT_FF, SD_PAT_55, SD_PAT_AA, SD_PAT_ADDR, SD_PAT_PRBS,
+};
+
+static const char *sd_pat_name(enum sd_pattern p)
+{
+	static const char *const names[] = {"00", "FF", "55", "AA", "addr", "prbs"};
+	return names[p % 6];
+}
+
+/* Deterministic pattern fill of len bytes at absolute offset base_off. */
+static void sd_fill_pattern(uint8_t *buf, uint32_t len, enum sd_pattern p, uint32_t base_off)
+{
+	switch (p) {
+	case SD_PAT_ZERO:
+		memset(buf, 0x00, len);
+		break;
+	case SD_PAT_FF:
+		memset(buf, 0xFF, len);
+		break;
+	case SD_PAT_55:
+		memset(buf, 0x55, len);
+		break;
+	case SD_PAT_AA:
+		memset(buf, 0xAA, len);
+		break;
+	case SD_PAT_ADDR:
+		for (uint32_t i = 0; i < len; i++) {
+			buf[i] = (uint8_t)((base_off + i) & 0xFF);
+		}
+		break;
+	case SD_PAT_PRBS:
+		for (uint32_t i = 0; i < len; i++) {
+			uint32_t o = base_off + i;
+			/* deterministic LCG hash of the absolute offset */
+			buf[i] = (uint8_t)(((o * 1103515245u) + 12345u) >> 16);
+		}
+		break;
+	}
+}
+
+/* One write+verify pass over SD_TEST_FILE. Returns 0 on success (data
+ * mismatches are counted in *errors, not a negative return), <0 on I/O
+ * failure. Metrics out: errors, first_err_off (-1 if none), write/read ms. */
+static int sd_run_pass(uint32_t size, enum sd_pattern pattern,
+		       uint32_t *errors, int32_t *first_err_off,
+		       uint32_t *write_ms, uint32_t *read_ms)
+{
+	struct fs_file_t file;
+	static uint8_t wbuf[SD_TEST_CHUNK];
+	static uint8_t rbuf[SD_TEST_CHUNK];
+	int rc;
+	uint32_t off;
+	uint64_t t;
+
+	*errors = 0;
+	*first_err_off = -1;
+	*write_ms = *read_ms = 0;
+
+	/* Write */
+	fs_file_t_init(&file);
+	rc = fs_open(&file, SD_TEST_FILE, FS_O_CREATE | FS_O_WRITE);
+	if (rc) {
+		return -1;
+	}
+	t = k_uptime_get();
+	for (off = 0; off < size; off += SD_TEST_CHUNK) {
+		uint32_t n = (size - off < SD_TEST_CHUNK) ? (size - off) : SD_TEST_CHUNK;
+		sd_fill_pattern(wbuf, n, pattern, off);
+		rc = fs_write(&file, wbuf, n);
+		if (rc < 0) {
+			fs_close(&file);
+			return -2;
+		}
+	}
+	fs_close(&file);
+	*write_ms = (uint32_t)(k_uptime_get() - t);
+
+	/* Read + verify */
+	rc = fs_open(&file, SD_TEST_FILE, FS_O_READ);
+	if (rc) {
+		return -3;
+	}
+	t = k_uptime_get();
+	for (off = 0; off < size; off += SD_TEST_CHUNK) {
+		uint32_t n = (size - off < SD_TEST_CHUNK) ? (size - off) : SD_TEST_CHUNK;
+		int got = fs_read(&file, rbuf, n);
+		if (got < 0) {
+			fs_close(&file);
+			return -4;
+		}
+		sd_fill_pattern(wbuf, got, pattern, off);  /* expected */
+		for (int i = 0; i < got; i++) {
+			if (rbuf[i] != wbuf[i]) {
+				(*errors)++;
+				if (*first_err_off < 0) {
+					*first_err_off = (int32_t)(off + i);
+				}
+			}
+		}
+		if (got < (int)n) {
+			break;  /* short read (EOF) */
+		}
+	}
+	fs_close(&file);
+	*read_ms = (uint32_t)(k_uptime_get() - t);
+
+	fs_unlink(SD_TEST_FILE);  /* delete after */
+	return 0;
+}
+
+/* sd verify [size_kb] [pattern] -- single write+verify pass */
+static int cmd_sd_verify(const struct shell *sh, size_t argc, char **argv)
+{
+	uint32_t size = 1024 * 1024;
+	enum sd_pattern pattern = SD_PAT_PRBS;
+	uint32_t errors, wms, rms;
+	int32_t first;
+	int rc;
+
+	if (!sd_mounted) {
+		shell_error(sh, "SD card not mounted");
+		return -ENODEV;
+	}
+	if (argc >= 2) {
+		size = (uint32_t)atoi(argv[1]) * 1024;
+	}
+	if (argc >= 3) {
+		pattern = (enum sd_pattern)atoi(argv[2]);
+	}
+	if (size < SD_TEST_CHUNK) {
+		size = SD_TEST_CHUNK;
+	}
+
+	rc = sd_run_pass(size, pattern, &errors, &first, &wms, &rms);
+	if (rc < 0) {
+		shell_error(sh, "verify I/O failed: %d", rc);
+		return rc;
+	}
+	shell_print(sh, "verify %s %uKB: %s  err=%u  W=%uKB/s(%ums) R=%uKB/s(%ums)",
+		    sd_pat_name(pattern), size / 1024, errors ? "FAIL" : "OK", errors,
+		    wms ? (size / 1024 * 1000 / wms) : 0, wms,
+		    rms ? (size / 1024 * 1000 / rms) : 0, rms);
+	if (errors && first >= 0) {
+		shell_print(sh, "  first error @0x%x", first);
+	}
+	return errors ? -EIO : 0;
+}
+
+/* sd test <rounds> [size_kb] -- multi-round write+verify (prbs), per-round
+ * output for cross-run comparison. */
+static int cmd_sd_test(const struct shell *sh, size_t argc, char **argv)
+{
+	uint32_t rounds = 10;
+	uint32_t size = 1024 * 1024;
+	uint32_t total_err = 0, fails = 0;
+
+	if (!sd_mounted) {
+		shell_error(sh, "SD card not mounted");
+		return -ENODEV;
+	}
+	if (argc >= 2) {
+		rounds = (uint32_t)atoi(argv[1]);
+	}
+	if (argc >= 3) {
+		size = (uint32_t)atoi(argv[2]) * 1024;
+	}
+	if (rounds == 0) {
+		rounds = 1;
+	}
+	if (size < SD_TEST_CHUNK) {
+		size = SD_TEST_CHUNK;
+	}
+
+	shell_print(sh, "=== SD reliability: %u rounds, %u KB/round, pattern=prbs ===",
+		    rounds, size / 1024);
+
+	for (uint32_t r = 1; r <= rounds; r++) {
+		uint32_t errors, wms, rms;
+		int32_t first;
+		int rc = sd_run_pass(size, SD_PAT_PRBS, &errors, &first, &wms, &rms);
+
+		if (rc < 0) {
+			shell_print(sh, "Round %2u: ERROR  pass=%d", r, rc);
+			fails++;
+			total_err++;
+			continue;
+		}
+		if (errors) {
+			fails++;
+			total_err += errors;
+			shell_print(sh, "Round %2u: FAIL  W=%uKB/s R=%uKB/s  err=%u first@0x%x",
+				    r,
+				    wms ? (size / 1024 * 1000 / wms) : 0,
+				    rms ? (size / 1024 * 1000 / rms) : 0,
+				    errors, first);
+		} else {
+			shell_print(sh, "Round %2u: OK    W=%uKB/s R=%uKB/s",
+				    r,
+				    wms ? (size / 1024 * 1000 / wms) : 0,
+				    rms ? (size / 1024 * 1000 / rms) : 0);
+		}
+	}
+
+	shell_print(sh, "=== Summary: %u rounds, %u KB total, %u errors, %u failed ===",
+		    rounds, rounds * size / 1024, total_err, fails);
+	return fails ? -EIO : 0;
+}
+
+/* sd patterns [size_kb] -- sweep all patterns, one pass each */
+static int cmd_sd_patterns(const struct shell *sh, size_t argc, char **argv)
+{
+	uint32_t size = 1024 * 1024;
+	static const enum sd_pattern pats[] = {
+		SD_PAT_ZERO, SD_PAT_FF, SD_PAT_55, SD_PAT_AA, SD_PAT_ADDR, SD_PAT_PRBS,
+	};
+	uint32_t total_err = 0;
+
+	if (!sd_mounted) {
+		shell_error(sh, "SD card not mounted");
+		return -ENODEV;
+	}
+	if (argc >= 2) {
+		size = (uint32_t)atoi(argv[1]) * 1024;
+	}
+	if (size < SD_TEST_CHUNK) {
+		size = SD_TEST_CHUNK;
+	}
+
+	shell_print(sh, "=== SD pattern sweep: %u KB, %u patterns ===",
+		    size / 1024, (uint32_t)(ARRAY_SIZE(pats)));
+
+	for (uint32_t k = 0; k < ARRAY_SIZE(pats); k++) {
+		uint32_t errors, wms, rms;
+		int32_t first;
+		int rc = sd_run_pass(size, pats[k], &errors, &first, &wms, &rms);
+		if (rc < 0) {
+			shell_print(sh, "  %-4s: I/O ERROR %d", sd_pat_name(pats[k]), rc);
+			total_err++;
+			continue;
+		}
+		if (errors) {
+			total_err += errors;
+			shell_print(sh, "  %-4s: FAIL  err=%u first@0x%x",
+				    sd_pat_name(pats[k]), errors, first);
+		} else {
+			shell_print(sh, "  %-4s: OK", sd_pat_name(pats[k]));
+		}
+	}
+	shell_print(sh, "=== Summary: %u total errors across patterns ===", total_err);
+	return total_err ? -EIO : 0;
+}
+
 /* Shell command to show SD card status */
 static int cmd_sd_status(const struct shell *sh, size_t argc, char **argv)
 {
@@ -292,6 +554,9 @@ SHELL_STATIC_SUBCMD_SET_CREATE(sd_cmds,
 	SHELL_CMD(umount, NULL, "Unmount SD card", cmd_sd_umount),
 	SHELL_CMD(format, NULL, "Format SD card as FAT32", cmd_sd_format),
 	SHELL_CMD_ARG(speed, NULL, "Speed test [size_kb]", cmd_sd_speed, 1, 1),
+	SHELL_CMD_ARG(verify, NULL, "Reliability verify [size_kb] [pattern 0-5]", cmd_sd_verify, 0, 2),
+	SHELL_CMD_ARG(test, NULL, "Multi-round reliability <rounds> [size_kb]", cmd_sd_test, 1, 2),
+	SHELL_CMD_ARG(patterns, NULL, "Pattern sweep [size_kb]", cmd_sd_patterns, 0, 1),
 	SHELL_CMD(status, NULL, "Show SD card status", cmd_sd_status),
 	SHELL_SUBCMD_SET_END
 );
@@ -319,6 +584,6 @@ int sdcard_init(void)
 		return 0;
 	}
 
-	LOG_INF("Commands: sd status, sd speed [size_kb], sd format");
+	LOG_INF("Commands: sd status, sd speed, sd verify, sd test <rounds>, sd patterns, sd format");
 	return 0;
 }
