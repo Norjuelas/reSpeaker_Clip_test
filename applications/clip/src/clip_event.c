@@ -31,7 +31,7 @@
 #include "usb_cdc.h"
 #include "config.h"
 
-LOG_MODULE_REGISTER(clip_event, CONFIG_CLIP_LOG_LEVEL);
+LOG_MODULE_REGISTER(clip_event, LOG_LEVEL_WRN); /* chatty event-flow logs */
 
 /* ========================================================================== */
 /* State Transition Table                                                       */

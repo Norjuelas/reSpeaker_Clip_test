@@ -370,8 +370,9 @@ int wifi_on(void)
 
 #ifdef CONFIG_NRF70_SR_COEX
 	/* Configure coexistence AFTER AP is enabled. Do NOT configure before
-	 * AP enable — if nRF70 is in a bad state, coex config hangs forever. */
-	wifi_coex_configure(is_5ghz);
+	 * AP enable — if nRF70 is in a bad state, coex config hangs forever.
+	 * The band follows the channel (>=36 is 5GHz), same as wifi_enable_ap(). */
+	wifi_coex_configure(config_get_wifi_channel() >= 36);
 #endif
 
 	/* Configure static IP from Kconfig macros */

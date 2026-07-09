@@ -19,7 +19,7 @@
 #include "audio.h"
 #include "display.h"
 
-LOG_MODULE_REGISTER(transfer, CONFIG_CLIP_LOG_LEVEL);
+LOG_MODULE_REGISTER(transfer, LOG_LEVEL_WRN); /* chatty transfer-progress logs */
 
 /* Transfer thread stack - uses Kconfig value */
 K_THREAD_STACK_DEFINE(transfer_thread_stack, CONFIG_CLIP_TRANSFER_STACK_SIZE);
