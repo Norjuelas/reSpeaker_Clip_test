@@ -652,7 +652,21 @@ static int cmd_pair_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
          * identity first so iOS (which caches stale bonds) sees a new device
          * and re-pairs fresh after the reboot. */
         int ret = create_json_response(true, NULL, "{\"rebooting\":true}", response, len);
-        ble_rotate_identity();
+
+        /* Rotate the BLE identity (retry). If this fails, the device reboots
+         * with the OLD address but cleared bonds — the phone's cached stale
+         * bond (iOS) then blocks re-pairing, which only a full settings wipe
+         * (recovery) fixes. Retry so the rotation actually takes. */
+        for (int i = 0; i < 3; i++) {
+            int rerr = ble_rotate_identity();
+            if (rerr == 0) {
+                break;
+            }
+            LOG_WRN("ble_rotate_identity failed: %d (attempt %d)", rerr, i + 1);
+            if (i < 2) {
+                k_sleep(K_MSEC(200));
+            }
+        }
         ble_clear_bonds();
         settings_save();
         storage_format_card();
