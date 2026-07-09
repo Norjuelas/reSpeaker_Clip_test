@@ -128,6 +128,24 @@ static void security_request_handler(struct k_work *work)
         int sec_err = bt_conn_set_security(ble_ctx.conn, BT_SECURITY_L2);
         if (sec_err) {
             LOG_ERR("Security request failed: %d", sec_err);
+            if (sec_err == -ENOMEM) {
+                /* Keys pool is full of stale/unloadable bonds. This happens
+                 * after an incompatible upgrade or identity rotation with
+                 * MAX_PAIRED=1: a bond for this peer exists in settings but
+                 * can't be loaded into the single RAM slot, which another
+                 * (stale) bond occupies -> bt_keys_get_addr() returns NULL.
+                 *
+                 * This path only runs for a peer we consider bonded (we only
+                 * request security for bonded peers); a stranger is not
+                 * bonded, never gets a security request, and so can never
+                 * reach here. So clearing here cannot be used to evict an
+                 * owner — it only drops bonds that are already unusable.
+                 * Clear them and disconnect so the peer re-pairs fresh. */
+                LOG_WRN("Bond pool full (-ENOMEM); clearing stale bonds");
+                (void)ble_clear_bonds();
+                (void)bt_conn_disconnect(ble_ctx.conn,
+                                         BT_HCI_ERR_REMOTE_USER_TERM_CONN);
+            }
         } else {
             LOG_INF("sec req sent");
             /* Start 10 second timeout for security establishment */
