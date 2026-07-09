@@ -83,10 +83,12 @@ static void cancel_wifi_timeout(void)
 }
 
 #ifdef CONFIG_NRF70_SR_COEX
-static void wifi_coex_configure(void)
+static void wifi_coex_configure(bool is_5ghz)
 {
 	bool sep = IS_ENABLED(CONFIG_COEX_SEP_ANTENNAS);
 	bool ble = IS_ENABLED(CONFIG_SR_PROTOCOL_BLE);
+	enum nrf_wifi_pta_wlan_op_band band = is_5ghz ?
+		NRF_WIFI_PTA_WLAN_OP_BAND_5_GHZ : NRF_WIFI_PTA_WLAN_OP_BAND_2_4_GHZ;
 	int ret;
 
 	ret = nrf_wifi_coex_config_non_pta(sep, ble);
@@ -94,12 +96,12 @@ static void wifi_coex_configure(void)
 	{
 		LOG_WRN("Coex non-PTA config failed: %d", ret);
 	}
-	ret = nrf_wifi_coex_config_pta(NRF_WIFI_PTA_WLAN_OP_BAND_5_GHZ, sep, ble);
+	ret = nrf_wifi_coex_config_pta(band, sep, ble);
 	if (ret)
 	{
 		LOG_WRN("Coex PTA config failed: %d", ret);
 	}
-	LOG_INF("Coex PTA configured (5GHz, sep=%d, ble=%d)", sep, ble);
+	LOG_INF("Coex PTA configured (%s, sep=%d, ble=%d)", is_5ghz ? "5GHz" : "2.4GHz", sep, ble);
 }
 #endif
 
@@ -256,10 +258,13 @@ static int wifi_enable_ap(struct net_if *iface)
 	req.ssid_length = strlen(ap_ssid);
 	req.psk = (const uint8_t *)config_get_wifi_password();
 	req.psk_length = strlen(config_get_wifi_password());
-	req.channel = config_get_wifi_channel();
+	uint8_t channel = config_get_wifi_channel();
+	bool is_5ghz = (channel >= 36);
+
+	req.channel = channel;
 	req.security = WIFI_SECURITY_TYPE_PSK;
 	req.mfp = WIFI_MFP_OPTIONAL;
-	req.band = WIFI_FREQ_BAND_5_GHZ;
+	req.band = is_5ghz ? WIFI_FREQ_BAND_5_GHZ : WIFI_FREQ_BAND_2_4_GHZ;
 
 	for (int attempt = 0; attempt <= WIFI_AP_ENABLE_RETRIES; attempt++) {
 		k_sem_reset(&ap_enabled_sem);
@@ -366,7 +371,7 @@ int wifi_on(void)
 #ifdef CONFIG_NRF70_SR_COEX
 	/* Configure coexistence AFTER AP is enabled. Do NOT configure before
 	 * AP enable — if nRF70 is in a bad state, coex config hangs forever. */
-	wifi_coex_configure();
+	wifi_coex_configure(is_5ghz);
 #endif
 
 	/* Configure static IP from Kconfig macros */

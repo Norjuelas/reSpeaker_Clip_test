@@ -1576,9 +1576,10 @@ static int cmd_wificfg_handler(struct at_cmd_ctx *ctx, char *response, size_t le
         int channel = atoi(args);
         char *reg_domain = colon + 1;
 
-        /* Validate channel (5GHz: 36-165) */
-        if (channel < 36 || channel > 165) {
-            return create_json_response(false, "Channel must be 36-165 (5GHz)", NULL, response, len);
+        /* Validate channel: 1-13 (2.4GHz) or 36-165 (5GHz) */
+        if (!((channel >= 1 && channel <= 13) || (channel >= 36 && channel <= 165))) {
+            return create_json_response(false, "Channel must be 1-13 (2.4GHz) or 36-165 (5GHz)",
+                                       NULL, response, len);
         }
 
         /* Validate reg_domain (2 uppercase letters) */
