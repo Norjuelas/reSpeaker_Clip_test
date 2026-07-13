@@ -7,15 +7,15 @@
 ## 构建
 
 ```bash
-# 设置环境
-source ~/ncs/v3.2.1/zephyr/zephyr-env.sh
+# 设置环境（NCS v3.3.0；main 需要 v3.3.0 专属 Kconfig）
+source ~/ncs/v3.3.0/zephyr/zephyr-env.sh
 export ZEPHYR_EXTRA_MODULES=$(pwd)
 
-# 构建
-west build --build-dir build-test --pristine --board clip/nrf5340/cpuapp tests/clip
+# 构建（VERSION/Kconfig/DTS 改动后必须 pristine）
+west build --build-dir build-test --pristine always --board clip/nrf5340/cpuapp tests/clip
 
-# 烧录并重置
-west flash --build-dir build-test && nrfutil device reset
+# 烧录并重置（nrfutil runner 烧录后自动复位）
+west flash --build-dir build-test
 ```
 
 ## 串口配置
@@ -43,15 +43,16 @@ west flash --build-dir build-test && nrfutil device reset
 **AP 配置**:
 - SSID: `ClipTest_XXXX` (从芯片 ID 自动生成)
 - 密码: `12345678`
-- 频段: 5GHz, 信道 36
+- 频段/信道: 可配置 —— `wifi on <channel>`（2.4GHz: 1-13，5GHz: 36-165；默认 36 / 5GHz）
 - IP: 192.168.4.1
 - DHCP 池: 192.168.4.2+
 
 **命令**:
 ```bash
-wifi on              # 启动 AP
+wifi on [channel]    # 启动 AP（2.4G:1-13, 5G:36-165；默认 36）
 wifi off             # 停止 AP
 wifi status          # 显示 AP 状态
+wifi scan [band]     # 扫描网络（0=全部, 1=2.4G, 2=5G）
 ```
 
 **快速测试**:
@@ -105,13 +106,18 @@ iperf 192.168.4.10 10 50000 # 10 秒测试，速率 50 Mbps
 
 **命令**:
 ```bash
-sd mount             # 挂载 SD 卡
-sd umount            # 卸载 SD 卡
-sd format            # 将 SD 卡格式化为 FAT32
-sd speed [size_kb]   # 速度测试
-sd status            # 显示 SD 卡状态
-fs ls /SD:           # 列出文件
+sd mount                          # 挂载 SD 卡
+sd umount                         # 卸载 SD 卡
+sd format                         # 将 SD 卡格式化为 FAT32
+sd speed [size_kb]                # 速度测试（写+读）
+sd verify [size_kb] [pattern 0-5] # 可靠性验证（写+读+比对，统计不匹配字节）
+sd test <rounds> [size_kb]        # 多轮可靠性测试（prbs 伪随机，默认 1MB/轮）
+sd patterns [size_kb]             # 全模式扫描
+sd status                         # 显示 SD 卡状态
+fs ls /SD:                        # 列出文件
 ```
+
+**可靠性测试**（`sd verify` / `sd test` / `sd patterns`）：每轮写一种模式、读回、比对——不匹配字节计数（不会因此中止）。`sd test <rounds>` 循环 `<rounds>` 轮，逐轮打印一行，结束后打印汇总（总轮数、总字节、总错误、失败轮数）。长时间拷机示例：`sd test 100000` 在 1MB/轮下约跑 5 天（累计写入约 94GB，≈6 次全卡写入，远低于 TLC 耐久度；缓冲区是静态的，5 天无堆增长）。注意：遇到需要重新挂载的持续 I/O 故障时**不会自动 remount**，会一直失败到轮数跑完。
 
 **预期结果**:
 - SD 卡在存在时挂载
@@ -224,43 +230,7 @@ motor test           # 运行马达测试
 - 脉冲持续时间准确
 - 图案按预期播放
 
-### 9. IMU 测试
-
-**目的**: 测试 LSM6DS3TR 6 轴 IMU 传感器
-
-**命令**:
-```bash
-imu on               # 开启 IMU (GPIO0.2=HIGH)
-imu off              # 关闭 IMU (GPIO0.2=LOW)
-imu init             # 完整初始化 (开启电源 + I2C + 配置)
-imu read             # 读取传感器数据
-imu monitor [n]      # 监控 n 次迭代 (默认 10)
-imu scan             # 扫描 I2C 总线
-imu selftest         # 运行自检
-```
-
-**预期结果**:
-- IMU 初始化并在地址 0x6A 检测
-- WHO_AM_I 返回 0x6C 或 0x6A
-- 加速度计和陀螺仪数据更新
-- 移动设备时值改变
-
-**解读传感器数据**:
-- **加速度计**: +/- 4g 范围，静止时 ~1000 LSB/g
-- **陀螺仪**: +/- 500dps 范围，静止时 ~0 LSB/s
-
 ## 故障排除
-
-### IMU 未检测到
-
-**症状**: WHO_AM_I 返回 0x00 或未找到设备
-
-**解决方案**:
-1. 检查 IMU 是否供电: GPIO0.2 应为高电平
-2. 验证 I2C 连接: GPIO1.0 (SDA), GPIO1.1 (SCL)
-3. 检查 SDO/SA0 引脚接地 (I2C 地址 0x6A)
-4. 确保 I2C 上拉连接到 GPIO0.2
-5. 运行 `imu scan` 检查任何 I2C 设备
 
 ### PMIC 船模式
 
@@ -285,9 +255,9 @@ imu selftest         # 运行自检
 
 **解决方案**:
 1. 检查 SSID 和密码是否正确
-2. 确保设备支持 5GHz WiFi (nRF7002 AP 仅 5GHz)
+2. AP 同时支持 2.4GHz（信道 1-13）和 5GHz（36-165）；默认 5GHz 信道 36。若客户端只支持 2.4G，用 `wifi on 6`（或 1-13 任一）
 3. 检查天线是否连接
-4. 尝试 `wifi on` 然后检查状态
+4. 尝试 `wifi on` 后 `wifi status`；用 `wifi scan` 查看周围网络
 
 ## 硬件规格
 
@@ -296,10 +266,6 @@ imu selftest         # 运行自检
 | 功能 | GPIO | 描述 |
 |------|------|------|
 | 按钮 | GPIO1.15 | 用户按钮 (低电平有效) |
-| IMU SDA | GPIO1.0 | I2C 数据 (软件) |
-| IMU SCL | GPIO1.1 | I2C 时钟 (软件) |
-| IMU INT1 | GPIO0.3 | IMU 中断 |
-| IMU VDD_EN | GPIO0.2 | IMU 电源使能 (NFC1) |
 | 马达控制 | GPIO1.6 | 振动马达控制 (通过 PMIC GPIO) |
 | 麦克风 VDD_EN | GPIO1.14 | 麦克风电源使能 (GPIO 控制) |
 | OLED VDD_EN | GPIO1.8 | OLED 电源使能 (GPIO 控制) |
@@ -311,7 +277,6 @@ imu selftest         # 运行自检
 |------|------|------|------|
 | NPM1300 PMIC | 0x6B | I2C1 | 电源管理 IC |
 | CH1115 OLED | 0x3C | I2C2 | 显示控制器 |
-| LSM6DS3TR IMU | 0x6A | 软件 I2C | 6 轴 IMU 传感器 |
 
 ### 电源供应
 
@@ -330,8 +295,8 @@ imu selftest         # 运行自检
 ## 内存使用
 
 ```
-FLASH:      979 KB (93.4% of 1 MB)
-RAM:        374 KB (81.5% of 448 KB)
+FLASH:      911 KB (86.9% of 1 MB)
+RAM:        374 KB (~85% of 440 KB)
 ```
 
 ## 测试覆盖矩阵
@@ -346,7 +311,6 @@ RAM:        374 KB (81.5% of 448 KB)
 | OLED | ✓ | ✓ | ✓ | - | - |
 | PMIC | - | ✓ | ✓ | ✓ | ✓ |
 | 马达 | ✓ | - | - | - | - |
-| IMU | ✓ | ✓ | ✓ | ✓ | ✓ |
 | USB MSC | - | ✓ | ✓ | - | ✓ |
 
 ## 内置 Shell 命令
@@ -425,6 +389,7 @@ i2c write i2c1 0x6b <reg> <data> # 写入 NPM1300 寄存器
 
 ## 版本历史
 
+- 2026-07-10: 适配 NCS v3.3.0（构建环境）；补充 `sd verify`/`sd test`/`sd patterns` 可靠性套件、`wifi on [channel]`（支持 2.4GHz）和 `wifi scan`；移除 IMU 相关内容（最终设备无 IMU）
 - 2026-05-08: 添加 USB MSC 模块 (SD 卡作为 USB 驱动器)，添加 WAV 录音功能
 - 2026-04-22: 更新文档以准确反映实现的特性，移除不存在的 BLE 和 WiFi 扫描命令，更正 SD 卡命令
 - 2025-03-09: 添加软件 I2C 的 IMU 测试模块

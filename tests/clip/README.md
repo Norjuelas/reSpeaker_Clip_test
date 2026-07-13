@@ -7,15 +7,15 @@ This test suite provides comprehensive testing for all hardware components on th
 ## Building
 
 ```bash
-# Set environment
-source ~/ncs/v3.2.1/zephyr/zephyr-env.sh
+# Set environment (NCS v3.3.0; main requires v3.3.0-only Kconfig)
+source ~/ncs/v3.3.0/zephyr/zephyr-env.sh
 export ZEPHYR_EXTRA_MODULES=$(pwd)
 
-# Build
-west build --build-dir build-test --pristine --board clip/nrf5340/cpuapp tests/clip
+# Build (must be pristine after a VERSION / Kconfig / DTS change)
+west build --build-dir build-test --pristine always --board clip/nrf5340/cpuapp tests/clip
 
-# Flash and reset
-west flash --build-dir build-test && nrfutil device reset
+# Flash and reset (the nrfutil runner auto-resets after flashing)
+west flash --build-dir build-test
 ```
 
 ## Serial Configuration
@@ -43,15 +43,16 @@ west flash --build-dir build-test && nrfutil device reset
 **AP Configuration**:
 - SSID: `ClipTest_XXXX` (auto-generated from chip ID)
 - Password: `12345678`
-- Band: 5GHz, Channel 36
+- Band/Channel: configurable — `wifi on <channel>` (2.4GHz: 1-13, 5GHz: 36-165; default 36 / 5GHz)
 - IP: 192.168.4.1
 - DHCP pool: 192.168.4.2+
 
 **Commands**:
 ```bash
-wifi on              # Start AP
+wifi on [channel]    # Start AP (2.4G:1-13, 5G:36-165; default 36)
 wifi off             # Stop AP
 wifi status          # Show AP status
+wifi scan [band]     # Scan networks (0=all, 1=2.4G, 2=5G)
 ```
 
 **Quick Test**:
@@ -105,13 +106,24 @@ iperf 192.168.4.10 10 50000 # 10 second test at 50 Mbps
 
 **Commands**:
 ```bash
-sd mount             # Mount SD card
-sd umount            # Unmount SD card
-sd format            # Format SD card as FAT32
-sd speed [size_kb]   # Speed test
-sd status            # Show SD card status
-fs ls /SD:           # List files
+sd mount                          # Mount SD card
+sd umount                         # Unmount SD card
+sd format                         # Format SD card as FAT32
+sd speed [size_kb]                # Speed test (write+read)
+sd verify [size_kb] [pattern 0-5] # Reliability verify (write+read+compare, counts mismatches)
+sd test <rounds> [size_kb]        # Multi-round reliability (prbs pattern, default 1MB/round)
+sd patterns [size_kb]             # Pattern sweep across all patterns
+sd status                         # Show SD card status
+fs ls /SD:                        # List files
 ```
+
+**Reliability testing** (`sd verify` / `sd test` / `sd patterns`): each round writes a pattern,
+reads it back, and compares — mismatching bytes are counted (not fatal). `sd test <rounds>` loops
+`<rounds>` times and prints a per-round line + a final summary (total rounds, total bytes, total
+errors, failed rounds). For a long soak run, e.g. `sd test 100000` runs ~5 days at 1MB/round
+(~94 GB written, ≈6 full-card writes — well within TLC endurance; buffers are static so no
+heap growth). Note: it does **not** auto-remount on a persistent I/O failure — on a glitch that
+needs remount it keeps failing until the round count completes.
 
 **Expected Results**:
 - SD card mounts when present
@@ -246,32 +258,7 @@ motor test           # Run motor test
 - Pulse duration is accurate
 - Patterns play as expected
 
-### 9. IMU Test
-
-**Purpose**: Test LSM6DS3TR 6-axis IMU sensor
-
-**Commands**:
-```bash
-imu on               # Power on IMU (GPIO0.2=HIGH)
-imu off              # Power off IMU (GPIO0.2=LOW)
-imu init             # Full init (power on + I2C + configure)
-imu read             # Read sensor data
-imu monitor [n]      # Monitor n iterations (default 10)
-imu scan             # Scan I2C bus
-imu selftest         # Run self-test
-```
-
-**Expected Results**:
-- IMU initializes and detects at address 0x6A
-- WHO_AM_I returns 0x6C or 0x6A
-- Accelerometer and gyroscope data update
-- Values change when device is moved
-
-**Interpreting Sensor Data**:
-- **Accelerometer**: +/- 4g range, ~1000 LSB/g at rest
-- **Gyroscope**: +/- 500dps range, ~0 LSB/s at rest
-
-### 10. Crystal Capacitance Tuning
+### 9. Crystal Capacitance Tuning
 
 **Purpose**: Tune internal load capacitance for LFXO (32.768kHz) and HFXO (32MHz) crystals. The board has no external load capacitors — internal capacitance must be configured via registers.
 
@@ -315,17 +302,6 @@ HFXO capacitance set to: 9.0 pF (CAPVALUE=90)
 
 ## Troubleshooting
 
-### IMU Not Detected
-
-**Symptoms**: WHO_AM_I returns 0x00 or no device found
-
-**Solutions**:
-1. Check IMU is powered: GPIO0.2 should be high
-2. Verify I2C connections: GPIO1.0 (SDA), GPIO1.1 (SCL)
-3. Check SDO/SA0 pin is grounded (I2C address 0x6A)
-4. Ensure I2C pull-ups are connected to GPIO0.2
-5. Run `imu scan` to check for any I2C devices
-
 ### PMIC Ship Mode
 
 **Important**: After entering ship mode (`pmic ship`), the device will power off. To wake:
@@ -349,9 +325,9 @@ HFXO capacitance set to: 9.0 pF (CAPVALUE=90)
 
 **Solutions**:
 1. Check SSID and password are correct
-2. Ensure device supports 5GHz WiFi (nRF7002 AP is 5GHz only)
+2. The AP supports both 2.4GHz (ch 1-13) and 5GHz (ch 36-165); default is 5GHz ch36. If the client is 2.4GHz-only, start with `wifi on 6` (or any 1-13)
 3. Check antenna is connected
-4. Try `wifi on` then check status
+4. Try `wifi on` then `wifi status`; use `wifi scan` to see what's around
 
 ## Hardware Specifications
 
@@ -360,10 +336,6 @@ HFXO capacitance set to: 9.0 pF (CAPVALUE=90)
 | Function | GPIO | Description |
 |----------|------|-------------|
 | Button | GPIO1.15 | User button (active low) |
-| IMU SDA | GPIO1.0 | I2C data (software) |
-| IMU SCL | GPIO1.1 | I2C clock (software) |
-| IMU INT1 | GPIO0.3 | IMU interrupt |
-| IMU VDD_EN | GPIO0.2 | IMU power enable (NFC1) |
 | Motor Ctrl | GPIO1.6 | Vibration motor control (via PMIC GPIO) |
 | Mic VDD_EN | GPIO1.14 | Microphone power enable (GPIO-controlled) |
 | OLED VDD_EN | GPIO1.8 | OLED power enable (GPIO-controlled) |
@@ -375,7 +347,6 @@ HFXO capacitance set to: 9.0 pF (CAPVALUE=90)
 |--------|---------|-----|-------------|
 | NPM1300 PMIC | 0x6B | I2C1 | Power management IC |
 | CH1115 OLED | 0x3C | I2C2 | Display controller |
-| LSM6DS3TR IMU | 0x6A | Software I2C | 6-axis IMU sensor |
 
 ### Power Supply
 
@@ -394,8 +365,8 @@ HFXO capacitance set to: 9.0 pF (CAPVALUE=90)
 ## Memory Usage
 
 ```
-FLASH:      979 KB (93.4% of 1 MB)
-RAM:        374 KB (81.5% of 448 KB)
+FLASH:      911 KB (86.9% of 1 MB)
+RAM:        374 KB (~85% of 440 KB)
 ```
 
 ## Test Coverage Matrix
@@ -410,7 +381,6 @@ RAM:        374 KB (81.5% of 448 KB)
 | OLED | ✓ | ✓ | ✓ | - | - |
 | PMIC | - | ✓ | ✓ | ✓ | ✓ |
 | Motor | ✓ | - | - | - | - |
-| IMU | ✓ | ✓ | ✓ | ✓ | ✓ |
 | USB MSC | - | ✓ | ✓ | - | ✓ |
 
 ## Built-in Shell Commands
@@ -489,6 +459,7 @@ Use SHELL_CMD_* macros for shell command registration:
 
 ## Version History
 
+- 2026-07-10: Updated for NCS v3.3.0 (build env); documented `sd verify`/`sd test`/`sd patterns` reliability suite and `wifi on [channel]` (2.4GHz support) + `wifi scan`
 - 2026-05-12: Added SPI flash speed test command
 - 2026-05-11: Added LFXO/HFXO crystal capacitance tuning commands
 - 2026-05-08: Added USB MSC module (expose SD card as USB drive), added WAV recording
