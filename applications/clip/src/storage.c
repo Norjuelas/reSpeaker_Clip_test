@@ -367,6 +367,7 @@ int storage_get_stats(struct storage_stats *stats)
             sd_full = false;
         }
         stats->free_space_mb = free_space_mb;
+        stats->total_mb = sd_total_mb;
     }
 
     return 0;
@@ -1591,8 +1592,12 @@ static int update_free_space(void)
         return -EIO;
     }
 
-    free_space_mb = (uint32_t)((uint64_t)stat.f_bfree * stat.f_bsize / (1024 * 1024));
-    sd_total_mb = (uint32_t)((uint64_t)stat.f_blocks * stat.f_bsize / (1024 * 1024));
+    /* f_bfree / f_blocks are in cluster (f_frsize) units, NOT sector (f_bsize)
+     * units — the FATFS driver sets f_bfree = free clusters and f_frsize =
+     * cluster size. Multiplying by f_bsize (sector) would under-report by the
+     * cluster-size/sector-size factor (e.g. 64x too small for 32KB clusters). */
+    free_space_mb = (uint32_t)((uint64_t)stat.f_bfree * stat.f_frsize / (1024 * 1024));
+    sd_total_mb = (uint32_t)((uint64_t)stat.f_blocks * stat.f_frsize / (1024 * 1024));
 
     return 0;
 }

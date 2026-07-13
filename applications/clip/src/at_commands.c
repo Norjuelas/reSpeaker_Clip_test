@@ -146,6 +146,36 @@ static int cmd_batt_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
     return n + 1;
 }
 
+/* STORAGE - SD card storage info: total/free/used MB, used %, recorded MB */
+static int cmd_storage_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
+{
+    struct storage_stats stats;
+
+    if (ctx->type != AT_CMD_TYPE_TEST && ctx->type != AT_CMD_TYPE_EXEC) {
+        return create_json_response(false, "Use AT+STORAGE?", NULL, response, len);
+    }
+
+    if (storage_get_stats(&stats) != 0 || !stats.is_mounted) {
+        return create_json_response(false, "SD card not mounted", NULL, response, len);
+    }
+
+    uint32_t total = stats.total_mb;
+    uint32_t free_mb = stats.free_space_mb;
+    uint32_t used = (total > free_mb) ? (total - free_mb) : 0;
+    uint32_t used_pct = (total > 0) ? (used * 100U / total) : 0;
+    uint32_t recorded_mb = (uint32_t)(stats.total_bytes / (1024U * 1024U));
+
+    char data[160];
+    int n = snprintf(data, sizeof(data),
+                     "{\"mounted\":true,\"total_mb\":%u,\"free_mb\":%u,"
+                     "\"used_mb\":%u,\"used_pct\":%u,\"recorded_mb\":%u}",
+                     total, free_mb, used, used_pct, recorded_mb);
+    if (n < 0 || n >= (int)sizeof(data)) {
+        return AT_ERR_NOMEM;
+    }
+    return create_json_response(true, NULL, data, response, len);
+}
+
 static int cmd_gstat_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
 {
     struct clip_context *c = clip_get_context();
@@ -1692,6 +1722,15 @@ int at_commands_register(void)
         .handler = cmd_batt_handler,
     };
     err = at_server_register_cmd(&batt_cmd);
+    if (err) return err;
+
+    /* STORAGE - SD card storage info (total/free/used MB, used %, recorded MB) */
+    static const struct at_command storage_cmd = {
+        .name = "STORAGE",
+        .flags = AT_CMD_QUERY | AT_CMD_EXEC,
+        .handler = cmd_storage_handler,
+    };
+    err = at_server_register_cmd(&storage_cmd);
     if (err) return err;
 
     /* DEVICE - Get device name */

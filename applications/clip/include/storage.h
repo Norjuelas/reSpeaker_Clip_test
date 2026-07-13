@@ -23,6 +23,7 @@ struct storage_stats {
     uint32_t total_chunks;      /* Total chunk files */
     uint64_t total_bytes;       /* Total bytes stored */
     uint32_t free_space_mb;     /* Free space in MB */
+    uint32_t total_mb;          /* Total SD capacity in MB */
     bool is_mounted;            /* SD card mounted */
 };
 
