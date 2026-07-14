@@ -554,7 +554,7 @@ ERROR           RECORDING   -        -        -        -        -        -      
 
 **HC-2.2a**: OTA slot: 256KB secure + 192KB non-secure for firmware update staging
 
-**HC-2.3**: External SPI Flash: 64MB total (PY25Q64H), ~6.8MB LittleFS for settings
+**HC-2.3**: External SPI Flash: 8MB total (PY25Q64H), ~6.8MB LittleFS for settings
 
 **HC-2.4**: Heap: 128KB (CONFIG_HEAP_MEM_POOL_SIZE=131072)
 
@@ -590,7 +590,7 @@ ERROR           RECORDING   -        -        -        -        -        -      
 
 **HC-4.7**: I2C2: CH1115 OLED display (address 0x3c, 88x48, reset: gpio1.9)
 
-**HC-4.8**: SPI3: External SPI flash PY25Q64H (CS: gpio0.20, 64MB)
+**HC-4.8**: SPI3: External SPI flash PY25Q64H (CS: gpio0.20, 8MB)
 
 ## 7. Data Requirements
 

@@ -362,7 +362,7 @@ Document what each patch does, which files it touches, and any constraints.
 - **PDM0**: Microphone array (alias: `dmic0`)
 - **I2C1**: NPM1300 PMIC at 0x6b (5 GPIOs, battery, regulators)
 - **I2C2**: CH1115 OLED at 0x3c (88x48, reset: gpio1.9)
-- **SPI3**: External SPI flash PY25Q64H (CS: gpio0.20, 64MB), powered by `flash_vdd` (gpio0.27)
+- **SPI3**: External SPI flash PY25Q64H (CS: gpio0.20, 8MB), powered by `flash_vdd` (gpio0.27)
 - **SPI4**: SD card via SDHC-SPI (CS: gpio0.9)
 - **QSPI**: nRF7002 WiFi module
 - **USBD**: CDC ACM serial (3rd AT channel) + MSC (SD card mass storage)
@@ -390,7 +390,7 @@ GPIO-controlled: mic_vdd (gpio1.14), oled_vdd (gpio1.8), rfsw_vdd (gpio0.29), fl
 
 ### External Flash Partitions
 
-64MB SPI flash: OTA slot 0 (960KB), OTA slot 1 (256KB), LittleFS (~6.8MB).
+8MB SPI flash: OTA slot 0 (960KB), OTA slot 1 (256KB), LittleFS (~6.8MB).
 
 ## Custom Drivers & Libraries
 

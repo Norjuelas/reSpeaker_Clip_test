@@ -981,14 +981,25 @@ Managed independently by the transfer subsystem. Does not affect device state di
 
 ### 9.2 Flash Storage
 
-| Partition | Size | Purpose |
-|-----------|------|---------|
-| MCUboot | 84 KB | Secure bootloader |
-| Secure image (slot0) | 268 KB | Application firmware (secure) |
-| Non-secure image (slot0_ns) | 192 KB | Network core + WiFi |
-| OTA slot 1 (slot1) | 256 KB | OTA update staging (secure) |
-| OTA slot 1 NS (slot1_ns) | 192 KB | OTA update staging (non-secure) |
-| External SPI flash (lfs-storage) | ~6.8 MB | LittleFS (settings, OTA patches) |
+MCUboot runs in **overwrite-only** mode (no A/B swap, no rollback — the incoming
+image is copied over the primary slot directly). The network-core image runs from
+RAM (`ram_flash`), not internal flash. Layout (see
+`boards/seeed/clip/pm_static_clip_nrf5340_cpuapp.yml`):
+
+**Internal flash (1 MB):**
+
+| Partition | Address | Size | Purpose |
+|-----------|---------|------|---------|
+| MCUboot | 0x000000 | 88 KB | Bootloader (RSA-signed, OLED + USB serial recovery) |
+| Application (primary, slot0) | 0x016000 | 936 KB | App-core firmware — single slot, overwrite-only |
+
+**External SPI flash (PY25Q64H, 8 MB / 64 Mbit):**
+
+| Partition | Address | Size | Purpose |
+|-----------|---------|------|---------|
+| App OTA (mcuboot_secondary) | 0x000000 | 960 KB | App-core OTA staging |
+| Netcore OTA (mcuboot_secondary_1) | 0x0f0000 | 256 KB | Network-core OTA staging |
+| LittleFS (lfs_storage) | 0x130000 | ~6.8 MB | Settings, BLE bonds, fuel-gauge state |
 
 ## 10. Hardware Interfaces
 
@@ -1014,7 +1025,7 @@ Managed independently by the transfer subsystem. Does not affect device state di
 
 | Bus | Device | Chip Select |
 |-----|--------|------------|
-| SPI3 | PY25Q64H external flash (64MB) | GPIO0.20 |
+| SPI3 | PY25Q64H external flash (8MB) | GPIO0.20 |
 | SPI4 | SD card (SDHC-SPI) | GPIO0.9 |
 
 ### 10.4 PMIC Regulators (NPM1300)

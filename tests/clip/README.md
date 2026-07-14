@@ -177,7 +177,7 @@ usb status       # Show USB and SD card status
 
 ### 11. SPI Flash Speed Test
 
-**Purpose**: Test SPI flash (PY25Q64H 64MB) raw read/write/erase performance
+**Purpose**: Test SPI flash (PY25Q64H 8MB) raw read/write/erase performance
 
 **Commands**:
 ```bash
