@@ -6,6 +6,9 @@
 
 cmake_minimum_required(VERSION 3.20.0)
 
+# The test uses the repository's custom gpio-button devicetree binding.
+list(APPEND DTS_ROOT ${CMAKE_CURRENT_LIST_DIR}/../..)
+
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 project(clip)
 
@@ -22,6 +25,7 @@ target_sources(app PRIVATE
 	src/imu.c
 	src/usb.c
 	src/flash_test.c
+	${CMAKE_CURRENT_LIST_DIR}/../../drivers/display/ch1115.c
 )
 
 

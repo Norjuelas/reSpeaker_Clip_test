@@ -53,6 +53,7 @@ config HEAP_MEM_POOL_ADD_SIZE_BOARD
 # CDC ACM DTS node either). Gating on BOOTLOADER_MCUBOOT (not !MCUBOOT) keeps
 # the tests from being forced to y-select USBD_CDC_ACM_CLASS without its deps.
 config CLIP_USB_DFU
+	bool
 	default y if BOOTLOADER_MCUBOOT
 
 # The UDC (USB device controller) driver thread handles host enumeration. With

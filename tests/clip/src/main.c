@@ -9,7 +9,15 @@
 #include <zephyr/logging/log.h>
 #include <zephyr/sys/printk.h>
 #include <zephyr/sys/reboot.h>
+#include <zephyr/sys/poweroff.h>
 #include <zephyr/shell/shell.h>
+#include <zephyr/device.h>
+#include <zephyr/drivers/gpio.h>
+#include <zephyr/drivers/regulator.h>
+#include <zephyr/pm/device.h>
+#include <zephyr/storage/disk_access.h>
+#include <zephyr/bluetooth/bluetooth.h>
+#include <zephyr/dt-bindings/regulator/npm13xx.h>
 #include <nrfx_clock.h>
 #include <hal/nrf_oscillators.h>
 #include "wifi.h"
@@ -37,6 +45,240 @@ static int cmd_reboot(const struct shell *sh, size_t argc, char **argv)
 }
 
 SHELL_CMD_REGISTER(reboot, NULL, "Reboot device", cmd_reboot);
+
+struct sd_shutdown_result {
+	int unmount_rc;
+	int deinit_rc;
+	int suspend_rc;
+	int cs_rc;
+	int ldo_rc;
+	bool ldo_before;
+	bool ldo_after;
+};
+
+static struct sd_shutdown_result sys_sd_shutdown(void);
+static void sys_wifi_power_off(void);
+
+static int cmd_sys_stop(const struct shell *sh, size_t argc, char **argv)
+{
+	struct sd_shutdown_result sd;
+
+	ARG_UNUSED(argc);
+	ARG_UNUSED(argv);
+
+	shell_print(sh, "Stopping WiFi and SD, then entering nRF5340 SYSTEM OFF");
+	sys_wifi_power_off();
+	sd = sys_sd_shutdown();
+	if (sd.ldo_after) {
+		shell_warn(sh, "LDO2 is still enabled (unmount=%d deinit=%d spi4=%d cs=%d ldo=%d)",
+			   sd.unmount_rc, sd.deinit_rc, sd.suspend_rc, sd.cs_rc, sd.ldo_rc);
+	}
+	k_sleep(K_MSEC(200)); /* Let the shell message leave UART first. */
+	sys_poweroff();
+}
+
+/* Isolate the UART contribution before SYSTEM OFF. The production Clip build
+ * saves about 570 uA by disabling UART console/logging. */
+static const struct device *const uart0 = DEVICE_DT_GET(DT_NODELABEL(uart0));
+
+static int cmd_sys_uart_stop(const struct shell *sh, size_t argc, char **argv)
+{
+	ARG_UNUSED(argc);
+	ARG_UNUSED(argv);
+
+	shell_print(sh, "Suspending UARTE, then entering nRF5340 SYSTEM OFF");
+	k_sleep(K_MSEC(100));
+	(void)pm_device_action_run(uart0, PM_DEVICE_ACTION_SUSPEND);
+	sys_poweroff();
+}
+
+/* nRF7002 is powered by two board GPIOs; leave all data/coexistence pins
+ * untouched here so this command isolates only the radio supply domains. */
+static const struct device *const gpio0 = DEVICE_DT_GET(DT_NODELABEL(gpio0));
+static const struct device *const gpio1 = DEVICE_DT_GET(DT_NODELABEL(gpio1));
+static const struct device *const i2c2 = DEVICE_DT_GET(DT_NODELABEL(i2c2));
+static const struct device *const spi4 = DEVICE_DT_GET(DT_NODELABEL(spi4));
+static const struct device *const npm1300 = DEVICE_DT_GET(DT_NODELABEL(npm1300));
+static const struct device *const npm1300_regulators =
+	DEVICE_DT_GET(DT_NODELABEL(npm1300_regulators));
+static const struct device *const ldo1 = DEVICE_DT_GET(DT_NODELABEL(npm1300_ldo1));
+static const struct device *const ldo2 = DEVICE_DT_GET(DT_NODELABEL(npm1300_ldo2));
+
+/* nRF7002 supply domains: this is the same proven isolation sequence used by
+ * `sys wifi_stop`, which removes about 70 uA before SYSTEM OFF. */
+static void sys_wifi_power_off(void)
+{
+	(void)gpio_pin_configure(gpio0, 11, GPIO_OUTPUT_INACTIVE); /* BUCKEN */
+	(void)gpio_pin_configure(gpio0, 26, GPIO_OUTPUT_INACTIVE); /* IOVDD_EN */
+	(void)gpio_pin_configure(gpio0, 29, GPIO_OUTPUT_INACTIVE); /* RF switch */
+}
+
+/* Keep every SD signal benign before cutting VDD_SD. SPI4's sleep pinctrl
+ * parks SCK/MOSI/MISO low, and CS is then explicitly pulled low. */
+static struct sd_shutdown_result sys_sd_shutdown(void)
+{
+	struct sd_shutdown_result result;
+
+	result.ldo_before = regulator_is_enabled(ldo2);
+	result.unmount_rc = sdcard_unmount();
+	result.deinit_rc = disk_access_ioctl("SD", DISK_IOCTL_CTRL_DEINIT, NULL);
+	result.suspend_rc = pm_device_action_run(spi4, PM_DEVICE_ACTION_SUSPEND);
+	result.cs_rc = gpio_pin_configure(gpio0, 9, GPIO_INPUT | GPIO_PULL_DOWN);
+	result.ldo_rc = regulator_disable(ldo2);
+	result.ldo_after = regulator_is_enabled(ldo2);
+
+	return result;
+}
+
+static void print_device_state(const struct shell *sh, const char *name,
+			       const struct device *dev)
+{
+	shell_print(sh, "%s: ready=%d init=%d init_res=-%u", name,
+		    device_is_ready(dev), dev->state->initialized, dev->state->init_res);
+}
+
+static int cmd_sys_sd_status(const struct shell *sh, size_t argc, char **argv)
+{
+	ARG_UNUSED(argc);
+	ARG_UNUSED(argv);
+
+	print_device_state(sh, "nPM1300", npm1300);
+	print_device_state(sh, "nPM1300 regulators", npm1300_regulators);
+	print_device_state(sh, "LDO1", ldo1);
+	print_device_state(sh, "LDO2", ldo2);
+	print_device_state(sh, "SPI4", spi4);
+	return 0;
+}
+
+static int cmd_sys_sd_stop(const struct shell *sh, size_t argc, char **argv)
+{
+	struct sd_shutdown_result result;
+
+	ARG_UNUSED(argc);
+	ARG_UNUSED(argv);
+
+	result = sys_sd_shutdown();
+
+	shell_print(sh, "SD shutdown: ldo %d -> %d", result.ldo_before, result.ldo_after);
+	shell_print(sh, "  unmount=%d deinit=%d spi4_suspend=%d cs=%d ldo2_disable=%d",
+		    result.unmount_rc, result.deinit_rc, result.suspend_rc,
+		    result.cs_rc, result.ldo_rc);
+	shell_print(sh, "Entering nRF5340 SYSTEM OFF");
+	k_sleep(K_MSEC(200));
+	sys_poweroff();
+}
+
+static int cmd_sys_wifi_stop(const struct shell *sh, size_t argc, char **argv)
+{
+	ARG_UNUSED(argc);
+	ARG_UNUSED(argv);
+
+	shell_print(sh, "Cutting nRF7002 power, then entering nRF5340 SYSTEM OFF");
+	k_sleep(K_MSEC(100));
+	sys_wifi_power_off();
+	sys_poweroff();
+}
+
+static int cmd_sys_oled_stop(const struct shell *sh, size_t argc, char **argv)
+{
+	ARG_UNUSED(argc);
+	ARG_UNUSED(argv);
+
+	shell_print(sh, "Isolating OLED bus, cutting VDD, then entering SYSTEM OFF");
+	k_sleep(K_MSEC(100));
+	/* Do not leave any OLED input high when VDD is removed: it back-powers
+	 * the display through its ESD diodes. */
+	(void)pm_device_action_run(i2c2, PM_DEVICE_ACTION_SUSPEND);
+	(void)gpio_pin_configure(gpio1, 9, GPIO_OUTPUT_INACTIVE); /* RESET asserted */
+	(void)gpio_pin_configure(gpio1, 8, GPIO_OUTPUT_INACTIVE); /* OLED VDD */
+	sys_poweroff();
+}
+
+static int cmd_sys_mic_stop(const struct shell *sh, size_t argc, char **argv)
+{
+	int ret;
+
+	ARG_UNUSED(argc);
+	ARG_UNUSED(argv);
+
+	if (!device_is_ready(ldo1)) {
+		shell_error(sh, "nPM1300 LDO1 is not ready");
+		return -ENODEV;
+	}
+
+	shell_print(sh, "Cutting microphone LDO1, then entering SYSTEM OFF");
+	ret = regulator_disable(ldo1);
+	if (ret != 0) {
+		shell_error(sh, "LDO1 disable failed: %d", ret);
+		return ret;
+	}
+
+	k_sleep(K_MSEC(100));
+	sys_poweroff();
+}
+
+static int cmd_sys_ble_stop(const struct shell *sh, size_t argc, char **argv)
+{
+	int ret;
+
+	ARG_UNUSED(argc);
+	ARG_UNUSED(argv);
+
+	shell_print(sh, "Stopping BLE, then entering nRF5340 SYSTEM OFF");
+	ret = bt_le_adv_stop();
+	if (ret != 0 && ret != -EALREADY) {
+		shell_warn(sh, "BLE advertising stop failed: %d", ret);
+	}
+
+	ret = bt_disable();
+	if (ret != 0) {
+		/* The IPC controller may already be unavailable. Do not let a failed
+		 * HCI reset prevent the following SYSTEM OFF current measurement. */
+		shell_warn(sh, "BLE disable failed: %d; continuing to SYSTEM OFF", ret);
+	}
+
+	k_sleep(K_MSEC(100));
+	sys_poweroff();
+}
+
+static const struct device *const buck2 = DEVICE_DT_GET(DT_NODELABEL(npm1300_buck2));
+
+static int cmd_sys_buck_pfm_stop(const struct shell *sh, size_t argc, char **argv)
+{
+	int ret;
+
+	ARG_UNUSED(argc);
+	ARG_UNUSED(argv);
+
+	if (!device_is_ready(buck2)) {
+		shell_error(sh, "nPM1300 BUCK2 is not ready");
+		return -ENODEV;
+	}
+
+	shell_print(sh, "Setting BUCK2 PFM, then entering SYSTEM OFF");
+	ret = regulator_set_mode(buck2, NPM13XX_BUCK_MODE_PFM);
+	if (ret != 0) {
+		shell_error(sh, "BUCK2 PFM failed: %d", ret);
+		return ret;
+	}
+
+	k_sleep(K_MSEC(100));
+	sys_poweroff();
+}
+
+SHELL_STATIC_SUBCMD_SET_CREATE(sub_sys_cmds,
+	SHELL_CMD(stop, NULL, "Stop WiFi and SD safely then system power off", cmd_sys_stop),
+	SHELL_CMD(uart_stop, NULL, "Suspend UARTE then system power off", cmd_sys_uart_stop),
+	SHELL_CMD(wifi_stop, NULL, "Cut nRF7002 power then system power off", cmd_sys_wifi_stop),
+	SHELL_CMD(oled_stop, NULL, "Cut OLED VDD then system power off", cmd_sys_oled_stop),
+	SHELL_CMD(mic_stop, NULL, "Cut microphone LDO1 then system power off", cmd_sys_mic_stop),
+	SHELL_CMD(ble_stop, NULL, "Stop BLE then system power off", cmd_sys_ble_stop),
+	SHELL_CMD(buck_pfm_stop, NULL, "Set BUCK2 PFM then system power off", cmd_sys_buck_pfm_stop),
+	SHELL_CMD(sd_status, NULL, "Show SD/PMIC device initialization state", cmd_sys_sd_status),
+	SHELL_CMD(sd_stop, NULL, "Log SD shutdown steps then system power off", cmd_sys_sd_stop),
+);
+
+SHELL_CMD_REGISTER(sys, &sub_sys_cmds, "System power control", NULL);
 
 /* LFXO capacitance commands */
 static const char *lfxo_cap_name(uint32_t val)

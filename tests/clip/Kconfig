@@ -5,6 +5,7 @@
 #
 
 source "Kconfig.zephyr"
+rsource "../../Kconfig"
 
 menu "BLE WiFi Coexistence"
 

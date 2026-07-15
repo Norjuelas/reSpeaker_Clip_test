@@ -339,6 +339,22 @@ regulator vget <name>    # 获取调节器电压
 | `oled_vdd` | GPIO 固定 | OLED 电源使能 (GPIO1.8) |
 | `rfsw_vdd` | GPIO 固定 | WiFi RF 开关 (GPIO0.29) |
 
+### SYSTEM OFF 功耗测试
+
+正常关机请使用：
+
+```bash
+sys stop
+```
+
+进入 nRF5340 SYSTEM OFF 前，该命令会先关闭 nRF7002 WiFi 供电域（BUCKEN、IOVDD 和
+RF switch），再卸载并反初始化 SD 卡、挂起 SPI4（通过 sleep pinctrl 拉低
+SCK/MOSI/MISO）、将 SD CS 拉低，并关闭 nPM1300 LDO2（`VDD_SD`）。这样可避免已
+断电的 SD 卡被 SPI 信号反向供电。该命令进入的是 CPU SYSTEM OFF，不是 nPM1300 ship
+mode。
+
+`sys sd_stop` 执行相同流程，并打印每一步的返回值，供诊断使用。
+
 ### GPIO Shell
 
 ```bash

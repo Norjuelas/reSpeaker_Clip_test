@@ -203,6 +203,10 @@
 				regulator-min-microvolt = <3300000>;
 				regulator-max-microvolt = <3300000>;
 				regulator-init-microvolt = <3300000>;
+				/* The PMIC powers LDO2 by default.  Start with VDD_SD
+				 * off so each runtime regulator_enable() has exactly one
+				 * matching regulator_disable(). */
+				regulator-boot-off;
 				enable-gpio-config = <NPM13XX_GPIO_CHAN_3 GPIO_ACTIVE_HIGH>;
 				startup-delay-us = <1000>;
 			};

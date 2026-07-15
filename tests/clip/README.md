@@ -362,6 +362,23 @@ HFXO capacitance set to: 9.0 pF (CAPVALUE=90)
   - OLED VDD_EN: GPIO1.8 (OLED display power enable)
   - RFSW VDD_EN: GPIO0.29 (WiFi RF switch enable)
 
+### SYSTEM OFF Current Test
+
+Use the normal shutdown command:
+
+```bash
+sys stop
+```
+
+Before entering nRF5340 SYSTEM OFF, it cuts the nRF7002 WiFi supply domains
+(BUCKEN, IOVDD and RF switch), then unmounts and deinitializes the SD card,
+suspends SPI4 (parking SCK/MOSI/MISO through its sleep pinctrl), pulls SD CS
+low, and disables nPM1300 LDO2 (`VDD_SD`). This prevents the powered-down SD
+card from being back-powered through its SPI signals. This is CPU SYSTEM OFF,
+not nPM1300 ship mode.
+
+`sys sd_stop` runs the same sequence and prints each return code for diagnosis.
+
 ## Memory Usage
 
 ```
