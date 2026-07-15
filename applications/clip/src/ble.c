@@ -73,14 +73,6 @@ static struct k_work adv_work;
 /* Track current advertising speed */
 static bool is_fast_adv;
 
-/*
- * Active BLE identity. Defaults to BT_ID_DEFAULT (0). AT+PAIR=reset rotates it
- * to a second identity (id 1) with a new random address so iOS (which caches
- * bonds and has no API to remove them) sees a new device and re-pairs fresh.
- * Derived at boot from bt_id_get() (count>1 ⟺ id 1 exists ⟺ rotated).
- */
-static uint8_t ble_active_id = BT_ID_DEFAULT;
-
 /* Fast advertising: for initial pairing discovery (100-150ms) */
 static const struct bt_le_adv_param adv_param_fast =
     BT_LE_ADV_PARAM_INIT(BT_LE_ADV_OPT_CONN, BT_GAP_ADV_FAST_INT_MIN_1,
@@ -93,14 +85,6 @@ static const struct bt_le_adv_param adv_param_slow =
     BT_LE_ADV_PARAM_INIT(BT_LE_ADV_OPT_CONN,
                          BT_GAP_ADV_FAST_INT_MIN_2,
                          BT_GAP_ADV_FAST_INT_MAX_2, NULL);
-
-/* Start advertising on the active identity (copies the const param, sets .id). */
-static int ble_adv_start_on_active(const struct bt_le_adv_param *base)
-{
-    struct bt_le_adv_param p = *base;
-    p.id = ble_active_id;
-    return bt_le_adv_start(&p, ad, ARRAY_SIZE(ad), sd, ARRAY_SIZE(sd));
-}
 
 #define ADV_FAST_TIMEOUT_MS  CONFIG_CLIP_ADV_FAST_TIMEOUT_MS   /* Switch to slow advertising after N ms */
 #define BLE_INACTIVITY_TIMEOUT_MS (5 * 60 * 1000)  /* 5 minutes */
@@ -130,7 +114,7 @@ static void security_request_handler(struct k_work *work)
             LOG_ERR("Security request failed: %d", sec_err);
             if (sec_err == -ENOMEM) {
                 /* Keys pool is full of stale/unloadable bonds. This happens
-                 * after an incompatible upgrade or identity rotation with
+                 * after an incompatible upgrade with
                  * MAX_PAIRED=1: a bond for this peer exists in settings but
                  * can't be loaded into the single RAM slot, which another
                  * (stale) bond occupies -> bt_keys_get_addr() returns NULL.
@@ -348,7 +332,8 @@ static void adv_timeout_handler(struct k_work *work)
 	LOG_INF("slow adv");
 	is_fast_adv = false;
 	bt_le_adv_stop();
-	int err = ble_adv_start_on_active(&adv_param_slow);
+	int err = bt_le_adv_start(&adv_param_slow, ad, ARRAY_SIZE(ad),
+				  sd, ARRAY_SIZE(sd));
 	if (err && err != -EALREADY) {
 		LOG_ERR("Slow advertising start failed: %d", err);
 	}
@@ -371,7 +356,7 @@ static void adv_work_handler(struct k_work *work)
 	const struct bt_le_adv_param *param = ble_is_bonded()
 		? &adv_param_slow : &adv_param_fast;
 
-	err = ble_adv_start_on_active(param);
+	err = bt_le_adv_start(param, ad, ARRAY_SIZE(ad), sd, ARRAY_SIZE(sd));
 	if (err && err != -EALREADY) {
 		LOG_ERR("Advertising restart failed: %d", err);
 	} else {
@@ -417,7 +402,7 @@ static void connected(struct bt_conn *conn, uint8_t err)
 
     /* Check whether this is a known bonded device or a new one */
     int bond_count = 0;
-    bt_foreach_bond(ble_active_id, count_bond_cb, &bond_count);
+    bt_foreach_bond(BT_ID_DEFAULT, count_bond_cb, &bond_count);
     prev_bond_count = bond_count;
 
     if (bond_count > 0) {
@@ -521,7 +506,7 @@ static void security_changed(struct bt_conn *conn, bt_security_t level,
          * Solution: Delete our stale bond and allow re-pairing
          */
         LOG_WRN("re-enc fail: %s", addr);
-        int unpair_err = bt_unpair(ble_active_id, bt_conn_get_dst(conn));
+        int unpair_err = bt_unpair(BT_ID_DEFAULT, bt_conn_get_dst(conn));
         if (unpair_err) {
             LOG_WRN("bt_unpair failed: %d", unpair_err);
         }
@@ -579,7 +564,7 @@ static void pairing_complete(struct bt_conn *conn, bool bonded)
 
         /* Check if this is a new device (bond count increased) */
         int new_bond_count = 0;
-        bt_foreach_bond(ble_active_id, count_bond_cb, &new_bond_count);
+        bt_foreach_bond(BT_ID_DEFAULT, count_bond_cb, &new_bond_count);
         if (new_bond_count != prev_bond_count) {
             LOG_INF("new device, regen WiFi pw");
             config_generate_wifi_password();
@@ -705,24 +690,13 @@ int ble_init(void)
     settings_load_subtree("bt");
     settings_load_watchdog_disarm();
 
-    /* Derive the active identity: if a rotated identity (id 1) exists from a
-     * prior AT+PAIR=reset, advertise/bond on it (new address). */
-    {
-        bt_addr_le_t ids[CONFIG_BT_ID_MAX];
-        size_t id_count = ARRAY_SIZE(ids);
-
-        bt_id_get(ids, &id_count);
-        ble_active_id = (id_count > 1) ? 1 : BT_ID_DEFAULT;
-        LOG_INF("active identity: %u (id_count=%u)", ble_active_id, (unsigned)id_count);
-    }
-
     /* If not bonded, switch display to pairing guide */
     if (!ble_is_bonded()) {
         display_post_event(UI_EVENT_PAIRING_SHOW);
     }
 
     /* Start advertising - always fast initially */
-    err = ble_adv_start_on_active(&adv_param_fast);
+    err = bt_le_adv_start(&adv_param_fast, ad, ARRAY_SIZE(ad), sd, ARRAY_SIZE(sd));
     if (err) {
         if (err != -EALREADY) {
             LOG_ERR("Advertising start failed: %d", err);
@@ -934,7 +908,7 @@ bool ble_is_file_data_notify_enabled(void)
 bool ble_is_bonded(void)
 {
     int bond_count = 0;
-    bt_foreach_bond(ble_active_id, count_bond_cb, &bond_count);
+    bt_foreach_bond(BT_ID_DEFAULT, count_bond_cb, &bond_count);
     return bond_count > 0;
 }
 
@@ -957,48 +931,13 @@ int ble_get_bond_addr(char *addr_buf, size_t len)
         return -EINVAL;
     }
     addr_buf[0] = '\0';
-    bt_foreach_bond(ble_active_id, get_bond_addr_cb, addr_buf);
+    bt_foreach_bond(BT_ID_DEFAULT, get_bond_addr_cb, addr_buf);
     return addr_buf[0] ? 0 : -ENOENT;
 }
 
 int ble_clear_bonds(void)
 {
-    /* Clear bonds on both the default and the active (rotated) identity so the
-     * old bond is removed on the first rotation too. */
-    int err = bt_unpair(BT_ID_DEFAULT, NULL);
-    if (ble_active_id != BT_ID_DEFAULT) {
-        int err2 = bt_unpair(ble_active_id, NULL);
-        if (err == 0) {
-            err = err2;
-        }
-    }
-    return err;
-}
-
-int ble_rotate_identity(void)
-{
-    /* Rotate the BLE identity address so a peer that caches a stale bond
-     * (notably iOS, which has no API to remove bonds) sees a new device and
-     * re-pairs fresh. The first call creates a second identity (id 1); later
-     * calls reset id 1 to a new random address. The address persists across
-     * reboots via settings; ble_init() re-derives ble_active_id from it. */
-    int id;
-    if (ble_active_id == BT_ID_DEFAULT) {
-        id = bt_id_create(NULL, NULL);
-        if (id < 0) {
-            LOG_ERR("bt_id_create failed: %d", id);
-            return id;
-        }
-        ble_active_id = (uint8_t)id;
-    } else {
-        int err = bt_id_reset(ble_active_id, NULL, NULL);
-        if (err) {
-            LOG_ERR("bt_id_reset failed: %d", err);
-            return err;
-        }
-    }
-    LOG_INF("identity rotated: active_id=%u", ble_active_id);
-    return 0;
+    return bt_unpair(BT_ID_DEFAULT, NULL);
 }
 
 struct bt_conn *ble_get_connection(void)
@@ -1086,7 +1025,8 @@ void ble_adv_restart_fast(void)
     }
 
     bt_le_adv_stop();
-    int err = ble_adv_start_on_active(&adv_param_fast);
+    int err = bt_le_adv_start(&adv_param_fast, ad, ARRAY_SIZE(ad),
+				      sd, ARRAY_SIZE(sd));
     if (err && err != -EALREADY) {
 	LOG_ERR("Fast advertising restart failed: %d", err);
     } else {
