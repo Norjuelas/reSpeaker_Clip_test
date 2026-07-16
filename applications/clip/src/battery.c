@@ -12,8 +12,12 @@
 #include <zephyr/drivers/mfd/npm13xx.h>
 #include <zephyr/bluetooth/services/bas.h>
 #include <zephyr/logging/log.h>
+#include <zephyr/sys/crc.h>
 #include <nrf_fuel_gauge.h>
 #include <zephyr/settings/settings.h>
+
+#include <stddef.h>
+#include <string.h>
 
 #include "battery.h"
 #include "clip.h"
@@ -77,33 +81,89 @@ static bool low_battery_warned;
 static bool thermal_charge_disabled;  /* sticky: latched hot, held off until resume temp */
 static int64_t fg_ref_time;
 
-/* Fuel gauge state persistence (across reboot). The nRF Fuel Gauge is a
- * software library (state in RAM); without saving, every reboot re-estimates
- * SoC from the resting voltage -> the displayed % jumps (e.g. 38% -> 53%).
- * Save the state blob to settings (LittleFS) and restore on boot so the SoC
- * is continuous. Saved infrequently (on SoC change, + on graceful shutdown). */
-#define FG_STATE_BUF_SIZE 512U
-static uint8_t fg_state_buf[FG_STATE_BUF_SIZE];
-static size_t fg_state_len;
+/* Fuel-gauge state persistence. The library state is only valid with the
+ * exact battery model from which it was captured. Keep a small envelope around
+ * the opaque library blob so a model or library-state layout change cannot
+ * make a new firmware resume an incompatible estimate. */
+#define FG_STATE_KEY             "battery/fg_state"
+#define FG_STATE_MAGIC           0x46475331U /* "FGS1" */
+#define FG_STATE_FORMAT_VERSION  1U
+#define FG_STATE_BUF_SIZE        512U
+
+struct fg_state_record {
+	uint32_t magic;
+	uint16_t format_version;
+	uint16_t state_size;
+	uint32_t model_crc;
+	uint8_t state[FG_STATE_BUF_SIZE];
+};
+
+static struct fg_state_record fg_state_record;
 static bool fg_state_loaded;
 static uint8_t last_saved_soc = 255U;  /* last SoC% persisted (255 = force first save) */
+
+static uint32_t fg_model_crc(void)
+{
+	return crc32_ieee((const uint8_t *)&battery_model, sizeof(battery_model));
+}
+
+static void fg_state_reset(void)
+{
+	memset(&fg_state_record, 0, sizeof(fg_state_record));
+	fg_state_loaded = false;
+}
 
 static int fg_state_settings_set(const char *key, size_t len,
 				 settings_read_cb read_cb, void *cb_arg)
 {
 	ARG_UNUSED(key);
-	if (len > sizeof(fg_state_buf)) {
-		return -EFBIG;
+	const size_t expected_len = offsetof(struct fg_state_record, state) +
+				    nrf_fuel_gauge_state_size;
+
+	/* The old raw-blob format deliberately does not pass this check. A raw
+	 * blob may have been generated with a different model and is unsafe to
+	 * restore after the model update. */
+	if (len != expected_len) {
+		LOG_WRN("Ignoring incompatible fuel-gauge state (size %u)",
+			(unsigned int)len);
+		fg_state_reset();
+		return 0;
 	}
-	ssize_t n = read_cb(cb_arg, fg_state_buf, len);
-	if (n > 0) {
-		fg_state_len = n;
-		fg_state_loaded = true;
+
+	fg_state_reset();
+	ssize_t n = read_cb(cb_arg, &fg_state_record, len);
+	if (n != (ssize_t)len) {
+		LOG_WRN("Fuel-gauge state read failed: %d", (int)n);
+		fg_state_reset();
+		return 0;
 	}
+
+	if (fg_state_record.magic != FG_STATE_MAGIC ||
+	    fg_state_record.format_version != FG_STATE_FORMAT_VERSION ||
+	    fg_state_record.state_size != nrf_fuel_gauge_state_size ||
+	    fg_state_record.model_crc != fg_model_crc()) {
+		LOG_WRN("Ignoring fuel-gauge state from a different model/version");
+		fg_state_reset();
+		return 0;
+	}
+
+	fg_state_loaded = true;
 	return 0;
 }
 SETTINGS_STATIC_HANDLER_DEFINE(fg_state, "battery/fg_state", NULL,
 			      fg_state_settings_set, NULL, NULL);
+
+static void fg_state_load(void)
+{
+	/* config_init() initializes settings before battery_init(). It only loads
+	 * config/time, though, so explicitly load the battery subtree before using
+	 * the saved state. */
+	fg_state_reset();
+	int ret = settings_load_subtree("battery");
+	if (ret != 0) {
+		LOG_WRN("Fuel-gauge state load failed: %d", ret);
+	}
+}
 
 /* Fuel gauge state */
 static bool fg_initialized;
@@ -141,23 +201,34 @@ void battery_poll(void)
  * graceful shutdown/reboot so the SoC is continuous across reboots. */
 void battery_save_fg_state(void)
 {
+	const size_t save_len = offsetof(struct fg_state_record, state) +
+				nrf_fuel_gauge_state_size;
+
 	if (!fg_initialized) {
 		return;
 	}
-	if (nrf_fuel_gauge_state_size > sizeof(fg_state_buf)) {
+	if (nrf_fuel_gauge_state_size > sizeof(fg_state_record.state)) {
 		LOG_WRN("fg_state buf too small (%u < %u)",
-			(unsigned)sizeof(fg_state_buf), (unsigned)nrf_fuel_gauge_state_size);
+			(unsigned)sizeof(fg_state_record.state), (unsigned)nrf_fuel_gauge_state_size);
 		return;
 	}
-	int ret = nrf_fuel_gauge_state_get(fg_state_buf, sizeof(fg_state_buf));
+
+	fg_state_record.magic = FG_STATE_MAGIC;
+	fg_state_record.format_version = FG_STATE_FORMAT_VERSION;
+	fg_state_record.state_size = nrf_fuel_gauge_state_size;
+	fg_state_record.model_crc = fg_model_crc();
+
+	int ret = nrf_fuel_gauge_state_get(fg_state_record.state,
+					   sizeof(fg_state_record.state));
 	if (ret != 0) {
 		LOG_WRN("fg_state_get failed: %d", ret);
 		return;
 	}
-	ret = settings_save_one("battery/fg_state", fg_state_buf,
-				nrf_fuel_gauge_state_size);
+	ret = settings_save_one(FG_STATE_KEY, &fg_state_record, save_len);
 	if (ret) {
 		LOG_WRN("fg_state save failed: %d", ret);
+	} else {
+		fg_state_loaded = true;
 	}
 }
 
@@ -402,6 +473,19 @@ static void read_and_update_locked(void)
 
 	/* Displayed percentage = actual SoC (no bottom reserve). */
 	uint8_t display_percent = percent;
+	/* The UI must be monotonic within one charge/discharge phase. The fuel
+	 * gauge already suppresses most opposite-direction corrections, but make
+	 * the display contract explicit as a final safeguard against voltage
+	 * relaxation and EMA rounding: discharging never shows N% -> N+1%, and
+	 * charging never shows N% -> N-1%. */
+	if (last_percent != 255U &&
+	    ((charging && display_percent < last_percent) ||
+	     (!charging && display_percent > last_percent))) {
+		LOG_DBG("Holding battery at %u%% while %s (estimate %u%%)",
+			last_percent, charging ? "charging" : "discharging", display_percent);
+		display_percent = last_percent;
+	}
+
 	/* Update battery percent (display value) */
 	if (display_percent != last_percent) {
 		last_percent = display_percent;
@@ -538,7 +622,7 @@ int battery_init(void)
 	struct nrf_fuel_gauge_init_parameters init_params = {
 		.model = &battery_model,
 		.opt_params = NULL,
-		.state = fg_state_loaded ? fg_state_buf : NULL,
+		.state = fg_state_loaded ? fg_state_record.state : NULL,
 	};
 	float max_charge_current;
 	float term_charge_current;
@@ -552,6 +636,11 @@ int battery_init(void)
 		LOG_WRN("NPM1300 charger not ready");
 		return -ENODEV;
 	}
+
+	/* settings_load_subtree("config") in config_init() does not load this
+	 * subtree. Do this before creating the fuel gauge so state is genuinely
+	 * resumed instead of silently discarded on every reboot. */
+	fg_state_load();
 
 	LOG_INF("Battery: 240mAh, fuel gauge %s", nrf_fuel_gauge_version);
 
@@ -581,6 +670,7 @@ int battery_init(void)
 			LOG_WRN("Failed to initialize fuel gauge: %d, using voltage-based SoC", ret);
 		} else {
 			fg_initialized = true;
+			LOG_INF("Fuel-gauge state: %s", fg_state_loaded ? "restored" : "new estimate");
 
 			/* Configure charge current limits */
 			nrf_fuel_gauge_ext_state_update(NRF_FUEL_GAUGE_EXT_STATE_INFO_CHARGE_CURRENT_LIMIT,
