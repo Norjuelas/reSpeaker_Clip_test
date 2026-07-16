@@ -125,6 +125,26 @@ static bool is_valid_session_id(const char *id)
     return true;
 }
 
+/* DOWNLOAD filenames are logical protocol names, not paths. */
+static bool is_valid_download_filename(const char *filename)
+{
+    uint32_t index = 0;
+
+    if (!filename || strlen(filename) != 9 ||
+        strcmp(filename + 4, ".opus") != 0) {
+        return false;
+    }
+
+    for (size_t i = 0; i < 4; i++) {
+        if (filename[i] < '0' || filename[i] > '9') {
+            return false;
+        }
+        index = index * 10U + (uint32_t)(filename[i] - '0');
+    }
+
+    return index > 0 && index <= CONFIG_CLIP_STORAGE_MAX_CHUNKS;
+}
+
 /* GSTAT Command Handler - Get device status */
 /* BATT Command Handler - Get battery status (%, charging, voltage, temp).
  * Exposes the NPM1300 voltage + NTC temperature that battery.c refreshes every
@@ -1174,7 +1194,7 @@ static int cmd_marks_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
     /* Without query: return summary (total count) */
     /* With query: return paginated bookmark list */
 
-    if (!ctx->args || strlen(ctx->args) == 0) {
+    if (!ctx->args || ctx->args[0] == '\0') {
         return create_json_response(false, "Missing session_id", NULL, response, len);
     }
 
@@ -1304,8 +1324,35 @@ static int cmd_download_handler(struct at_cmd_ctx *ctx, char *response, size_t l
 
     struct transport *tp = NULL;
 
-    if (!ctx->args || strlen(ctx->args) == 0) {
+    if (!ctx->args || ctx->args[0] == '\0') {
         return create_json_response(false, "Missing session_id", NULL, response, len);
+    }
+
+    /* Parse and validate before accessing storage or starting a transfer. */
+    char args_copy[128];
+    size_t args_len = strnlen(ctx->args, sizeof(args_copy));
+    if (args_len == sizeof(args_copy)) {
+        return create_json_response(false, "DOWNLOAD argument too long", NULL,
+                                    response, len);
+    }
+    memcpy(args_copy, ctx->args, args_len + 1);
+
+    char *colon = strchr(args_copy, ':');
+    char *session_id = args_copy;
+    char *filename = NULL;
+
+    if (colon) {
+        *colon = '\0';
+        filename = colon + 1;
+        if (strchr(filename, ':') != NULL ||
+            !is_valid_download_filename(filename)) {
+            return create_json_response(false, "Invalid download filename", NULL,
+                                        response, len);
+        }
+    }
+
+    if (!is_valid_session_id(session_id)) {
+        return create_json_response(false, "Invalid session ID", NULL, response, len);
     }
 
     /* Check if SD card is mounted */
@@ -1322,25 +1369,6 @@ static int cmd_download_handler(struct at_cmd_ctx *ctx, char *response, size_t l
     tp = transport_get(ctx->transport_type);
     if (!tp) {
         return create_json_response(false, "Transport not available", NULL, response, len);
-    }
-
-    /* Parse args: session_id or session_id:filename */
-    char args_copy[128];
-    strncpy(args_copy, ctx->args, sizeof(args_copy) - 1);
-    args_copy[sizeof(args_copy) - 1] = '\0';
-
-    char *colon = strchr(args_copy, ':');
-    char *session_id = args_copy;
-    char *filename = NULL;
-
-    if (colon) {
-        *colon = '\0';
-        filename = colon + 1;
-    }
-
-    /* Validate session_id: must be exactly 14 digits */
-    if (!is_valid_session_id(session_id)) {
-        return create_json_response(false, "Invalid session ID", NULL, response, len);
     }
 
     /* Start transfer using the transport that received the command */

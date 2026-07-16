@@ -78,6 +78,36 @@ static void generate_filename(uint32_t file_num, char *filename);
 static int build_transfer_path(char *buf, size_t size, const char *session_id,
                                uint32_t file_num);
 
+static bool is_valid_session_id(const char *session_id)
+{
+    if (!session_id || strlen(session_id) != 14) {
+        return false;
+    }
+    for (const char *p = session_id; *p; p++) {
+        if (*p < '0' || *p > '9') {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool is_valid_chunk_filename(const char *filename)
+{
+    uint32_t index = 0;
+
+    if (!filename || strlen(filename) != 9 ||
+        strcmp(filename + 4, ".opus") != 0) {
+        return false;
+    }
+    for (size_t i = 0; i < 4; i++) {
+        if (filename[i] < '0' || filename[i] > '9') {
+            return false;
+        }
+        index = index * 10U + (uint32_t)(filename[i] - '0');
+    }
+    return index > 0 && index <= CONFIG_CLIP_STORAGE_MAX_CHUNKS;
+}
+
 /**
  * @brief Build the physical file path while preserving logical 0001.opus names
  *        on the transfer protocol.
@@ -136,6 +166,11 @@ int transfer_init(void)
 int transfer_start(const char *session_id, const char *filename, struct transport *tp)
 {
     int err;
+
+    if (!is_valid_session_id(session_id) ||
+        (filename && !is_valid_chunk_filename(filename))) {
+        return -EINVAL;
+    }
 
     /* Use active transport if none specified */
     if (!tp) {
@@ -278,6 +313,11 @@ int transfer_resume_from(const char *session_id, const char *start_file, struct 
 {
     int err;
 
+    if (!is_valid_session_id(session_id) ||
+        !is_valid_chunk_filename(start_file)) {
+        return -EINVAL;
+    }
+
     /* Use active transport if none specified */
     if (!tp) {
         tp = transport_get_active();
@@ -315,11 +355,6 @@ int transfer_resume_from(const char *session_id, const char *start_file, struct 
     if (storage_ensure_mounted() != 0) {
         LOG_ERR("SD card not mounted");
         err = -ENODEV;
-        goto fail;
-    }
-
-    if (!session_id || !start_file) {
-        err = -EINVAL;
         goto fail;
     }
 

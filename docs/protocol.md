@@ -779,6 +779,9 @@ After the start response, the device sends binary frames on the File Data charac
 
 **Error Cases:**
 - `{"ok":false,"msg":"Transfer already in progress"}` / `"Session or file not found"`
+- `"Missing session_id"`, `"Invalid session ID"`, or `"DOWNLOAD argument too long"`
+- `"Invalid download filename"` unless the resume file is exactly
+  `NNNN.opus`, from `0001.opus` through the configured maximum chunk index
 
 **State Change:** IDLE → TRANSMITTING
 
