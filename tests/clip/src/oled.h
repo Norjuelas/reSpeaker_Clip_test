@@ -16,6 +16,16 @@
 int oled_init(void);
 
 /**
+ * @brief Render the persistent battery status screen
+ *
+ * The hardware test firmware refreshes this screen once per second after
+ * PMIC initialization. It shows SoC, battery voltage, charge/discharge state,
+ * and NTC temperature.
+ */
+void oled_show_battery(uint8_t percent, uint32_t voltage_mv, bool charging,
+		       int32_t temp_c);
+
+/**
  * @brief Test 1: Clear display
  */
 void oled_test_clear(void);

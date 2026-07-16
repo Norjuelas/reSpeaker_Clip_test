@@ -181,9 +181,9 @@ usb status       # Show USB and SD card status
 
 **Commands**:
 ```bash
-flash speed            # Test 1MB (default)
-flash speed 2048       # Test 2MB
+flash speed            # Test 960KB (default and maximum)
 flash speed 512        # Test 512KB
+flash speed 64         # Test 64KB
 ```
 
 **Test Procedure**:
@@ -193,9 +193,10 @@ flash speed 512        # Test 512KB
 4. Reports erase/write/read speeds in KB/s
 
 **Notes**:
-- Tests on LittleFS partition area (offset 0x130000), OTA slots are not affected
+- Tests in the unused 960KB external-flash OTA app slot (offset `0x000000`)
+- Does not touch the LittleFS partition at offset `0x130000`, which stores the battery gauge state
 - 4KB chunk size aligned to flash erase sector
-- Max test size: 10MB
+- Max test size: 960KB
 
 ### 5. Button Test
 
@@ -223,6 +224,8 @@ oled brightness <0-255>  # Set brightness
 - Display shows test patterns correctly
 - Brightness adjustment works
 - No visible artifacts
+- Outside explicit OLED test commands, the screen continuously shows battery percentage,
+  battery voltage, charge/discharge state, and NTC temperature (refreshed once per second)
 
 ### 7. PMIC Test
 
@@ -231,13 +234,18 @@ oled brightness <0-255>  # Set brightness
 **Commands**:
 ```bash
 pmic status          # Show battery/charger status
-pmic monitor         # Continuously monitor status
-pmic ship            # Enter ship mode (power off)
+pmic monitor [count] # Print filtered status once per second (default: 10)
+pmic ship            # Save gauge state, then enter ship mode (power off)
 ```
 
 **Expected Results**:
-- Battery voltage and percentage display correctly
-- Charging status accurate
+- The OLED always shows filtered battery state: percentage, voltage, charge/discharge, and temperature
+- The percentage uses the same model-based nRF Fuel Gauge configuration as the production firmware
+- Fuel-gauge state is saved to external-flash LittleFS after each displayed percentage change and before
+  reboot/SYSTEM OFF/ship mode. The saved record is bound to the battery-model CRC, so incompatible state
+  is discarded safely after a model or format update.
+- During a continuous charge phase the displayed percentage never falls; during discharge it never rises.
+- Charging status is accurate
 - Ship mode powers off device
 
 ### 8. Motor Test
@@ -477,6 +485,7 @@ Use SHELL_CMD_* macros for shell command registration:
 ## Version History
 
 - 2026-07-10: Updated for NCS v3.3.0 (build env); documented `sd verify`/`sd test`/`sd patterns` reliability suite and `wifi on [channel]` (2.4GHz support) + `wifi scan`
+- 2026-07-16: Added persistent model-based battery display to the hardware-test OLED
 - 2026-05-12: Added SPI flash speed test command
 - 2026-05-11: Added LFXO/HFXO crystal capacitance tuning commands
 - 2026-05-08: Added USB MSC module (expose SD card as USB drive), added WAV recording

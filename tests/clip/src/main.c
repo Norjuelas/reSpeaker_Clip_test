@@ -38,6 +38,7 @@ static int cmd_reboot(const struct shell *sh, size_t argc, char **argv)
 	ARG_UNUSED(argv);
 
 	shell_print(sh, "Rebooting...");
+	(void)pmic_battery_state_save();
 	k_sleep(K_MSEC(100));
 	sys_reboot(SYS_REBOOT_WARM);
 	return 0;
@@ -58,6 +59,18 @@ struct sd_shutdown_result {
 static struct sd_shutdown_result sys_sd_shutdown(void);
 static void sys_wifi_power_off(void);
 
+/* The fuel gauge is software state. Save it before any SYSTEM OFF path so a
+ * relaxed cell voltage after wake cannot make the always-on OLED jump. */
+static void sys_poweroff_with_battery_state(void)
+{
+	int ret = pmic_battery_state_save();
+
+	if (ret != 0 && ret != -EAGAIN) {
+		LOG_WRN("Fuel-gauge state save before power-off failed: %d", ret);
+	}
+	sys_poweroff();
+}
+
 static int cmd_sys_stop(const struct shell *sh, size_t argc, char **argv)
 {
 	struct sd_shutdown_result sd;
@@ -73,7 +86,7 @@ static int cmd_sys_stop(const struct shell *sh, size_t argc, char **argv)
 			   sd.unmount_rc, sd.deinit_rc, sd.suspend_rc, sd.cs_rc, sd.ldo_rc);
 	}
 	k_sleep(K_MSEC(200)); /* Let the shell message leave UART first. */
-	sys_poweroff();
+	sys_poweroff_with_battery_state();
 }
 
 /* Isolate the UART contribution before SYSTEM OFF. The production Clip build
@@ -88,7 +101,7 @@ static int cmd_sys_uart_stop(const struct shell *sh, size_t argc, char **argv)
 	shell_print(sh, "Suspending UARTE, then entering nRF5340 SYSTEM OFF");
 	k_sleep(K_MSEC(100));
 	(void)pm_device_action_run(uart0, PM_DEVICE_ACTION_SUSPEND);
-	sys_poweroff();
+	sys_poweroff_with_battery_state();
 }
 
 /* nRF7002 is powered by two board GPIOs; leave all data/coexistence pins
@@ -164,7 +177,7 @@ static int cmd_sys_sd_stop(const struct shell *sh, size_t argc, char **argv)
 		    result.cs_rc, result.ldo_rc);
 	shell_print(sh, "Entering nRF5340 SYSTEM OFF");
 	k_sleep(K_MSEC(200));
-	sys_poweroff();
+	sys_poweroff_with_battery_state();
 }
 
 static int cmd_sys_wifi_stop(const struct shell *sh, size_t argc, char **argv)
@@ -175,7 +188,7 @@ static int cmd_sys_wifi_stop(const struct shell *sh, size_t argc, char **argv)
 	shell_print(sh, "Cutting nRF7002 power, then entering nRF5340 SYSTEM OFF");
 	k_sleep(K_MSEC(100));
 	sys_wifi_power_off();
-	sys_poweroff();
+	sys_poweroff_with_battery_state();
 }
 
 static int cmd_sys_oled_stop(const struct shell *sh, size_t argc, char **argv)
@@ -190,7 +203,7 @@ static int cmd_sys_oled_stop(const struct shell *sh, size_t argc, char **argv)
 	(void)pm_device_action_run(i2c2, PM_DEVICE_ACTION_SUSPEND);
 	(void)gpio_pin_configure(gpio1, 9, GPIO_OUTPUT_INACTIVE); /* RESET asserted */
 	(void)gpio_pin_configure(gpio1, 8, GPIO_OUTPUT_INACTIVE); /* OLED VDD */
-	sys_poweroff();
+	sys_poweroff_with_battery_state();
 }
 
 static int cmd_sys_mic_stop(const struct shell *sh, size_t argc, char **argv)
@@ -213,7 +226,7 @@ static int cmd_sys_mic_stop(const struct shell *sh, size_t argc, char **argv)
 	}
 
 	k_sleep(K_MSEC(100));
-	sys_poweroff();
+	sys_poweroff_with_battery_state();
 }
 
 static int cmd_sys_ble_stop(const struct shell *sh, size_t argc, char **argv)
@@ -237,7 +250,7 @@ static int cmd_sys_ble_stop(const struct shell *sh, size_t argc, char **argv)
 	}
 
 	k_sleep(K_MSEC(100));
-	sys_poweroff();
+	sys_poweroff_with_battery_state();
 }
 
 static const struct device *const buck2 = DEVICE_DT_GET(DT_NODELABEL(npm1300_buck2));
@@ -262,7 +275,7 @@ static int cmd_sys_buck_pfm_stop(const struct shell *sh, size_t argc, char **arg
 	}
 
 	k_sleep(K_MSEC(100));
-	sys_poweroff();
+	sys_poweroff_with_battery_state();
 }
 
 SHELL_STATIC_SUBCMD_SET_CREATE(sub_sys_cmds,

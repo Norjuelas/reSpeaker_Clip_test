@@ -10,6 +10,7 @@
 #include <zephyr/shell/shell.h>
 #include <zephyr/logging/log.h>
 #include <stdlib.h>
+#include <string.h>
 #include "oled.h"
 
 LOG_MODULE_REGISTER(oled, LOG_LEVEL_INF);
@@ -52,6 +53,101 @@ static void oled_clear_buffer(void)
 static void oled_fill_buffer(void)
 {
 	memset(display_buffer, 0xFF, OLED_BUF_SIZE);
+}
+
+/* Compact 5x7 glyphs for the persistent battery screen. They are rendered at
+ * 2x scale, which lets all of the important telemetry fit on the 88x48 OLED
+ * without importing a large general-purpose font into the test image. */
+static const char battery_glyph_chars[] = " 0123456789%BATVmCHGDIS+-";
+static const uint8_t battery_glyphs[][5] = {
+	{0x00, 0x00, 0x00, 0x00, 0x00}, /* space */
+	{0x3e, 0x51, 0x49, 0x45, 0x3e}, /* 0 */
+	{0x00, 0x42, 0x7f, 0x40, 0x00}, /* 1 */
+	{0x42, 0x61, 0x51, 0x49, 0x46}, /* 2 */
+	{0x21, 0x41, 0x45, 0x4b, 0x31}, /* 3 */
+	{0x18, 0x14, 0x12, 0x7f, 0x10}, /* 4 */
+	{0x27, 0x45, 0x45, 0x45, 0x39}, /* 5 */
+	{0x3c, 0x4a, 0x49, 0x49, 0x30}, /* 6 */
+	{0x01, 0x71, 0x09, 0x05, 0x03}, /* 7 */
+	{0x36, 0x49, 0x49, 0x49, 0x36}, /* 8 */
+	{0x06, 0x49, 0x49, 0x29, 0x1e}, /* 9 */
+	{0x63, 0x13, 0x08, 0x64, 0x63}, /* % */
+	{0x7f, 0x49, 0x49, 0x49, 0x36}, /* B */
+	{0x7e, 0x11, 0x11, 0x11, 0x7e}, /* A */
+	{0x01, 0x01, 0x7f, 0x01, 0x01}, /* T */
+	{0x1f, 0x20, 0x40, 0x20, 0x1f}, /* V */
+	{0x7c, 0x04, 0x18, 0x04, 0x78}, /* m */
+	{0x3e, 0x41, 0x41, 0x41, 0x22}, /* C */
+	{0x7f, 0x08, 0x08, 0x08, 0x7f}, /* H */
+	{0x3e, 0x41, 0x49, 0x49, 0x7a}, /* G */
+	{0x7f, 0x41, 0x41, 0x22, 0x1c}, /* D */
+	{0x00, 0x41, 0x7f, 0x41, 0x00}, /* I */
+	{0x46, 0x49, 0x49, 0x49, 0x31}, /* S */
+	{0x08, 0x08, 0x3e, 0x08, 0x08}, /* + */
+	{0x08, 0x08, 0x08, 0x08, 0x08}, /* - */
+};
+
+static void oled_set_pixel(uint8_t *buf, int x, int y)
+{
+	if (x < 0 || x >= OLED_WIDTH || y < 0 || y >= OLED_HEIGHT) {
+		return;
+	}
+	buf[(y / 8) * OLED_WIDTH + x] |= BIT(y % 8);
+}
+
+static void oled_draw_battery_char(char c, int x, int y, int scale)
+{
+	const char *match = strchr(battery_glyph_chars, c);
+	if (match == NULL) {
+		return;
+	}
+
+	const uint8_t *glyph = battery_glyphs[match - battery_glyph_chars];
+	for (int col = 0; col < 5; col++) {
+		for (int row = 0; row < 7; row++) {
+			if (!(glyph[col] & BIT(row))) {
+				continue;
+			}
+			for (int dy = 0; dy < scale; dy++) {
+				for (int dx = 0; dx < scale; dx++) {
+					oled_set_pixel(display_buffer, x + col * scale + dx,
+						       y + row * scale + dy);
+				}
+			}
+		}
+	}
+}
+
+static void oled_draw_battery_text(const char *text, int x, int y, int scale)
+{
+	while (*text != '\0') {
+		oled_draw_battery_char(*text++, x, y, scale);
+		x += 6 * scale;
+	}
+}
+
+void oled_show_battery(uint8_t percent, uint32_t voltage_mv, bool charging,
+		       int32_t temp_c)
+{
+	char line[12];
+
+	if (display_dev == NULL) {
+		return;
+	}
+
+	oled_clear_buffer();
+
+	/* Three 2x-scale rows: SoC, voltage, then charge state + NTC temperature. */
+	snprintk(line, sizeof(line), "BAT%u%%", percent);
+	oled_draw_battery_text(line, 2, 0, 2);
+
+	snprintk(line, sizeof(line), "%umV", voltage_mv);
+	oled_draw_battery_text(line, 2, 16, 2);
+
+	snprintk(line, sizeof(line), "%s%dC", charging ? "CHG" : "DIS", temp_c);
+	oled_draw_battery_text(line, 2, 32, 2);
+
+	oled_write_buffer();
 }
 
 /* Draw a simple test pattern */

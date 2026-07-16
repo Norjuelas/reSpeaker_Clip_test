@@ -14,15 +14,18 @@
 
 LOG_MODULE_REGISTER(flash_test, LOG_LEVEL_INF);
 
-/* Test at LittleFS partition offset to avoid OTA slots */
-#define FLASH_TEST_OFFSET 0x130000
-#define FLASH_TEST_MAX_SIZE (10 * 1024 * 1024)
+/* Keep the battery fuel-gauge settings in the LittleFS partition starting at
+ * 0x130000 intact. The no-MCUboot hardware-test image does not use the two
+ * external OTA slots, so reserve the 960 KB app slot for destructive raw
+ * Flash testing instead. */
+#define FLASH_TEST_OFFSET 0x000000
+#define FLASH_TEST_MAX_SIZE (960 * 1024)
 #define CHUNK_SIZE 4096
 
 static int cmd_flash_speed(const struct shell *sh, size_t argc, char **argv)
 {
 	const struct device *flash_dev;
-	uint32_t test_size = 1024 * 1024; /* 1MB default */
+	uint32_t test_size = FLASH_TEST_MAX_SIZE;
 	uint8_t *write_buf;
 	uint8_t *read_buf;
 	uint64_t start_time, end_time;

@@ -15,4 +15,17 @@
  */
 int pmic_init(void);
 
+/**
+ * @brief Get the filtered battery status used by the always-on OLED screen
+ */
+int pmic_get_battery_status(uint32_t *voltage_mv, uint8_t *percent, bool *charging,
+			    int32_t *temp_c);
+
+/**
+ * @brief Persist the current nRF Fuel Gauge state before reset or power-off
+ *
+ * @return 0 on success, negative errno when persistence is unavailable
+ */
+int pmic_battery_state_save(void);
+
 #endif /* PMIC_H */
