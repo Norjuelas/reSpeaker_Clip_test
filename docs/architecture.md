@@ -401,15 +401,20 @@ Bitrate and complexity are Kconfig per-mode constants, not runtime configurable:
 **Directory Structure:**
 ```
 /SD:/REC/
-+-- 20260328120530/          # Session directory (YYYYMMDDHHMMSS)
-|   +-- session.json         # Session metadata (channels, sample_rate, duration, files, synced)
-|   +-- marks.bin            # Binary bookmarks
-|   +-- 0001.opus            # Segment files (2-byte length header + Opus frames)
-|   +-- 0002.opus
-|   +-- ...
-+-- 20260328140000/
-|   +-- ...
++-- 20260328/                # Date
+    +-- 12/                  # Hour
+        +-- 05/              # Minute
+            +-- 30/          # Second; full session ID is 20260328120530
+                +-- session.json
+                +-- marks.bin
+                +-- 0/       # Up to 100 segment files per group
+                    +-- 0001.opus
+                    +-- 0002.opus
 ```
+
+The timestamp-bucket layout is the only supported on-card recording format.
+`AT+LIST`, `AT+DOWNLOAD`, and `AT+DELETE` continue to use the complete 14-digit
+session ID; old `/SD:/REC/<session_id>/` directories are not read.
 
 **Write Buffer**: 4KB buffered writes (`CONFIG_CLIP_STORAGE_CHUNK_SIZE=4096`) for efficient SD card I/O.
 

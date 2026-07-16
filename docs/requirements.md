@@ -150,11 +150,16 @@ reSpeaker Clip is a portable Bluetooth recording device that provides high-quali
 
 #### 3.2.2 Session Organization
 
-**FR-2.2.1**: The system shall create session directories named `YYYYMMDDHHMMSS` (14 digits)
+**FR-2.2.1**: The system shall store a `YYYYMMDDHHMMSS` session in the fixed
+timestamp bucket `/SD:/REC/YYYYMMDD/HH/MM/SS/`. The complete 14-digit session ID
+remains the external identifier used by AT commands.
 
 **FR-2.2.2**: The system shall create `session.json` with session metadata (channels, sample_rate, mode, file_count, synced_files, duration_sec, total_bytes)
 
-**FR-2.2.3**: Audio files shall be named `{NNNN}.opus` (e.g., `0001.opus`, `0002.opus`)
+**FR-2.2.3**: Audio files shall be stored in numbered group directories below
+the session directory and named `{NNNN}.opus` (e.g., `0/0001.opus`,
+`0/0002.opus`). Each group contains at most
+`CONFIG_CLIP_STORAGE_FILES_PER_GROUP` files.
 
 **FR-2.2.4**: The system shall create `marks.bin` for bookmark data (magic "BMRK", 2-byte count, N * 4-byte offsets)
 

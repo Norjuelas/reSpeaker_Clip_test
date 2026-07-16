@@ -1823,7 +1823,23 @@ When the device is actively recording, the client can start a transfer that cont
 
 ## 6. Data Formats
 
-### 6.1 Session Metadata (session.json)
+### 6.1 On-Card Recording Layout
+
+Recordings use one fixed FAT32 layout:
+
+```
+/SD:/REC/YYYYMMDD/HH/MM/SS/
+  session.json
+  marks.bin
+  0/0001.opus
+```
+
+`YYYYMMDDHHMMSS` remains the session ID exposed by `AT+LIST`, `AT+DOWNLOAD`,
+and `AT+DELETE`; `SS` is its final two digits. Segment files are placed in
+numbered group directories, with at most `CONFIG_CLIP_STORAGE_FILES_PER_GROUP`
+files in each group. The former `/SD:/REC/<session_id>/` layout is unsupported.
+
+### 6.2 Session Metadata (session.json)
 
 Stored in each session directory, contains session information, sync progress, and audio format.
 
@@ -1864,18 +1880,6 @@ Stored in each session directory, contains session information, sync progress, a
 # Next transfer should start from file 0016.opus
 AT+DOWNLOAD=20240203100000:0016.opus
 ```
-
-### 6.2 File List (files.lst)
-
-Plain text file with one filename per line (append-only).
-
-```
-0001.opus
-0002.opus
-0003.opus
-```
-
-Used for efficient session file listing.
 
 ### 6.3 Bookmark Data (marks.bin)
 

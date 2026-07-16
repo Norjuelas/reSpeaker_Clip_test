@@ -10,9 +10,9 @@
 | Opus Encoding | Mode-specific bitrate/complexity via Kconfig |
 | SpeexDSP Processing | Noise suppression, dereverberation (no AGC - FIXED_POINT limitation) |
 | Audio Modes | Normal (stereo, 16kbps/ch, complexity 0), Enhanced (mono, 32kbps, complexity 1) |
-| SD Card Storage | FAT32, session directories under /REC/ |
+| SD Card Storage | FAT32, timestamp buckets under `/SD:/REC/YYYYMMDD/HH/MM/SS/` with 100-file group directories |
 | SD Card Log Persistence | LOG_BACKEND_FS, /SD:/LOG/, 128KB files x20; AT+LOG=off\|info\|debug (debug default INF) |
-| Session Metadata | session.json, files.lst, marks.bin |
+| Session Metadata | session.json and marks.bin per timestamp-bucket session |
 | Bookmark System | Binary marks.bin with notes |
 | BLE GATT Service | Command, Response, File Data, Event characteristics |
 | BLE Event Notifications | State changes, marks, BLE/WiFi/USB events via notify |

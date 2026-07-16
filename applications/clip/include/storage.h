@@ -15,6 +15,8 @@
 /* Storage configuration */
 #define STORAGE_SESSION_ID_LEN 32
 #define STORAGE_FILENAME_MAX_LEN 64
+/* Includes the NUL terminator. All storage path builders reject truncation. */
+#define STORAGE_PATH_MAX 128
 
 /**
  * @brief Storage statistics
@@ -49,7 +51,6 @@ struct storage_session_info {
     uint8_t channels;          /* 1=mono, 2=stereo */
     uint8_t sample_rate_khz;   /* Sample rate in kHz (e.g., 16 for 16000Hz) */
     char mode[16];             /* "normal" or "enhanced" */
-    bool uses_groups;          /* true if files are in group subdirectories */
 };
 
 /**
@@ -155,9 +156,10 @@ int storage_get_stats(struct storage_stats *stats);
 /**
  * @brief Create a new recording session
  *
- * Creates /SD:/REC/<session_id>/ directory with:
- * - session.json (metadata)
- * - marks.bin (empty bookmark file)
+ * Creates the timestamp-bucket layout:
+ * /SD:/REC/YYYYMMDD/HH/MM/SS/session.json
+ * /SD:/REC/YYYYMMDD/HH/MM/SS/marks.bin
+ * /SD:/REC/YYYYMMDD/HH/MM/SS/0/0001.opus
  *
  * @param session_id Session ID (14 digits: YYYYMMDDHHMMSS)
  * @param channels Audio channels (1=mono, 2=stereo)
@@ -260,6 +262,20 @@ int storage_read_chunk(const char *session_id, uint32_t chunk_index,
 int storage_delete_chunk(const char *session_id, uint32_t chunk_index);
 
 /**
+ * @brief Build the on-card path of a session chunk.
+ *
+ * Builds a path in the fixed timestamp-bucket layout and checks for truncation.
+ */
+int storage_build_chunk_path(const char *session_id, uint32_t chunk_index,
+                             char *path, size_t path_size);
+
+/**
+ * @brief Build the on-card session metadata path.
+ */
+int storage_build_session_metadata_path(const char *session_id,
+                                        char *path, size_t path_size);
+
+/**
  * @brief List all sessions
  *
  * @param sessions Output array for session info
@@ -278,8 +294,8 @@ int storage_count_sessions(void);
 /**
  * @brief List session IDs only (fast, no session.json reads)
  *
- * Scans REC directory for valid session directories and returns
- * sorted session IDs. Does not read session.json or any other files.
+ * Scans timestamp buckets and returns sorted session IDs. Does not read
+ * session metadata files.
  * Empty sessions (no .opus files) are automatically deleted.
  *
  * @param ids Output array for session IDs (each at least 16 bytes)
@@ -314,6 +330,11 @@ bool storage_has_unsynced_sessions(void);
  * @return 0 on success, negative error code on failure
  */
 int storage_get_session_info(const char *session_id, struct storage_session_info *info);
+
+/**
+ * @brief Persist the number of synced chunk files in a session metadata file.
+ */
+int storage_set_synced_files(const char *session_id, uint32_t count);
 
 /**
  * @brief List chunk files in a session

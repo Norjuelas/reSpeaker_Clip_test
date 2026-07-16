@@ -3,7 +3,6 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
-
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/fs/fs.h>
@@ -76,21 +75,17 @@ static void send_file_ready_event(const char *session_id, const char *filename, 
 static int send_file_complete_event(const char *filename);
 static void send_transfer_complete_once(const char *session_id, int file_count);
 static void generate_filename(uint32_t file_num, char *filename);
-static void build_transfer_path(char *buf, size_t size, const char *session_id,
-				const char *filename, uint32_t file_num);
+static int build_transfer_path(char *buf, size_t size, const char *session_id,
+                               uint32_t file_num);
 
 /**
- * @brief Build file path for transfer, using group subdirectory if applicable
+ * @brief Build the physical file path while preserving logical 0001.opus names
+ *        on the transfer protocol.
  */
-static void build_transfer_path(char *buf, size_t size, const char *session_id,
-				const char *filename, uint32_t file_num)
+static int build_transfer_path(char *buf, size_t size, const char *session_id,
+                               uint32_t file_num)
 {
-	if (current_transfer.uses_groups) {
-		uint32_t group = (file_num - 1) / CONFIG_CLIP_STORAGE_FILES_PER_GROUP;
-		snprintf(buf, size, "/SD:/REC/%s/%u/%s", session_id, group, filename);
-	} else {
-		snprintf(buf, size, "/SD:/REC/%s/%s", session_id, filename);
-	}
+	return storage_build_chunk_path(session_id, file_num, buf, size);
 }
 
 /**
@@ -209,7 +204,6 @@ int transfer_start(const char *session_id, const char *filename, struct transpor
     consecutive_file_errors = 0;
     chunk_count = 0;
     current_transfer.state = TRANSFER_STATE_TRANSMITTING;
-    current_transfer.uses_groups = session_info.uses_groups;
 
     /* Show transfer icon on display immediately */
     display_set_transferring(true);
@@ -223,8 +217,11 @@ int transfer_start(const char *session_id, const char *filename, struct transpor
         struct fs_dirent entry;
         uint32_t file_num = (uint32_t)atoi(filename);
 
-        build_transfer_path(filepath, sizeof(filepath), session_id, filename,
-                            file_num > 0 ? file_num : 1);
+        err = build_transfer_path(filepath, sizeof(filepath), session_id,
+                                  file_num > 0 ? file_num : 1);
+        if (err != 0) {
+            goto fail;
+        }
         if (fs_stat(filepath, &entry) != 0) {
             LOG_ERR("File not found: %s", filepath);
             err = -ENOENT;
@@ -370,7 +367,6 @@ int transfer_resume_from(const char *session_id, const char *start_file, struct 
     current_transfer.total_bytes = session_info.total_bytes;
     current_transfer.first_file_num = 1;
     current_transfer.last_file_num = session_info.file_count;
-    current_transfer.uses_groups = session_info.uses_groups;
 
     /* Check if this session is currently being recorded (continuous mode) */
     const char *recording_session = audio_get_session_id();
@@ -478,7 +474,7 @@ uint32_t transfer_get_total_files(void)
 int transfer_set_synced_files(const char *session_id, uint32_t count)
 {
     /* This updates the synced field in session.json */
-    char filepath[128];
+    char filepath[STORAGE_PATH_MAX];
     struct fs_file_t file;
     char json_buf[512];
     int ret;
@@ -487,7 +483,11 @@ int transfer_set_synced_files(const char *session_id, uint32_t count)
         return -EINVAL;
     }
 
-    snprintf(filepath, sizeof(filepath), "/SD:/REC/%s/session.json", session_id);
+    ret = storage_build_session_metadata_path(session_id, filepath,
+                                              sizeof(filepath));
+    if (ret != 0) {
+        return ret;
+    }
 
     storage_session_json_lock();
 
@@ -868,10 +868,12 @@ static int transfer_next_file(void)
     /* If specific filename is set, use it directly */
     if (current_transfer.current_file[0] != '\0') {
         uint32_t file_num = (uint32_t)atoi(current_transfer.current_file);
-        build_transfer_path(filepath, sizeof(filepath),
-                            current_transfer.session_id,
-                            current_transfer.current_file,
-                            file_num > 0 ? file_num : 1);
+        ret = build_transfer_path(filepath, sizeof(filepath),
+                                  current_transfer.session_id,
+                                  file_num > 0 ? file_num : 1);
+        if (ret != 0) {
+            return ret;
+        }
         goto open_file;
     }
 
@@ -887,9 +889,11 @@ static int transfer_next_file(void)
          * - Detect recording stop to end transfer
          */
         generate_filename(file_num, current_transfer.current_file);
-        build_transfer_path(filepath, sizeof(filepath),
-                            current_transfer.session_id,
-                            current_transfer.current_file, file_num);
+        ret = build_transfer_path(filepath, sizeof(filepath),
+                                  current_transfer.session_id, file_num);
+        if (ret != 0) {
+            return ret;
+        }
 
         /* Check if file exists */
         if (fs_stat(filepath, &entry) != 0) {
@@ -909,9 +913,11 @@ static int transfer_next_file(void)
                     char next_name[16];
                     char next_filepath[128];
                     generate_filename(next_num, next_name);
-                    build_transfer_path(next_filepath, sizeof(next_filepath),
-                                        current_transfer.session_id,
-                                        next_name, next_num);
+                    ret = build_transfer_path(next_filepath, sizeof(next_filepath),
+                                              current_transfer.session_id, next_num);
+                    if (ret != 0) {
+                        return ret;
+                    }
                     if (fs_stat(next_filepath, &entry) == 0) {
                         LOG_WRN("File missing: %s, skipping", current_transfer.current_file);
                         current_transfer.file_index = file_num;
@@ -981,9 +987,11 @@ wait_for_write:
          * - No waiting for writes
          */
         generate_filename(file_num, current_transfer.current_file);
-        build_transfer_path(filepath, sizeof(filepath),
-                            current_transfer.session_id,
-                            current_transfer.current_file, file_num);
+        ret = build_transfer_path(filepath, sizeof(filepath),
+                                  current_transfer.session_id, file_num);
+        if (ret != 0) {
+            return ret;
+        }
 
         /* Check if file exists */
         if (fs_stat(filepath, &entry) != 0) {
@@ -1221,4 +1229,3 @@ static void transfer_cleanup(void)
 
 	k_mutex_unlock(&transfer_cleanup_mutex);
 }
-  

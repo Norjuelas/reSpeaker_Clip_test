@@ -16,6 +16,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdarg.h>
 
 #include "storage.h"
 
@@ -85,33 +86,177 @@ static int update_session_json(const char *session_id, uint32_t duration_sec,
                                uint32_t chunk_count, uint64_t session_bytes);
 static int flush_write_buffer(void);
 static void delete_dir_contents(const char *dir_path);
+static int validate_session_id(const char *session_id);
+static int scan_session_ids(char ids[][16], int max_ids, int *total);
 
-/* Group subdirectory helpers */
-static inline uint32_t chunk_to_group(uint32_t chunk_index)
+static int storage_path_format(char *path, size_t path_size, const char *fmt, ...)
 {
-	return (chunk_index - 1) / CONFIG_CLIP_STORAGE_FILES_PER_GROUP;
+    va_list ap;
+    int written;
+
+    if (!path || path_size == 0) {
+        return -EINVAL;
+    }
+
+    va_start(ap, fmt);
+    written = vsnprintf(path, path_size, fmt, ap);
+    va_end(ap);
+
+    if (written < 0 || (size_t)written >= path_size) {
+        path[0] = '\0';
+        return -ENAMETOOLONG;
+    }
+
+    return 0;
 }
 
-static bool session_has_groups(const char *session_id)
+static int build_bucket_dir(const char *session_id, char *path, size_t path_size)
 {
-	char path[128];
-	struct fs_dirent entry;
+    if (validate_session_id(session_id) != 0) {
+        return -EINVAL;
+    }
 
-	snprintf(path, sizeof(path), "%s/%s/0", STORAGE_BASE_PATH, session_id);
-	return (fs_stat(path, &entry) == 0 && entry.type == FS_DIR_ENTRY_DIR);
+    return storage_path_format(path, path_size, "%s/%.8s/%.2s/%.2s",
+                               STORAGE_BASE_PATH, session_id, session_id + 8,
+                               session_id + 10);
 }
 
-static void build_chunk_path(char *buf, size_t size, const char *session_id,
-			     uint32_t chunk_index, bool uses_groups)
+static int build_bucket_session_dir(const char *session_id, char *path,
+                                    size_t path_size)
 {
-	if (uses_groups) {
-		uint32_t group = chunk_to_group(chunk_index);
-		snprintf(buf, size, "%s/%s/%u/%04u.opus",
-			 STORAGE_BASE_PATH, session_id, group, chunk_index);
-	} else {
-		snprintf(buf, size, "%s/%s/%04u.opus",
-			 STORAGE_BASE_PATH, session_id, chunk_index);
-	}
+    char bucket_dir[STORAGE_PATH_MAX];
+    int rc;
+
+    rc = build_bucket_dir(session_id, bucket_dir, sizeof(bucket_dir));
+    if (rc != 0) {
+        return rc;
+    }
+    return storage_path_format(path, path_size, "%s/%.2s", bucket_dir,
+                               session_id + 12);
+}
+
+static int build_session_metadata_path(const char *session_id, char *path,
+                                       size_t path_size)
+{
+    char dir[STORAGE_PATH_MAX];
+    int rc;
+
+    rc = build_bucket_session_dir(session_id, dir, sizeof(dir));
+    if (rc != 0) {
+        return rc;
+    }
+    return storage_path_format(path, path_size, "%s/session.json", dir);
+}
+
+static int build_marks_path(const char *session_id, char *path,
+                            size_t path_size)
+{
+    char dir[STORAGE_PATH_MAX];
+    int rc;
+
+    rc = build_bucket_session_dir(session_id, dir, sizeof(dir));
+    if (rc != 0) {
+        return rc;
+    }
+    return storage_path_format(path, path_size, "%s/marks.bin", dir);
+}
+
+int storage_build_chunk_path(const char *session_id, uint32_t chunk_index,
+                             char *path, size_t path_size)
+{
+    char dir[STORAGE_PATH_MAX];
+    int rc;
+
+    if (chunk_index == 0 || validate_session_id(session_id) != 0) {
+        return -EINVAL;
+    }
+
+    rc = build_bucket_session_dir(session_id, dir, sizeof(dir));
+    if (rc != 0) {
+        return rc;
+    }
+    return storage_path_format(path, path_size, "%s/%u/%04u.opus", dir,
+                               (chunk_index - 1) /
+                               CONFIG_CLIP_STORAGE_FILES_PER_GROUP,
+                               chunk_index);
+}
+
+int storage_build_session_metadata_path(const char *session_id,
+                                        char *path, size_t path_size)
+{
+    return build_session_metadata_path(session_id, path, path_size);
+}
+
+static int ensure_directory(const char *path)
+{
+    struct fs_dirent entry;
+    int rc = fs_stat(path, &entry);
+
+    if (rc == 0) {
+        return entry.type == FS_DIR_ENTRY_DIR ? 0 : -ENOTDIR;
+    }
+
+    rc = fs_mkdir(path);
+    return (rc == 0 || rc == -EEXIST) ? 0 : rc;
+}
+
+static int ensure_bucket_directories(const char *session_id)
+{
+    char path[STORAGE_PATH_MAX];
+    char session_dir[STORAGE_PATH_MAX];
+    int rc;
+
+    rc = storage_path_format(path, sizeof(path), "%s/%.8s", STORAGE_BASE_PATH,
+                             session_id);
+    if (rc != 0 || (rc = ensure_directory(path)) != 0) {
+        return rc;
+    }
+    rc = storage_path_format(path, sizeof(path), "%s/%.8s/%.2s",
+                             STORAGE_BASE_PATH, session_id, session_id + 8);
+    if (rc != 0 || (rc = ensure_directory(path)) != 0) {
+        return rc;
+    }
+    rc = build_bucket_dir(session_id, path, sizeof(path));
+    if (rc != 0) {
+        return rc;
+    }
+    rc = ensure_directory(path);
+    if (rc != 0) {
+        return rc;
+    }
+    rc = build_bucket_session_dir(session_id, session_dir, sizeof(session_dir));
+    if (rc != 0) {
+        return rc;
+    }
+    rc = ensure_directory(session_dir);
+    if (rc != 0) {
+        return rc;
+    }
+    rc = storage_path_format(path, sizeof(path), "%s/0", session_dir);
+    if (rc != 0) {
+        return rc;
+    }
+    return ensure_directory(path);
+}
+
+static int ensure_time_bucket_chunk_directory(const char *session_id,
+                                              uint32_t chunk_index)
+{
+    char session_dir[STORAGE_PATH_MAX];
+    char group_dir[STORAGE_PATH_MAX];
+    int rc;
+
+    rc = build_bucket_session_dir(session_id, session_dir, sizeof(session_dir));
+    if (rc != 0) {
+        return rc;
+    }
+    rc = storage_path_format(group_dir, sizeof(group_dir), "%s/%u", session_dir,
+                             (chunk_index - 1) /
+                             CONFIG_CLIP_STORAGE_FILES_PER_GROUP);
+    if (rc != 0) {
+        return rc;
+    }
+    return ensure_directory(group_dir);
 }
 
 int storage_init(void)
@@ -373,10 +518,11 @@ int storage_get_stats(struct storage_stats *stats)
     return 0;
 }
 
-/* Validate session_id: must be non-NULL, non-empty, digits only (prevent path traversal) */
+/* Session IDs are UTC timestamps: YYYYMMDDHHMMSS. Enforce the complete form
+ * because the bucket layout slices it into date/hour/minute path components. */
 static int validate_session_id(const char *session_id)
 {
-    if (!session_id || !session_id[0]) {
+    if (!session_id || strlen(session_id) != 14) {
         return -EINVAL;
     }
     for (const char *p = session_id; *p; p++) {
@@ -390,46 +536,40 @@ static int validate_session_id(const char *session_id)
 int storage_create_session(const char *session_id, uint8_t channels,
                            uint32_t sample_rate, const char *mode)
 {
-    char dir_path[128];
-    struct fs_dirent entry;
+    char metadata_path[STORAGE_PATH_MAX];
+    char marks_path[STORAGE_PATH_MAX];
     int rc;
 
-    if (!sd_mounted)
-    {
+    if (!sd_mounted) {
         return -ENODEV;
     }
-
-    if (!session_id)
-    {
+    if (validate_session_id(session_id) != 0) {
         return -EINVAL;
     }
 
-    /* Create session directory */
-    snprintf(dir_path, sizeof(dir_path), "%s/%s", STORAGE_BASE_PATH, session_id);
-    LOG_INF("Creating session: %s", session_id);
-
-    rc = fs_stat(dir_path, &entry);
-    if (rc != 0 || entry.type != FS_DIR_ENTRY_DIR)
-    {
-        rc = fs_mkdir(dir_path);
-        if (rc != 0 && rc != -EEXIST)
-        {
-            LOG_ERR("Failed to create session directory: %d", rc);
-            return rc;
-        }
+    rc = ensure_bucket_directories(session_id);
+    if (rc != 0) {
+        LOG_ERR("Failed to create session bucket: %d", rc);
+        return rc;
     }
 
-    /* Create marks.bin for bookmarks */
-    create_marks_file(dir_path);
+    rc = build_session_metadata_path(session_id, metadata_path,
+                                     sizeof(metadata_path));
+    if (rc == 0) {
+        rc = build_marks_path(session_id, marks_path, sizeof(marks_path));
+    }
+    if (rc != 0) {
+        return rc;
+    }
 
-    /* Create session.json */
-    create_session_json(dir_path, session_id, channels, sample_rate, mode);
-
-    /* Create initial group 0 subdirectory */
-    {
-        char group_path[160];
-        snprintf(group_path, sizeof(group_path), "%s/0", dir_path);
-        fs_mkdir(group_path);
+    LOG_INF("Creating session: %s", session_id);
+    rc = create_marks_file(marks_path);
+    if (rc != 0) {
+        return rc;
+    }
+    rc = create_session_json(metadata_path, session_id, channels, sample_rate, mode);
+    if (rc != 0) {
+        return rc;
     }
 
     /* Store current session */
@@ -468,12 +608,13 @@ int storage_close_session(const char *session_id, uint32_t duration_sec,
 int storage_write_chunk(const char *session_id, uint32_t chunk_index,
                         const uint8_t *data, uint32_t len)
 {
-    char filepath[128];
+    char filepath[STORAGE_PATH_MAX];
     struct fs_file_t file;
     int rc;
     ssize_t written;
 
-    if (!sd_mounted || !session_id || !data)
+    if (!sd_mounted || !data || validate_session_id(session_id) != 0 ||
+        chunk_index == 0)
     {
         return -EINVAL;
     }
@@ -483,23 +624,14 @@ int storage_write_chunk(const char *session_id, uint32_t chunk_index,
         return 0;
     }
 
-    /* Generate chunk filename with group subdirectory */
-    {
-        uint32_t group = chunk_to_group(chunk_index);
-        char group_path[160];
-
-        snprintf(group_path, sizeof(group_path), "%s/%s/%u",
-                 STORAGE_BASE_PATH, session_id, group);
-
-        /* Create group directory if needed */
-        struct fs_dirent gentry;
-        if (fs_stat(group_path, &gentry) != 0 ||
-            gentry.type != FS_DIR_ENTRY_DIR) {
-            fs_mkdir(group_path);
-        }
-
-        snprintf(filepath, sizeof(filepath), "%s/%s/%u/%04u.opus",
-                 STORAGE_BASE_PATH, session_id, group, chunk_index);
+    rc = ensure_time_bucket_chunk_directory(session_id, chunk_index);
+    if (rc != 0) {
+        return rc;
+    }
+    rc = storage_build_chunk_path(session_id, chunk_index, filepath,
+                                  sizeof(filepath));
+    if (rc != 0) {
+        return rc;
     }
 
     /* Open file for writing */
@@ -554,11 +686,12 @@ static int flush_write_buffer(void)
 
 int storage_create_file(struct storage_file *file, const char *session_id, uint32_t chunk_index)
 {
-    char filepath[128];
+    char filepath[STORAGE_PATH_MAX];
     char filename[32]; /* Just the filename, not full path */
     int rc;
 
-    if (!sd_mounted || !file || !session_id)
+    if (!sd_mounted || !file || validate_session_id(session_id) != 0 ||
+        chunk_index == 0)
     {
         return -EINVAL;
     }
@@ -583,27 +716,15 @@ int storage_create_file(struct storage_file *file, const char *session_id, uint3
     /* Generate filename: 0001.opus (4-digit format) */
     snprintf(filename, sizeof(filename), "%04u.opus", chunk_index);
 
-    /* Calculate group and build path with group subdirectory */
-    uint32_t group = chunk_to_group(chunk_index);
-    snprintf(filepath, sizeof(filepath), "%s/%s/%u",
-             STORAGE_BASE_PATH, session_id, group);
-
-    /* Create group directory if it doesn't exist */
-    {
-        struct fs_dirent group_entry;
-        if (fs_stat(filepath, &group_entry) != 0 ||
-            group_entry.type != FS_DIR_ENTRY_DIR) {
-            rc = fs_mkdir(filepath);
-            if (rc != 0 && rc != -EEXIST) {
-                LOG_ERR("Failed to create group directory: %d", rc);
-                return rc;
-            }
-        }
+    rc = ensure_time_bucket_chunk_directory(session_id, chunk_index);
+    if (rc != 0) {
+        return rc;
     }
-
-    /* Full file path */
-    snprintf(filepath, sizeof(filepath), "%s/%s/%u/%s",
-             STORAGE_BASE_PATH, session_id, group, filename);
+    rc = storage_build_chunk_path(session_id, chunk_index, filepath,
+                                  sizeof(filepath));
+    if (rc != 0) {
+        return rc;
+    }
     strncpy(file->filename, filename, sizeof(file->filename) - 1);
 
     /* Open file */
@@ -744,19 +865,21 @@ int storage_close_file(struct storage_file *file)
 int storage_read_chunk(const char *session_id, uint32_t chunk_index,
                        uint8_t *data, uint32_t len)
 {
-    char filepath[128];
+    char filepath[STORAGE_PATH_MAX];
     struct fs_file_t file;
     int rc;
     ssize_t bytes_read;
 
-    if (!sd_mounted || !session_id || !data)
+    if (!sd_mounted || !data || chunk_index == 0)
     {
         return -EINVAL;
     }
 
-    /* Generate chunk filename (detect format for backward compatibility) */
-    build_chunk_path(filepath, sizeof(filepath), session_id, chunk_index,
-                     session_has_groups(session_id));
+    rc = storage_build_chunk_path(session_id, chunk_index, filepath,
+                                  sizeof(filepath));
+    if (rc != 0) {
+        return rc;
+    }
 
     /* Open file for reading */
     fs_file_t_init(&file);
@@ -782,17 +905,19 @@ int storage_read_chunk(const char *session_id, uint32_t chunk_index,
 
 int storage_delete_chunk(const char *session_id, uint32_t chunk_index)
 {
-    char filepath[128];
+    char filepath[STORAGE_PATH_MAX];
     int rc;
 
-    if (!sd_mounted || !session_id)
+    if (!sd_mounted || chunk_index == 0)
     {
         return -EINVAL;
     }
 
-    /* Generate chunk filename (detect format for backward compatibility) */
-    build_chunk_path(filepath, sizeof(filepath), session_id, chunk_index,
-                     session_has_groups(session_id));
+    rc = storage_build_chunk_path(session_id, chunk_index, filepath,
+                                  sizeof(filepath));
+    if (rc != 0) {
+        return rc;
+    }
 
     rc = fs_unlink(filepath);
     if (rc != 0)
@@ -805,376 +930,282 @@ int storage_delete_chunk(const char *session_id, uint32_t chunk_index)
 
 int storage_list_sessions(struct storage_session_info *sessions, int max_sessions)
 {
-    struct fs_dir_t dirp;
-    struct fs_dirent entry;
-    int count = 0;
-    int rc;
+    char ids[200][16];
+    int limit = MIN(max_sessions, (int)ARRAY_SIZE(ids));
+    int id_count;
+    int result = 0;
 
-    if (!sd_mounted || !sessions)
-    {
+    if (!sd_mounted || !sessions || max_sessions <= 0) {
         return -EINVAL;
     }
 
-    LOG_DBG("Listing sessions (max=%d)", max_sessions);
-
-    /* Open REC directory */
-    fs_dir_t_init(&dirp);
-    rc = fs_opendir(&dirp, STORAGE_BASE_PATH);
-    if (rc != 0)
-    {
-        LOG_ERR("Failed to open REC directory: %d", rc);
-        return rc;
+    id_count = storage_list_session_ids(ids, limit);
+    if (id_count < 0) {
+        return id_count;
     }
-
-    /* Read directory entries */
-    while (count < max_sessions)
-    {
-        rc = fs_readdir(&dirp, &entry);
-        if (rc != 0 || entry.name[0] == '\0')
-        {
-            break;
-        }
-
-        /* Skip non-directories */
-        if (entry.type != FS_DIR_ENTRY_DIR)
-        {
-            continue;
-        }
-
-        /* Validate session_id format: should be 14 digits (YYYYMMDDHHMMSS) */
-        size_t len = strlen(entry.name);
-        if (len != 14)
-        {
-            LOG_DBG("Skipping invalid session dir (wrong length): %s (len=%u)",
-                    entry.name, (unsigned int)len);
-            continue;
-        }
-
-        /* Check if all digits */
-        bool valid = true;
-        for (size_t i = 0; i < len; i++)
-        {
-            if (entry.name[i] < '0' || entry.name[i] > '9')
-            {
-                valid = false;
-                break;
-            }
-        }
-        if (!valid)
-        {
-            LOG_DBG("Skipping invalid session dir (not all digits): %s", entry.name);
-            continue;
-        }
-
-        LOG_DBG("Found session dir: %s", entry.name);
-
-        /* Get session info (skip counting chunks for speed) */
-        rc = storage_get_session_info(entry.name, &sessions[count]);
-        if (rc == 0)
-        {
-            count++;
-            LOG_DBG("Added session %d: %s", count, entry.name);
-        }
-        else
-        {
-            LOG_WRN("Failed to get info for %s: %d", entry.name, rc);
-        }
-
-        /* Yield to prevent blocking other operations */
-        if (count % 5 == 0)
-        {
-            k_yield();
+    for (int i = 0; i < id_count; i++) {
+        if (storage_get_session_info(ids[i], &sessions[result]) == 0) {
+            result++;
         }
     }
-
-    fs_closedir(&dirp);
-
-    /* Sort by session_id descending (newest first) */
-    for (int i = 0; i < count - 1; i++) {
-        for (int j = i + 1; j < count; j++) {
-            if (strcmp(sessions[i].session_id, sessions[j].session_id) < 0) {
-                struct storage_session_info tmp = sessions[i];
-                sessions[i] = sessions[j];
-                sessions[j] = tmp;
-            }
-        }
-    }
-
-    LOG_DBG("Listed %d sessions", count);
-    return count;
+    return result;
 }
 
 int storage_count_sessions(void)
 {
-    struct fs_dir_t dirp;
-    struct fs_dirent entry;
-    int count = 0;
-    int rc;
+    int total = 0;
+    int scan_rc;
 
-    if (!sd_mounted)
-    {
+    if (!sd_mounted) {
         return -EINVAL;
     }
+    scan_rc = scan_session_ids(NULL, 0, &total);
+    return scan_rc < 0 ? scan_rc : total;
+}
 
-    /* Open REC directory */
-    fs_dir_t_init(&dirp);
-    rc = fs_opendir(&dirp, STORAGE_BASE_PATH);
-    if (rc != 0)
-    {
-        LOG_ERR("Failed to open REC directory: %d", rc);
-        return rc;
+static bool is_decimal_name(const char *name, size_t length)
+{
+    if (!name || strlen(name) != length) {
+        return false;
+    }
+    for (size_t i = 0; i < length; i++) {
+        if (name[i] < '0' || name[i] > '9') {
+            return false;
+        }
+    }
+    return true;
+}
+
+static void add_session_id(char ids[][16], int max_ids, int *stored,
+                           int *total, const char *session_id)
+{
+    if (total) {
+        (*total)++;
+    }
+    if (!ids || max_ids <= 0 || !stored) {
+        return;
     }
 
-    /* Count valid session directories */
-    while (true)
-    {
-        rc = fs_readdir(&dirp, &entry);
-        if (rc != 0 || entry.name[0] == '\0')
-        {
-            break;
+    for (int i = 0; i < *stored; i++) {
+        if (strcmp(ids[i], session_id) == 0) {
+            if (total) {
+                (*total)--;
+            }
+            return;
         }
+    }
 
-        /* Skip non-directories */
-        if (entry.type != FS_DIR_ENTRY_DIR)
-        {
-            continue;
-        }
-
-        /* Validate session_id format: should be 14 digits */
-        size_t len = strlen(entry.name);
-        if (len != 14)
-        {
-            continue;
-        }
-
-        /* Check if all digits */
-        bool valid = true;
-        for (size_t i = 0; i < len; i++)
-        {
-            if (entry.name[i] < '0' || entry.name[i] > '9')
-            {
-                valid = false;
+    if (*stored < max_ids) {
+        int pos = *stored;
+        for (int i = 0; i < *stored; i++) {
+            if (strcmp(session_id, ids[i]) > 0) {
+                pos = i;
                 break;
             }
         }
-        if (valid)
-        {
-            count++;
+        for (int i = *stored; i > pos; i--) {
+            memcpy(ids[i], ids[i - 1], 16);
         }
+        strncpy(ids[pos], session_id, 15);
+        ids[pos][15] = '\0';
+        (*stored)++;
+        return;
     }
 
-    fs_closedir(&dirp);
+    if (strcmp(session_id, ids[max_ids - 1]) > 0) {
+        int pos = max_ids - 1;
+        for (int i = 0; i < max_ids - 1; i++) {
+            if (strcmp(session_id, ids[i]) > 0) {
+                pos = i;
+                break;
+            }
+        }
+        for (int i = max_ids - 1; i > pos; i--) {
+            memcpy(ids[i], ids[i - 1], 16);
+        }
+        strncpy(ids[pos], session_id, 15);
+        ids[pos][15] = '\0';
+    }
+}
 
-    return count;
+static int scan_bucket_sessions(const char *day_name, char ids[][16],
+                                int max_ids, int *stored, int *total)
+{
+    char day_path[STORAGE_PATH_MAX];
+    char hour_path[STORAGE_PATH_MAX];
+    char minute_path[STORAGE_PATH_MAX];
+    struct fs_dir_t day_dir;
+    struct fs_dirent hour_entry;
+    int rc;
+
+    rc = storage_path_format(day_path, sizeof(day_path), "%s/%s",
+                             STORAGE_BASE_PATH, day_name);
+    if (rc != 0) {
+        return rc;
+    }
+    fs_dir_t_init(&day_dir);
+    rc = fs_opendir(&day_dir, day_path);
+    if (rc != 0) {
+        return rc;
+    }
+
+    while (fs_readdir(&day_dir, &hour_entry) == 0 && hour_entry.name[0] != '\0') {
+        if (hour_entry.type != FS_DIR_ENTRY_DIR ||
+            !is_decimal_name(hour_entry.name, 2)) {
+            continue;
+        }
+        rc = storage_path_format(hour_path, sizeof(hour_path), "%s/%s",
+                                 day_path, hour_entry.name);
+        if (rc != 0) {
+            fs_closedir(&day_dir);
+            return rc;
+        }
+
+        struct fs_dir_t hour_dir;
+        struct fs_dirent minute_entry;
+        fs_dir_t_init(&hour_dir);
+        if (fs_opendir(&hour_dir, hour_path) != 0) {
+            continue;
+        }
+        while (fs_readdir(&hour_dir, &minute_entry) == 0 &&
+               minute_entry.name[0] != '\0') {
+            if (minute_entry.type != FS_DIR_ENTRY_DIR ||
+                !is_decimal_name(minute_entry.name, 2)) {
+                continue;
+            }
+
+            rc = storage_path_format(minute_path, sizeof(minute_path), "%s/%s",
+                                     hour_path, minute_entry.name);
+            if (rc != 0) {
+                fs_closedir(&hour_dir);
+                fs_closedir(&day_dir);
+                return rc;
+            }
+
+            struct fs_dir_t minute_dir;
+            struct fs_dirent session_entry;
+            fs_dir_t_init(&minute_dir);
+            if (fs_opendir(&minute_dir, minute_path) != 0) {
+                continue;
+            }
+            while (fs_readdir(&minute_dir, &session_entry) == 0 &&
+                   session_entry.name[0] != '\0') {
+                char metadata_path[STORAGE_PATH_MAX];
+                struct fs_dirent metadata_entry;
+
+                if (session_entry.type != FS_DIR_ENTRY_DIR ||
+                    !is_decimal_name(session_entry.name, 2)) {
+                    continue;
+                }
+                rc = storage_path_format(metadata_path, sizeof(metadata_path),
+                                         "%s/%s/session.json", minute_path,
+                                         session_entry.name);
+                if (rc != 0) {
+                    fs_closedir(&minute_dir);
+                    fs_closedir(&hour_dir);
+                    fs_closedir(&day_dir);
+                    return rc;
+                }
+                if (fs_stat(metadata_path, &metadata_entry) == 0 &&
+                    metadata_entry.type == FS_DIR_ENTRY_FILE) {
+                    char session_id[16];
+
+                    rc = storage_path_format(session_id, sizeof(session_id),
+                                             "%s%s%s%s", day_name,
+                                             hour_entry.name,
+                                             minute_entry.name,
+                                             session_entry.name);
+                    if (rc != 0) {
+                        fs_closedir(&minute_dir);
+                        fs_closedir(&hour_dir);
+                        fs_closedir(&day_dir);
+                        return rc;
+                    }
+                    add_session_id(ids, max_ids, stored, total, session_id);
+                }
+            }
+            fs_closedir(&minute_dir);
+        }
+        fs_closedir(&hour_dir);
+    }
+    fs_closedir(&day_dir);
+    return 0;
+}
+
+static int scan_session_ids(char ids[][16], int max_ids, int *total)
+{
+    struct fs_dir_t root_dir;
+    struct fs_dirent entry;
+    int stored = 0;
+    int count = 0;
+    int rc;
+
+    fs_dir_t_init(&root_dir);
+    rc = fs_opendir(&root_dir, STORAGE_BASE_PATH);
+    if (rc != 0) {
+        return rc;
+    }
+
+    while (fs_readdir(&root_dir, &entry) == 0 && entry.name[0] != '\0') {
+        if (entry.type != FS_DIR_ENTRY_DIR) {
+            continue;
+        }
+        if (is_decimal_name(entry.name, 8)) {
+            rc = scan_bucket_sessions(entry.name, ids, max_ids, &stored, &count);
+            if (rc != 0) {
+                fs_closedir(&root_dir);
+                return rc;
+            }
+        }
+    }
+    fs_closedir(&root_dir);
+    if (total) {
+        *total = count;
+    }
+    return stored;
 }
 
 int storage_list_session_ids(char ids[][16], int max_ids)
 {
-    struct fs_dir_t dirp;
-    struct fs_dirent entry;
-    int count = 0;
-    int rc;
-
-    if (!sd_mounted || !ids) {
+    if (!sd_mounted || !ids || max_ids <= 0) {
         return -EINVAL;
     }
-
-    fs_dir_t_init(&dirp);
-    rc = fs_opendir(&dirp, STORAGE_BASE_PATH);
-    if (rc != 0) {
-        LOG_ERR("Failed to open REC directory: %d", rc);
-        return rc;
-    }
-
-    /* Scan all session directories. Keep only the newest max_ids by
-     * maintaining a sorted insertion: if buffer is full and the new
-     * entry is newer than the oldest (last) entry, replace it.
-     */
-    while (true) {
-        rc = fs_readdir(&dirp, &entry);
-        if (rc != 0 || entry.name[0] == '\0') {
-            break;
-        }
-
-        if (entry.type != FS_DIR_ENTRY_DIR) {
-            continue;
-        }
-
-        /* Validate: 14 digits (YYYYMMDDHHMMSS) */
-        size_t len = strlen(entry.name);
-        if (len != 14) {
-            continue;
-        }
-
-        bool valid = true;
-        for (size_t i = 0; i < len; i++) {
-            if (entry.name[i] < '0' || entry.name[i] > '9') {
-                valid = false;
-                break;
-            }
-        }
-        if (!valid) {
-            continue;
-        }
-
-        if (count < max_ids) {
-            /* Buffer not full yet — insert sorted (descending) */
-            int pos = count;
-            for (int k = 0; k < count; k++) {
-                if (strcmp(entry.name, ids[k]) > 0) {
-                    pos = k;
-                    break;
-                }
-            }
-            /* Shift elements right to make room */
-            for (int k = count; k > pos; k--) {
-                strncpy(ids[k], ids[k - 1], 16);
-            }
-            strncpy(ids[pos], entry.name, 15);
-            ids[pos][15] = '\0';
-            count++;
-        } else {
-            /* Buffer full — only insert if newer than oldest (last entry) */
-            if (strcmp(entry.name, ids[max_ids - 1]) > 0) {
-                /* Find insertion point */
-                int pos = max_ids - 1;
-                for (int k = 0; k < max_ids - 1; k++) {
-                    if (strcmp(entry.name, ids[k]) > 0) {
-                        pos = k;
-                        break;
-                    }
-                }
-                /* Shift elements right, dropping the last one */
-                for (int k = max_ids - 1; k > pos; k--) {
-                    strncpy(ids[k], ids[k - 1], 16);
-                }
-                strncpy(ids[pos], entry.name, 15);
-                ids[pos][15] = '\0';
-            }
-        }
-    }
-
-    fs_closedir(&dirp);
-
-    return count;
+    return scan_session_ids(ids, max_ids, NULL);
 }
 
 int storage_list_sessions_paginated(struct storage_session_info *sessions,
                                     int offset, int limit)
 {
-    struct fs_dir_t dirp;
-    struct fs_dirent entry;
-    int count = 0;
-    int skipped = 0;
-    int rc;
+    char ids[200][16];
+    int wanted = MIN(offset + limit, (int)ARRAY_SIZE(ids));
+    int id_count;
+    int result = 0;
 
-    if (!sd_mounted || !sessions)
-    {
+    if (!sd_mounted || !sessions || offset < 0 || limit <= 0) {
         return -EINVAL;
     }
-
-    /* Open REC directory */
-    fs_dir_t_init(&dirp);
-    rc = fs_opendir(&dirp, STORAGE_BASE_PATH);
-    if (rc != 0)
-    {
-        LOG_ERR("Failed to open REC directory: %d", rc);
-        return rc;
+    id_count = storage_list_session_ids(ids, wanted);
+    if (id_count < 0) {
+        return id_count;
     }
-
-    /* Read directory entries, skip first 'offset' entries */
-    while (count < limit)
-    {
-        rc = fs_readdir(&dirp, &entry);
-        if (rc != 0 || entry.name[0] == '\0')
-        {
-            break;
-        }
-
-        /* Skip non-directories */
-        if (entry.type != FS_DIR_ENTRY_DIR)
-        {
-            continue;
-        }
-
-        /* Validate session_id format: should be 14 digits */
-        size_t len = strlen(entry.name);
-        if (len != 14)
-        {
-            continue;
-        }
-
-        /* Check if all digits */
-        bool valid = true;
-        for (size_t i = 0; i < len; i++)
-        {
-            if (entry.name[i] < '0' || entry.name[i] > '9')
-            {
-                valid = false;
-                break;
-            }
-        }
-        if (!valid)
-        {
-            continue;
-        }
-
-        /* Skip first 'offset' valid entries */
-        if (skipped < offset)
-        {
-            skipped++;
-            continue;
-        }
-
-        /* Get session info */
-        rc = storage_get_session_info(entry.name, &sessions[count]);
-        if (rc == 0)
-        {
-            /* Auto-delete empty sessions (0 files, 0 bytes) */
-            if (sessions[count].file_count == 0 && sessions[count].total_bytes == 0) {
-                LOG_INF("Deleting empty session: %s", entry.name);
-                storage_delete_session(entry.name);
-                continue;
-            }
-            count++;
-        }
-
-        /* Yield periodically */
-        if (count % 5 == 0)
-        {
-            k_yield();
+    for (int i = offset; i < id_count && result < limit; i++) {
+        if (storage_get_session_info(ids[i], &sessions[result]) == 0) {
+            result++;
         }
     }
+    return result;
 
-    fs_closedir(&dirp);
-
-    /* Sort by session_id descending (newest first) */
-    for (int i = 0; i < count - 1; i++) {
-        for (int j = i + 1; j < count; j++) {
-            if (strcmp(sessions[i].session_id, sessions[j].session_id) < 0) {
-                struct storage_session_info tmp = sessions[i];
-                sessions[i] = sessions[j];
-                sessions[j] = tmp;
-            }
-        }
-    }
-
-    return count;
 }
 
 int storage_get_session_info(const char *session_id, struct storage_session_info *info)
 {
-    if (validate_session_id(session_id) != 0) {
-        return -EINVAL;
-    }
-    char filepath[128];
+    char filepath[STORAGE_PATH_MAX];
     struct fs_file_t file;
     char json_buf[512];
     int rc;
     ssize_t bytes_read;
 
-    if (!info || !session_id)
-    {
+    if (!info || validate_session_id(session_id) != 0) {
         return -EINVAL;
     }
 
@@ -1182,9 +1213,10 @@ int storage_get_session_info(const char *session_id, struct storage_session_info
     strncpy(info->session_id, session_id, sizeof(info->session_id) - 1);
     info->session_id[sizeof(info->session_id) - 1] = '\0';
 
-    /* Try to read session.json */
-    snprintf(filepath, sizeof(filepath), "%s/%s/session.json",
-             STORAGE_BASE_PATH, session_id);
+    rc = build_session_metadata_path(session_id, filepath, sizeof(filepath));
+    if (rc != 0) {
+        return rc;
+    }
 
     fs_file_t_init(&file);
     rc = fs_open(&file, filepath, FS_O_READ);
@@ -1283,9 +1315,6 @@ int storage_get_session_info(const char *session_id, struct storage_session_info
         }
     }
 
-    /* Detect group format */
-    info->uses_groups = session_has_groups(session_id);
-
     /* If session.json had valid file data, trust it and skip the scan.
      * Directory scan is only needed when session.json is missing or stale
      * (e.g., power loss during recording).
@@ -1296,12 +1325,14 @@ int storage_get_session_info(const char *session_id, struct storage_session_info
 
     /* Fall back: scan directory for actual file count and total size. */
     {
-        char dir_path[128];
+        char dir_path[STORAGE_PATH_MAX];
         struct fs_dir_t dirp;
         struct fs_dirent entry;
 
-        snprintf(dir_path, sizeof(dir_path), "%s/%s",
-                 STORAGE_BASE_PATH, session_id);
+        rc = build_bucket_session_dir(session_id, dir_path, sizeof(dir_path));
+        if (rc != 0) {
+            return rc;
+        }
         fs_dir_t_init(&dirp);
         if (fs_opendir(&dirp, dir_path) != 0) {
             return -ENOENT;
@@ -1312,23 +1343,17 @@ int storage_get_session_info(const char *session_id, struct storage_session_info
 
         while (fs_readdir(&dirp, &entry) == 0 && entry.name[0] != '\0')
         {
-            size_t len = strlen(entry.name);
-            if ((len == 9 && strcmp(entry.name + 4, ".opus") == 0) ||
-                (len == 9 && strcmp(entry.name + 4, ".ogg") == 0))
-            {
-                file_count++;
-                actual_bytes += (uint64_t)entry.size;
-            }
-            else if (entry.type == FS_DIR_ENTRY_DIR &&
-                     entry.name[0] != '.')
+            if (entry.type == FS_DIR_ENTRY_DIR && entry.name[0] != '.')
             {
                 /* Group subdirectory — scan for .opus files */
-                char subdir[160];
+                char subdir[STORAGE_PATH_MAX];
                 struct fs_dir_t sub_dirp;
                 struct fs_dirent sub_entry;
 
-                snprintf(subdir, sizeof(subdir), "%s/%s/%s",
-                         STORAGE_BASE_PATH, session_id, entry.name);
+                if (storage_path_format(subdir, sizeof(subdir), "%s/%s",
+                                        dir_path, entry.name) != 0) {
+                    continue;
+                }
                 fs_dir_t_init(&sub_dirp);
                 if (fs_opendir(&sub_dirp, subdir) == 0) {
                     while (fs_readdir(&sub_dirp, &sub_entry) == 0 &&
@@ -1373,27 +1398,26 @@ bool storage_has_unsynced_sessions(void)
 
 int storage_list_chunks(const char *session_id, uint32_t *chunks, int max_chunks, int skip)
 {
-    if (validate_session_id(session_id) != 0) {
-        return -EINVAL;
-    }
-    char dir_path[128];
+    char dir_path[STORAGE_PATH_MAX];
     struct fs_dir_t dirp;
     struct fs_dirent entry;
     int count = 0;
     int rc;
     int skipped = 0;
 
-    if (!sd_mounted || !session_id || !chunks)
+    if (!sd_mounted || !chunks || max_chunks <= 0 || skip < 0 ||
+        validate_session_id(session_id) != 0)
     {
         return -EINVAL;
     }
 
-    bool use_groups = session_has_groups(session_id);
-
     /* Open session directory */
-    snprintf(dir_path, sizeof(dir_path), "%s/%s", STORAGE_BASE_PATH, session_id);
-    LOG_DBG("Listing chunks in: %s (max=%d, skip=%d, groups=%d)",
-            dir_path, max_chunks, skip, use_groups);
+    rc = build_bucket_session_dir(session_id, dir_path, sizeof(dir_path));
+    if (rc != 0) {
+        return rc;
+    }
+    LOG_DBG("Listing chunks in: %s (max=%d, skip=%d)", dir_path, max_chunks,
+            skip);
 
     fs_dir_t_init(&dirp);
     rc = fs_opendir(&dirp, dir_path);
@@ -1412,15 +1436,18 @@ int storage_list_chunks(const char *session_id, uint32_t *chunks, int max_chunks
             break;
         }
 
-        if (use_groups && entry.type == FS_DIR_ENTRY_DIR &&
+        if (entry.type == FS_DIR_ENTRY_DIR &&
             entry.name[0] != '.')
         {
             /* Scan group subdirectory for .opus files */
-            char subdir[160];
+            char subdir[STORAGE_PATH_MAX];
             struct fs_dir_t sub_dirp;
             struct fs_dirent sub_entry;
 
-            snprintf(subdir, sizeof(subdir), "%s/%s", dir_path, entry.name);
+            if (storage_path_format(subdir, sizeof(subdir), "%s/%s", dir_path,
+                                    entry.name) != 0) {
+                continue;
+            }
             fs_dir_t_init(&sub_dirp);
             if (fs_opendir(&sub_dirp, subdir) == 0) {
                 while (count < max_chunks &&
@@ -1441,21 +1468,6 @@ int storage_list_chunks(const char *session_id, uint32_t *chunks, int max_chunks
             continue;
         }
 
-        /* Flat format: check if it's a .opus file with 4-digit prefix */
-        size_t len = strlen(entry.name);
-        if (len == 9 && strcmp(entry.name + 4, ".opus") == 0)
-        {
-            /* Skip files before the requested offset */
-            if (skipped < skip)
-            {
-                skipped++;
-                continue;
-            }
-            /* Extract chunk number from filename (0001.opus -> 1) */
-            chunks[count] = (uint32_t)atoi(entry.name);
-            count++;
-            LOG_DBG("Found chunk: %s -> %u", entry.name, chunks[count - 1]);
-        }
     }
 
     fs_closedir(&dirp);
@@ -1466,13 +1478,10 @@ int storage_list_chunks(const char *session_id, uint32_t *chunks, int max_chunks
 
 int storage_delete_session(const char *session_id)
 {
-    if (validate_session_id(session_id) != 0) {
-        return -EINVAL;
-    }
-    char dir_path[128];
+    char dir_path[STORAGE_PATH_MAX];
     int rc;
 
-    if (!sd_mounted || !session_id)
+    if (!sd_mounted || validate_session_id(session_id) != 0)
     {
         return -EINVAL;
     }
@@ -1484,7 +1493,10 @@ int storage_delete_session(const char *session_id)
     }
 
     /* Open session directory */
-    snprintf(dir_path, sizeof(dir_path), "%s/%s", STORAGE_BASE_PATH, session_id);
+    rc = build_bucket_session_dir(session_id, dir_path, sizeof(dir_path));
+    if (rc != 0) {
+        return rc;
+    }
 
     /* Recursively delete all contents (files and group subdirectories) */
     delete_dir_contents(dir_path);
@@ -1560,8 +1572,13 @@ static void delete_dir_contents(const char *dir_path)
     }
 
     while (fs_readdir(&dirp, &entry) == 0 && entry.name[0] != '\0') {
-        char filepath[192];
-        snprintf(filepath, sizeof(filepath), "%s/%s", dir_path, entry.name);
+        char filepath[STORAGE_PATH_MAX];
+
+        if (storage_path_format(filepath, sizeof(filepath), "%s/%s", dir_path,
+                                entry.name) != 0) {
+            LOG_WRN("Skipping overlong path while deleting %s", entry.name);
+            continue;
+        }
 
         if (entry.type == FS_DIR_ENTRY_DIR && entry.name[0] != '.') {
             delete_dir_contents(filepath);
@@ -1602,14 +1619,11 @@ static int update_free_space(void)
     return 0;
 }
 
-static int create_marks_file(const char *dir_path)
+static int create_marks_file(const char *marks_path)
 {
-    char marks_path[128];
     struct fs_file_t file;
     int rc;
     ssize_t written;
-
-    snprintf(marks_path, sizeof(marks_path), "%s/marks.bin", dir_path);
 
     fs_file_t_init(&file);
     rc = fs_open(&file, marks_path, FS_O_CREATE | FS_O_WRITE);
@@ -1635,18 +1649,15 @@ static int create_marks_file(const char *dir_path)
     return 0;
 }
 
-static int create_session_json(const char *dir_path, const char *session_id,
+static int create_session_json(const char *json_path, const char *session_id,
                                uint8_t channels, uint32_t sample_rate,
                                const char *mode)
 {
-    char json_path[128];
     struct fs_file_t file;
     char json_buf[512];
     int len;
     int rc;
     ssize_t written;
-
-    snprintf(json_path, sizeof(json_path), "%s/session.json", dir_path);
 
     fs_file_t_init(&file);
     rc = fs_open(&file, json_path, FS_O_CREATE | FS_O_WRITE);
@@ -1693,7 +1704,7 @@ static int create_session_json(const char *dir_path, const char *session_id,
 static int update_session_json(const char *session_id, uint32_t duration_sec,
                                uint32_t chunk_count, uint64_t session_bytes)
 {
-    char json_path[128];
+    char json_path[STORAGE_PATH_MAX];
     struct fs_file_t file;
     char json_buf[512];
     char channels_str[16] = "2";
@@ -1703,8 +1714,10 @@ static int update_session_json(const char *session_id, uint32_t duration_sec,
     int rc;
     ssize_t bytes_read, written;
 
-    snprintf(json_path, sizeof(json_path), "%s/%s/session.json",
-             STORAGE_BASE_PATH, session_id);
+    rc = build_session_metadata_path(session_id, json_path, sizeof(json_path));
+    if (rc != 0) {
+        return rc;
+    }
 
     k_mutex_lock(&session_json_mutex, K_FOREVER);
 
@@ -1815,14 +1828,12 @@ static int update_session_json(const char *session_id, uint32_t duration_sec,
 
 static int get_bookmark_filepath(const char *session_id, char *filepath, size_t size)
 {
-    if (!session_id || !filepath)
+    if (!filepath)
     {
         return -EINVAL;
     }
 
-    snprintf(filepath, size, "%s/%s/%s", STORAGE_BASE_PATH, session_id, BOOKMARK_FILE_NAME);
-
-    return 0;
+    return build_marks_path(session_id, filepath, size);
 }
 
 int storage_add_bookmark(const char *session_id, uint32_t offset_sec)
