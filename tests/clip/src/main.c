@@ -442,6 +442,10 @@ int main(void)
 	if (ret != 0) {
 		LOG_ERR("OLED display initialization failed: %d", ret);
 		/* Continue anyway, OLED is optional */
+	} else {
+		/* Make the battery screen visible immediately. PMIC initialization and
+		 * its periodic refresh replace this placeholder with live readings. */
+		oled_show_battery_unavailable();
 	}
 
 	/* Initialize PMIC (NPM1300) */

@@ -17,6 +17,13 @@
 	};
 };
 
+/* The CH1115 driver has no vin-supply phandle. Keep its GPIO supply asserted
+ * for the entire hardware-test session so it cannot be disabled as an unused
+ * regulator before the persistent battery screen starts updating. */
+&oled_reg {
+	regulator-always-on;
+};
+
 / {
 	/* Point the generic filesystem shell at the external LittleFS partition.
 	 * The test image has Partition Manager disabled, so its partition node is

@@ -26,6 +26,14 @@ void oled_show_battery(uint8_t percent, uint32_t voltage_mv, bool charging,
 		       int32_t temp_c);
 
 /**
+ * @brief Render a battery-status placeholder when the PMIC is unavailable
+ *
+ * This keeps the test OLED visibly alive rather than leaving it blank while
+ * the PMIC channel is being diagnosed.
+ */
+void oled_show_battery_unavailable(void);
+
+/**
  * @brief Test 1: Clear display
  */
 void oled_test_clear(void);

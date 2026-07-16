@@ -85,6 +85,15 @@ static uint8_t last_display_percent = 255U;
 static uint8_t last_saved_percent = 255U;
 static float smoothed_soc;
 static bool soc_initialized;
+static struct {
+	uint32_t voltage_mv;
+	uint8_t percent;
+	bool charging;
+	int32_t temp_c;
+	bool valid;
+} last_battery_display;
+static bool battery_display_error_reported;
+static bool battery_display_rendered;
 static K_MUTEX_DEFINE(pmic_mutex);
 static struct k_work_delayable battery_display_work;
 
@@ -256,22 +265,27 @@ static int read_sensors(float *voltage, float *current, float *temp, int32_t *ch
 	*voltage = (float)val.val1 + ((float)val.val2 / 1000000.0f);
 
 	ret = sensor_channel_get(charger_dev, SENSOR_CHAN_GAUGE_TEMP, &val);
-	if (ret < 0) {
-		return ret;
+	if (ret == 0) {
+		*temp = (float)val.val1 + ((float)val.val2 / 1000000.0f);
+	} else {
+		/* Voltage is sufficient to keep the test display useful. A missing
+		 * NTC channel must not turn the OLED blank. */
+		*temp = last_battery_display.valid ? (float)last_battery_display.temp_c : 25.0f;
 	}
-	*temp = (float)val.val1 + ((float)val.val2 / 1000000.0f);
 
 	ret = sensor_channel_get(charger_dev, SENSOR_CHAN_GAUGE_AVG_CURRENT, &val);
-	if (ret < 0) {
-		return ret;
+	if (ret == 0) {
+		*current = (float)val.val1 + ((float)val.val2 / 1000000.0f);
+	} else {
+		*current = 0.0f;
 	}
-	*current = (float)val.val1 + ((float)val.val2 / 1000000.0f);
 
 	ret = sensor_channel_get(charger_dev, SENSOR_CHAN_NPM13XX_CHARGER_STATUS, &val);
-	if (ret < 0) {
-		return ret;
+	if (ret == 0) {
+		*chg_status = val.val1;
+	} else {
+		*chg_status = 0;
 	}
-	*chg_status = val.val1;
 
 	return 0;
 }
@@ -389,6 +403,11 @@ static int pmic_get_battery_status_locked(uint32_t *voltage_mv, uint8_t *percent
 
 	last_display_percent = display_percent;
 	*percent = display_percent;
+	last_battery_display.voltage_mv = *voltage_mv;
+	last_battery_display.percent = display_percent;
+	last_battery_display.charging = *charging;
+	last_battery_display.temp_c = *temp_c;
+	last_battery_display.valid = true;
 
 	/* Write only once per displayed percentage (and once after boot). */
 	if (fg_initialized && display_percent != last_saved_percent) {
@@ -424,8 +443,33 @@ static void battery_display_handler(struct k_work *work)
 	bool charging;
 	int32_t temp_c;
 
-	if (pmic_get_battery_status(&voltage_mv, &percent, &charging, &temp_c) == 0) {
+	int ret = pmic_get_battery_status(&voltage_mv, &percent, &charging, &temp_c);
+	if (ret == 0) {
 		oled_show_battery(percent, voltage_mv, charging, temp_c);
+		if (!battery_display_rendered) {
+			LOG_INF("OLED battery screen: %u%%, %u mV", percent, voltage_mv);
+			battery_display_rendered = true;
+		}
+		battery_display_error_reported = false;
+	} else {
+		if (!battery_display_error_reported) {
+			LOG_WRN("Battery display using fallback: %d", ret);
+			battery_display_error_reported = true;
+		}
+
+		k_mutex_lock(&pmic_mutex, K_FOREVER);
+		bool have_cached_status = last_battery_display.valid;
+		voltage_mv = last_battery_display.voltage_mv;
+		percent = last_battery_display.percent;
+		charging = last_battery_display.charging;
+		temp_c = last_battery_display.temp_c;
+		k_mutex_unlock(&pmic_mutex);
+
+		if (have_cached_status) {
+			oled_show_battery(percent, voltage_mv, charging, temp_c);
+		} else {
+			oled_show_battery_unavailable();
+		}
 	}
 
 	k_work_schedule(&battery_display_work, K_SECONDS(1));
@@ -456,6 +500,8 @@ int pmic_init(void)
 		LOG_INF("  npm1300_regulators: ready");
 	}
 	if (ret != 0) {
+		k_work_init_delayable(&battery_display_work, battery_display_handler);
+		k_work_schedule(&battery_display_work, K_NO_WAIT);
 		return ret;
 	}
 
