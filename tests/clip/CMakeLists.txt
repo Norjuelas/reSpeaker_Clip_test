@@ -22,13 +22,10 @@ target_sources(app PRIVATE
 	src/oled.c
 	src/pmic.c
 	src/motor.c
-	src/imu.c
 	src/usb.c
 	src/flash_test.c
 	${CMAKE_CURRENT_LIST_DIR}/../../drivers/display/ch1115.c
 )
-
-
 
 
 
