@@ -54,17 +54,6 @@ LOG_MODULE_REGISTER(battery, CONFIG_CLIP_LOG_LEVEL);
 #define CHARGE_RESUME_TEMP_C   40.0f   /* 5C hysteresis */
 #define CHARGE_CURRENT_MA      220     /* matches DTS current-microamp; any non-zero re-enables */
 
-/* SoC smoothing configuration for stable display */
-#define SOC_SMOOTH_ALPHA    0.15f   /* EMA factor: lower = smoother (0.1-0.5) */
-#define SOC_MAX_DELTA       1       /* Max SoC change allowed per poll cycle (%) */
-
-/*
- * Sticky-full: once charging reports complete, the display is held at 100%
- * (even after VBUS is unplugged) until the real SoC drops below this
- * threshold, so a full charge doesn't immediately fall to 99% on unplug.
- */
-#define FULL_RELEASE_THRESHOLD  96.0f
-
 /* Battery model - using Nordic's preset model */
 static const struct battery_model battery_model = {
 #include "battery_model.inc"
@@ -169,14 +158,9 @@ static void fg_state_load(void)
 static bool fg_initialized;
 
 /* Mutex serializing read_and_update() — called from display_thread and the
- * system workqueue; the nRF Fuel Gauge is non-reentrant and fg_ref_time /
- * smoothed_soc are shared. */
+ * system workqueue; the nRF Fuel Gauge is non-reentrant and fg_ref_time is
+ * shared. */
 static K_MUTEX_DEFINE(battery_mutex);
-
-/* SoC smoothing state */
-static float smoothed_soc = 0.0f;  /* Will be initialized on first read */
-static bool soc_initialized = false;
-static bool full_latch = false;    /* Sticky 100% after charge complete */
 
 /* 60-second periodic battery level polling */
 static struct k_work_delayable battery_level_work;
@@ -416,75 +400,11 @@ static void read_and_update_locked(void)
 		charging = charger_connected && (!charger_complete || !battery_full);
 	}
 
-	/* Real SoC before the charge-complete force (used by the sticky-full
-	 * release check below). */
-	float real_soc = (float)percent;
-
-	/* When charge complete, force 100% and latch it (fuel-gauge plateaus at
-	 * ~99%). The latch holds 100% on the display even after VBUS is removed,
-	 * until the real SoC drops below FULL_RELEASE_THRESHOLD. */
-	if (charger_complete && vbus_connected) {
-		percent = 100;
-		full_latch = true;
-	}
-
-	/* Apply SoC smoothing: EMA + rate limiting to reduce display jumping */
-	{
-		float raw_soc = (float)percent;
-		if (!soc_initialized) {
-			smoothed_soc = raw_soc;
-			soc_initialized = true;
-		} else if (raw_soc < 10.0f) {
-			/* Low battery: bypass smoothing so fast discharge reaches the
-			 * shutdown threshold promptly instead of lagging into a hard
-			 * PMIC undervoltage cutoff. */
-			smoothed_soc = raw_soc;
-		} else {
-			float delta = raw_soc - smoothed_soc;
-			/* Rate limit: cap maximum change per update cycle */
-			if (delta > SOC_MAX_DELTA) {
-				delta = SOC_MAX_DELTA;
-			} else if (delta < -SOC_MAX_DELTA) {
-				delta = -SOC_MAX_DELTA;
-			}
-			/* Exponential moving average */
-			smoothed_soc += SOC_SMOOTH_ALPHA * delta;
-		}
-
-		/* Sticky 100%: keep the display at 100% after charge complete (even
-		 * unplugged) until the cell actually discharges below the release
-		 * threshold, so a full charge doesn't drop to 99% on unplug. */
-		if (full_latch) {
-			if (real_soc < FULL_RELEASE_THRESHOLD) {
-				full_latch = false;
-			} else {
-				smoothed_soc = 100.0f;
-			}
-		}
-
-		if (smoothed_soc < 0.0f) {
-			smoothed_soc = 0.0f;
-		}
-		if (smoothed_soc > 100.0f) {
-			smoothed_soc = 100.0f;
-		}
-		percent = (uint8_t)(smoothed_soc + 0.5f);
-	}
-
-	/* Displayed percentage = actual SoC (no bottom reserve). */
+	/* The fuel gauge already estimates SoC from voltage, current, temperature,
+	 * and elapsed time. Display that integer estimate directly: additional
+	 * application-level filtering caused multi-hour lag and a visible jump
+	 * whenever the device restarted. */
 	uint8_t display_percent = percent;
-	/* The UI must be monotonic within one charge/discharge phase. The fuel
-	 * gauge already suppresses most opposite-direction corrections, but make
-	 * the display contract explicit as a final safeguard against voltage
-	 * relaxation and EMA rounding: discharging never shows N% -> N+1%, and
-	 * charging never shows N% -> N-1%. */
-	if (last_percent != 255U &&
-	    ((charging && display_percent < last_percent) ||
-	     (!charging && display_percent > last_percent))) {
-		LOG_DBG("Holding battery at %u%% while %s (estimate %u%%)",
-			last_percent, charging ? "charging" : "discharging", display_percent);
-		display_percent = last_percent;
-	}
 
 	/* Update battery percent (display value) */
 	if (display_percent != last_percent) {
@@ -605,7 +525,7 @@ static void battery_delayed_update_handler(struct k_work *work)
 static void battery_level_handler(struct k_work *work)
 {
 	read_and_update();
-	/* Persist the fuel gauge state when the displayed SoC changes (>=1%).
+	/* Persist the fuel-gauge state when its displayed integer SoC changes.
 	 * The SoC moves slowly, so this writes infrequently — not every poll —
 	 * to avoid wearing the LittleFS settings flash. The graceful shutdown/
 	 * reboot paths also save (a fresh copy) via battery_save_fg_state(). */

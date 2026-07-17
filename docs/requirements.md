@@ -372,7 +372,7 @@ the session directory and named `{NNNN}.opus` (e.g., `0/0001.opus`,
 
 **FR-5.1.1**: The system shall monitor battery via NPM1300 PMIC with nRF Fuel Gauge for accurate State of Charge estimation
 
-**FR-5.1.2**: The system shall calculate battery percentage with SoC smoothing to avoid sudden jumps
+**FR-5.1.2**: The system shall report the nRF Fuel Gauge's integer SoC estimate directly, without application-level rate limiting or directional clamping
 
 **FR-5.1.3**: The system shall report battery level in AT+GSTAT response
 
