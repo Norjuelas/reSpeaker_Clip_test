@@ -435,11 +435,24 @@ static void read_and_update_locked(void)
 		charging = charger_connected && (!charger_complete || !battery_full);
 	}
 
-	/* The fuel gauge already estimates SoC from voltage, current, temperature,
-	 * and elapsed time. Display that integer estimate directly: additional
-	 * application-level filtering caused multi-hour lag and a visible jump
-	 * whenever the device restarted. */
+	/* The fuel gauge already estimates SoC from voltage, current,
+	 * temperature, and elapsed time; display that integer estimate
+	 * directly (additional application-level filtering caused multi-hour
+	 * lag and a visible jump after restart). One exception: force 100%
+	 * on the display when the NPM1300 reports charge complete — the
+	 * gauge plateaus at ~99% on a full charge (model full vs charger
+	 * CV-termination mismatch), so without this a full charge shows 99%.
+	 * Charging with WiFi on may keep the NPM1300 from ever reporting
+	 * complete (the nRF70 BUCKVBAT load at the battery terminal holds
+	 * the charge current above the termination threshold); that case
+	 * intentionally stays <100% and only reaches 100% once WiFi auto-offs
+	 * and the charger terminates. No sticky-after-unplug latch (that caused
+	 * the lag/jump f4f1297 removed). The raw gauge value (percent) is still
+	 * logged as "actual" for calibration. */
 	uint8_t display_percent = percent;
+	if (vbus_connected && charger_complete) {
+		display_percent = 100;
+	}
 
 	/* Update battery percent (display value) */
 	if (display_percent != last_percent) {
