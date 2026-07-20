@@ -511,9 +511,16 @@ int storage_get_stats(struct storage_stats *stats)
             (free_space_mb * 100U) > ((100U - CONFIG_CLIP_STORAGE_FULL_PERCENT) * sd_total_mb)) {
             sd_full = false;
         }
-        stats->free_space_mb = free_space_mb;
-        stats->total_mb = sd_total_mb;
     }
+
+    /* Report last-known capacity/free even when the card is currently
+     * unmounted (idle power-gate). free_space_mb / sd_total_mb survive
+     * storage_idle_poweroff (not cleared), and free space does not change
+     * while idle, so the cached values are accurate. is_mounted tells the
+     * caller whether these are live or cached. Lets status queries
+     * (GSTAT free_space, AT+STORAGE) report storage without waking the SD. */
+    stats->free_space_mb = free_space_mb;
+    stats->total_mb = sd_total_mb;
 
     return 0;
 }

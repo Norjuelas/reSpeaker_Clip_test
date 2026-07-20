@@ -196,10 +196,14 @@ static int cmd_storage_handler(struct at_cmd_ctx *ctx, char *response, size_t le
         return create_json_response(false, "Use AT+STORAGE?", NULL, response, len);
     }
 
-    if (storage_get_stats(&stats) != 0 || !stats.is_mounted) {
-        return create_json_response(false, "SD card not mounted", NULL, response, len);
+    if (storage_get_stats(&stats) != 0) {
+        return create_json_response(false, "Storage unavailable", NULL, response, len);
     }
 
+    /* Report storage even when the SD is currently unmounted (idle power-
+     * gate): free_space_mb / total_mb are the last-known cached values, and
+     * "mounted" tells whether they are live or cached. total/free=0 means
+     * the card was never seen at boot. */
     uint32_t total = stats.total_mb;
     uint32_t free_mb = stats.free_space_mb;
     uint32_t used = (total > free_mb) ? (total - free_mb) : 0;
@@ -208,8 +212,9 @@ static int cmd_storage_handler(struct at_cmd_ctx *ctx, char *response, size_t le
 
     char data[160];
     int n = snprintf(data, sizeof(data),
-                     "{\"mounted\":true,\"total_mb\":%u,\"free_mb\":%u,"
+                     "{\"mounted\":%s,\"total_mb\":%u,\"free_mb\":%u,"
                      "\"used_mb\":%u,\"used_pct\":%u,\"recorded_mb\":%u}",
+                     stats.is_mounted ? "true" : "false",
                      total, free_mb, used, used_pct, recorded_mb);
     if (n < 0 || n >= (int)sizeof(data)) {
         return AT_ERR_NOMEM;
