@@ -25,6 +25,7 @@
 #include "display.h"
 #include "ble.h"
 #include "transfer.h"
+#include "wifi.h"
 
 LOG_MODULE_REGISTER(battery, CONFIG_CLIP_LOG_LEVEL);
 
@@ -69,6 +70,7 @@ static bool last_charging;
 static bool low_battery_warned;
 static bool thermal_charge_disabled;  /* sticky: latched hot, held off until resume temp */
 static int64_t fg_ref_time;
+static float last_wifi_load_a = -1.0f;  /* logs WiFi-comp state transitions */
 
 /* Fuel-gauge state persistence. The library state is only valid with the
  * exact battery model from which it was captured. Keep a small envelope around
@@ -272,6 +274,29 @@ static bool poll_vbus_status(void)
 	return val.val1 != 0;
 }
 
+/* WiFi radio load the NPM1300 IBAT sense cannot see, in amperes.
+ *
+ * The nRF7002 main VDD (BUCKVBAT) taps VBAT upstream of the NPM1300, so the
+ * radio's TX/RX/internal-buck current never passes through the PMIC's IBAT
+ * sense resistor — GAUGE_AVG_CURRENT is blind to it in both charge and
+ * discharge states. This returns a state-keyed estimate (AP idle / active
+ * UDP transfer / off) so it can be folded into the current fed to
+ * nrf_fuel_gauge_process() as extra discharge. Calibrate the two mA values
+ * from CLIP_BATTERY_WIFI_*_LOAD_MA against (total_battery - |IBAT|). */
+static float wifi_load_estimate_a(void)
+{
+	if (!IS_ENABLED(CONFIG_CLIP_BATTERY_WIFI_LOAD_COMPENSATION)) {
+		return 0.0f;
+	}
+
+	int ma = 0;
+	if (wifi_ap_is_running()) {
+		ma = transfer_is_active() ? CONFIG_CLIP_BATTERY_WIFI_TX_LOAD_MA
+					  : CONFIG_CLIP_BATTERY_WIFI_AP_LOAD_MA;
+	}
+	return (float)ma / 1000.0f;
+}
+
 static void read_and_update_locked(void)
 {
 	struct clip_context *ctx = clip_get_context();
@@ -360,12 +385,22 @@ static void read_and_update_locked(void)
 		/* Calculate time delta */
 		float delta = (float)k_uptime_delta(&fg_ref_time) / 1000.f;
 
-		/* Process fuel gauge to get SoC.
-		 * Zephyr sensor API: GAUGE_AVG_CURRENT negative = discharging;
-		 * nrf_fuel_gauge lib expects the opposite (negative = charging),
-		 * so negate the current. Without this the Coulomb count runs
-		 * backwards and the SoC jumps (voltage correction fights it). */
-		float soc = nrf_fuel_gauge_process(voltage, -current, temp, delta, NULL);
+		/* WiFi compensation: fold in the nRF70 current GAUGE_AVG_CURRENT
+		 * cannot see (it bypasses the PMIC on VBAT-direct). Added as extra
+		 * discharge (positive in the lib convention) in both charge and
+		 * discharge states. current is in amperes (sensor_value_from_micro). */
+		float wifi_load_a = wifi_load_estimate_a();
+		if (wifi_load_a != last_wifi_load_a) {
+			last_wifi_load_a = wifi_load_a;
+			LOG_INF("Battery fg: ibat=%d mA, wifi_comp=%d mA",
+				(int)(current * 1000.0f), (int)(wifi_load_a * 1000.0f));
+		}
+
+		/* nrf_fuel_gauge lib expects negative = charging; GAUGE_AVG_CURRENT
+		 * is negative = discharging, so negate. Without this the Coulomb
+		 * count runs backwards and SoC jumps (voltage correction fights it). */
+		float soc = nrf_fuel_gauge_process(voltage, -current + wifi_load_a,
+						  temp, delta, NULL);
 		percent = (uint8_t)soc;
 
 		/* Determine charging status for display/BLE:
