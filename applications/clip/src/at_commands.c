@@ -37,6 +37,10 @@ LOG_MODULE_REGISTER(at_commands, CONFIG_CLIP_LOG_LEVEL);
 
 /* Delayed reboot work — allows response to be sent before rebooting */
 static struct k_work_delayable reboot_work;
+/* PAIR=reset first acknowledges the request, then erases the SD card outside
+ * the AT command context. Formatting a card containing many recordings can
+ * take long enough for the BLE client request to time out. */
+static struct k_work_delayable pair_reset_work;
 static bool reboot_clear_bonds;
 static bool log_fs_active = IS_ENABLED(CONFIG_CLIP_LOG_FS_DEFAULT_ON);
 
@@ -59,6 +63,23 @@ static void schedule_reboot(int delay_ms, bool clear_bonds)
 {
     reboot_clear_bonds = clear_bonds;
     k_work_schedule(&reboot_work, K_MSEC(delay_ms));
+}
+
+static void pair_reset_work_handler(struct k_work *work)
+{
+    int err;
+
+    ARG_UNUSED(work);
+
+    err = storage_format_card();
+    if (err != 0 && err != -ENODEV) {
+        LOG_WRN("SD erase during pairing reset failed: %d", err);
+    }
+
+    /* The AT reply was sent before this worker started. Reboot only after
+     * card deletion/formatting is complete. Bonds were already persisted by
+     * the command handler, so do not clear them again here. */
+    schedule_reboot(500, false);
 }
 
 /* Helper: Extract integer from string */
@@ -697,14 +718,35 @@ static int cmd_pair_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
             return create_json_response(false, "Use AT+PAIR=reset", NULL, response, len);
         }
 
-        /* Clear bonds and persist before reboot. ble_clear_bonds may
-         * drop the BLE link, so send the response first. */
-        int ret = create_json_response(true, NULL, "{\"rebooting\":true}", response, len);
-        ble_clear_bonds();
-        settings_save();
-        storage_format_card();
-        schedule_reboot(500, true);
-        return ret;
+        /* Clear and persist pairing configuration before acknowledging the
+         * reset. The SD card erase is deliberately deferred: FATFS may take
+         * seconds to remove a card full of old recordings. */
+        int err = ble_clear_bonds();
+        if (err != 0) {
+            LOG_WRN("Failed to clear pairing bonds: %d", err);
+            return create_json_response(false, "Failed to clear pairing", NULL,
+                                        response, len);
+        }
+
+        err = settings_save();
+        if (err != 0) {
+            LOG_WRN("Failed to persist cleared pairing: %d", err);
+            return create_json_response(false, "Failed to save pairing reset", NULL,
+                                        response, len);
+        }
+
+        /* Reserve a delayed worker before returning. Its delay gives the AT
+         * transport the same response window previously used for reboot. */
+        err = k_work_schedule(&pair_reset_work, K_MSEC(500));
+        if (err < 0) {
+            LOG_ERR("Failed to schedule SD erase: %d", err);
+            return create_json_response(false, "Failed to schedule SD erase", NULL,
+                                        response, len);
+        }
+
+        return create_json_response(true, NULL,
+                                    "{\"rebooting\":true,\"sd_erase\":\"pending\"}",
+                                    response, len);
     } else {
         /* AT+PAIR? - Query pairing status */
         char addr[18] = {0};
@@ -1716,6 +1758,7 @@ int at_commands_register(void)
     int err;
 
     k_work_init_delayable(&reboot_work, reboot_work_handler);
+    k_work_init_delayable(&pair_reset_work, pair_reset_work_handler);
 
     /* GSTAT - Get device status */
     static const struct at_command gstat_cmd = {

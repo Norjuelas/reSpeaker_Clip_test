@@ -1330,7 +1330,7 @@ AT+PAIR=reset
 ```json
 {
   "ok": true,
-  "data": { "rebooting": true }
+  "data": { "rebooting": true, "sd_erase": "pending" }
 }
 ```
 
@@ -1341,8 +1341,11 @@ AT+PAIR=reset
 **Side Effects of Reset:**
 - Clears BLE bond information (`ble_clear_bonds`) and persists the deletion
   (`settings_save`) so it survives the reboot
-- **Formats the SD card** — destroys all recordings (privacy wipe on unpair)
-- Reboots the device after ~500 ms
+- Replies immediately after clearing pairing configuration, before erasing the
+  SD card, so the client does not time out on cards containing many recordings
+- **Formats the SD card** in the background — destroys all recordings (privacy
+  wipe on unpair)
+- Reboots the device after SD erasure completes
 - Requires re-pairing
 
 > The bond clear + settings persist + SD format all run synchronously before the
