@@ -349,6 +349,10 @@ int storage_idle_poweroff(void)
      * here — the SPI4 sleep pinctrl handles them; reconfiguring them raises
      * leakage (matches samples/suspend_to_ram spi4_suspend()). */
     if (sd_mounted) {
+        /* Refresh the cached free/total right before unmount so status
+         * queries while idle report post-write values (e.g. after a
+         * recording), not the pre-write cache. */
+        (void)update_free_space();
         (void)fs_unmount(&mp);
         sd_mounted = false;
     }
@@ -1610,9 +1614,10 @@ static int update_free_space(void)
     /* Use the Zephyr FS API so we get both free and total capacity. */
     if (fs_statvfs("/SD:", &stat) != 0)
     {
+        /* Keep the last known values rather than zeroing — a transient
+         * statvfs failure (e.g. at idle-unmount) must not wipe the cached
+         * capacity/free that status queries rely on while unmounted. */
         LOG_WRN("Failed to get free space");
-        free_space_mb = 0;
-        sd_total_mb = 0;
         return -EIO;
     }
 
