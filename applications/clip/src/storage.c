@@ -1133,6 +1133,16 @@ static int scan_bucket_sessions(const char *day_name, char ids[][16],
                         return rc;
                     }
                     add_session_id(ids, max_ids, stored, total, session_id);
+                    /* Stop walking once enough IDs are collected — the tree
+                     * can hold thousands of sessions but we only need max_ids
+                     * (64 for the untransferred check, 200 for a LIST page).
+                     * max_ids==0 means count-only, so keep walking. */
+                    if (max_ids > 0 && *stored >= max_ids) {
+                        fs_closedir(&minute_dir);
+                        fs_closedir(&hour_dir);
+                        fs_closedir(&day_dir);
+                        return 0;
+                    }
                 }
             }
             fs_closedir(&minute_dir);
@@ -1166,6 +1176,9 @@ static int scan_session_ids(char ids[][16], int max_ids, int *total)
             if (rc != 0) {
                 fs_closedir(&root_dir);
                 return rc;
+            }
+            if (max_ids > 0 && stored >= max_ids) {
+                break;
             }
         }
     }
