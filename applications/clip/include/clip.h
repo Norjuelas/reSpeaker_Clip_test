@@ -14,7 +14,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-/* Version string: "0.0.4" when TWEAK=0, "0.0.4+1" when TWEAK>0 */
+/* Version string: "X.Y.Z" when TWEAK=0, "X.Y.Z+N" when TWEAK>0. */
 #if APP_TWEAK > 0
 #define CLIP_VERSION APP_VERSION_TWEAK_STRING
 #else
