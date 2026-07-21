@@ -1405,19 +1405,13 @@ int storage_get_session_info(const char *session_id, struct storage_session_info
 
 bool storage_has_unsynced_sessions(void)
 {
-	struct storage_session_info info;
-	char ids[64][16];
-	int count = storage_list_session_ids(ids, 64);
+	char id[16];
 
-	for (int i = 0; i < count; i++) {
-		memset(&info, 0, sizeof(info));
-		if (storage_get_session_info(ids[i], &info) == 0) {
-			if (info.synced_files < info.file_count) {
-				return true;
-			}
-		}
-	}
-	return false;
+	/* "Untransferred" indicator: any session present counts, instead of
+	 * reading each session.json to compare synced_files vs file_count.
+	 * scan_session_ids stops at the first session found (max_ids=1), so this
+	 * is O(1) even with thousands of sessions — no per-session reads. */
+	return storage_list_session_ids(&id, 1) > 0;
 }
 
 int storage_list_chunks(const char *session_id, uint32_t *chunks, int max_chunks, int skip)
