@@ -84,7 +84,7 @@ Build with snippet: `west build ... -- -DSNIPPET_ROOT=$(pwd)/applications/clip -
 
 Two images per release: **debug** (`build-clip`, console + SD log) and **production** (`build-clip-prod`, `-- -DSNIPPET_ROOT=$(pwd)/applications/clip -DSNIPPET=production`, console off).
 
-**Automated** — `scripts/build_release.sh` applies the MCUboot patches, builds both variants (pristine), and exports the artifacts below to `output/$VERSION/`. It is what CI (`.github/workflows/release.yml`, runs on a `v*` tag) calls. The manual `cp` commands are the equivalent:
+**CI** — `.github/workflows/firmware.yml` builds the clip app on every push/PR to `main` (compilation check; applies the MCUboot patches + `west build`). `.github/workflows/mobile-ci.yml` (fast: analyze + unit tests, runs on PR) and `.github/workflows/mobile-verify.yml` (full: debug APK / assembleDebug / iOS smoke, push + manual) cover the `mobile/` SDKs. The tag-triggered release export (`scripts/build_release.sh` + `.github/workflows/release.yml`) is **not yet implemented** — until then, build both variants locally and export manually:
 
 ```sh
 VERSION=$(grep APP_VERSION_STRING build-clip/clip/zephyr/include/generated/zephyr/app_version.h | cut -d'"' -f2)

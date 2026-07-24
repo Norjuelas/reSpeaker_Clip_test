@@ -165,10 +165,22 @@ west build --build-dir build-test --board clip/nrf5340/cpuapp --pristine tests/c
 
 WiFi AP: SSID `ClipAP_XXXX` (last 4 hex of chip ID) · Password `12345678` (default; random after first pairing) · IP `192.168.4.1` · UDP Port `8089`
 
+## Mobile App & SDK
+
+The companion phone app and SDKs (Flutter, Android, iOS) live under
+[`mobile/`](mobile/README.md). They talk to the Clip over BLE and the device
+Wi-Fi AP — no API key or backend required. See the mobile monorepo README for
+the layout, running the example/sample apps, and the integration & verification
+guides in `mobile/docs/`. **The mobile SDKs are separately licensed** (see each
+`mobile/sdk/*/LICENSE`) and are not covered by the repository Apache-2.0
+license below.
+
 ## License
 
-Apache License 2.0. See individual files for details. Third-party libraries
-(Opus, SpeexDSP, Lua) retain their respective licenses.
+This firmware is licensed under the [Apache License 2.0](LICENSE). See
+individual files for `SPDX-License-Identifier` details. Third-party libraries
+(Opus, SpeexDSP, Lua) retain their respective licenses. The `mobile/` SDKs are
+separately licensed (see above).
 
 ## Acknowledgements
 

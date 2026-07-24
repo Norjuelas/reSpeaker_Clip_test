@@ -1,0 +1,76 @@
+name: firmware
+
+# Compilation check for the Clip firmware (Zephyr / NCS v3.3.0). Builds the
+# clip/nrf5340/cpuapp application (sysbuild: MCUboot + app + ipc-radio) on push
+# and pull request. No hardware; only verifies the firmware compiles + links.
+#
+# NOTE: NCS + the Zephyr SDK are large (~5 GB); on a public repo Linux minutes
+# are unlimited, so this is a fresh west init/update each run for reliability.
+# Caching can be layered on once the build is green.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: firmware-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build clip app (NCS v3.3.0)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout this module
+        uses: actions/checkout@v4
+        with:
+          path: respeaker_clip
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install west
+        run: pip install west
+
+      - name: Initialize NCS v3.3.0 workspace
+        run: |
+          west init -m https://github.com/nrfconnect/ncs ncs --mr v3.3.0
+          cd ncs
+          west update
+          pip3 install -r zephyr/scripts/requirements-base.txt
+
+      - name: Apply MCUboot patches (idempotent)
+        run: |
+          cd ncs/bootloader/mcuboot
+          shopt -s nullglob
+          for p in "$GITHUB_WORKSPACE"/respeaker_clip/patches/mcuboot/0*.patch; do
+            if git apply --check "$p" 2>/dev/null; then
+              echo "applying $(basename "$p")"
+              git apply "$p"
+            else
+              echo "skip (already applied or no-op): $(basename "$p")"
+            fi
+          done
+
+      - name: Build clip app
+        run: |
+          source "$GITHUB_WORKSPACE/ncs/zephyr/zephyr-env.sh"
+          # Auto-download the Zephyr SDK toolchain on first build.
+          west config --global zephyr.sdk install auto
+          export ZEPHYR_EXTRA_MODULES="$GITHUB_WORKSPACE/respeaker_clip"
+          west build -b clip/nrf5340/cpuapp "$GITHUB_WORKSPACE/respeaker_clip/applications/clip" \
+            --build-dir build
+
+      - name: Upload build artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: clip-build
+          path: |
+            build/clip/zephyr/zephyr.elf
+            build/merged.hex
+          if-no-files-found: ignore
