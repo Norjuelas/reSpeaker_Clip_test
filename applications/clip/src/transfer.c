@@ -530,6 +530,12 @@ int transfer_set_synced_files(const char *session_id, uint32_t count)
     fs_file_t_init(&file);
     ret = fs_open(&file, filepath, FS_O_READ);
     if (ret != 0) {
+        if (ret == -ENOENT) {
+            /* Session was deleted (e.g. host deleted right after download) —
+             * nothing to persist. */
+            storage_session_json_unlock();
+            return 0;
+        }
         LOG_ERR("Failed to open session.json: %d", ret);
         storage_session_json_unlock();
         return ret;
@@ -606,6 +612,11 @@ int transfer_set_synced_files(const char *session_id, uint32_t count)
     fs_file_t_init(&file);
     ret = fs_open(&file, filepath, FS_O_WRITE);
     if (ret != 0) {
+        if (ret == -ENOENT) {
+            /* Session deleted between our read and write — it's gone. */
+            storage_session_json_unlock();
+            return 0;
+        }
         LOG_ERR("Failed to open session.json for writing: %d", ret);
         storage_session_json_unlock();
         return ret;
