@@ -110,7 +110,7 @@ int transport_send_to(uint8_t type, const uint8_t *data, uint16_t len)
     }
 
     if (type >= TRANSPORT_TYPE_MAX) {
-        LOG_ERR("transport_send_to: type %d >= TRANSPORT_TYPE_MAX %d", type, TRANSPORT_TYPE_MAX);
+        LOG_ERR("transport_send_to: type %d >= MAX %d", type, TRANSPORT_TYPE_MAX);
         return -EINVAL;
     }
 

@@ -54,9 +54,21 @@ static void handle_packet(const uint8_t *buf, size_t len)
 
     switch (frame_type) {
     case UDP_FRAME_FILE_ACK:
-        /* FILE_ACK: [type(1)][result(1)] — 0x00=OK, 0x01=NACK */
-        if (len >= UDP_FILE_ACK_FRAME_SIZE) {
-            transport_udp_notify_file_ack(buf[1]);
+        /* FILE_ACK: [type(1)][result(1)] (legacy, 0x00=OK / 0x01=NACK), or
+         * [type(1)][result=0x01][total_seqs(2 LE)][bitmap] (selective NACK:
+         * bit i set = seq i missing). Legacy 2-byte ACKs still work — the
+         * extra fields are simply absent (whole-file retransmit). */
+        if (len >= 2) {
+            uint8_t status = buf[1];
+            const uint8_t *bitmap = NULL;
+            uint16_t bitmap_len = 0;
+            uint16_t total_seqs = 0;
+            if (status != 0x00 && len >= 4) {
+                total_seqs = (uint16_t)(buf[2] | (buf[3] << 8));
+                bitmap = &buf[4];
+                bitmap_len = (uint16_t)(len - 4);
+            }
+            transport_udp_notify_file_ack(status, bitmap, bitmap_len, total_seqs);
         }
         break;
 

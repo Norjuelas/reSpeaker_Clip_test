@@ -12,6 +12,7 @@
 
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
+#include <zephyr/fs/fs.h>
 #include <zephyr/net/socket.h>
 #include <zephyr/net/net_ip.h>
 #include <zephyr/sys/crc.h>
@@ -29,6 +30,7 @@ extern int server_sock;
 /* ---- Configuration ---- */
 #define MAX_FRAME_SIZE       (UDP_DATA_HEADER_SIZE + UDP_MAX_DATA_PER_FRAME)
 #define FILE_ACK_TIMEOUT     2000  /* ms to wait for FILE_ACK after FILE_END */
+#define NACK_BITMAP_MAX_BYTES  512  /* 4096 seqs / 8; covers a full 4 MB file */
 #define FILE_END_RETRIES     3     /* max FILE_END retransmissions before abort */
 
 /* ---- State ---- */
@@ -44,6 +46,12 @@ static uint16_t next_seq;
 static struct k_sem file_ack_sem;
 static volatile int8_t file_ack_result;  /* -1=none, 0=OK, 1=NACK */
 
+/* Selective-repeat: missing-seq bitmap from the last NACK.
+ * nack_bitmap_len == 0 means "no bitmap" → caller retransmits whole file. */
+static uint8_t  nack_bitmap[NACK_BITMAP_MAX_BYTES];
+static uint16_t nack_bitmap_len;
+static uint16_t nack_total_seqs;
+
 /* Connection activity tracking (for UDP inactivity timeout) */
 static int64_t last_activity_time;
 
@@ -53,6 +61,8 @@ static uint32_t current_file_crc;
 /* ---- Forward declarations ---- */
 static int udp_send(const uint8_t *data, uint16_t len);
 static int udp_send_file_data_impl(const uint8_t *data, uint16_t len);
+static int udp_send_file_data_at(uint16_t seq, const uint8_t *data, uint16_t len);
+static int udp_repair_missing(struct fs_file_t *file, uint32_t file_size, uint32_t pace_us);
 static int udp_send_file_start_impl(const char *session_id, const char *filename, uint32_t size);
 static int udp_send_file_end_impl(const char *filename);
 static int udp_send_transfer_done_impl(const char *session_id, uint32_t file_count);
@@ -65,6 +75,7 @@ static int raw_sendto(const void *buf, size_t len);
 static const struct transport_ops udp_ops = {
     .send = udp_send,
     .send_file_data = udp_send_file_data_impl,
+    .repair_missing = udp_repair_missing,
     .send_file_start = udp_send_file_start_impl,
     .send_file_end = udp_send_file_end_impl,
     .send_transfer_done = udp_send_transfer_done_impl,
@@ -136,6 +147,7 @@ static int wait_for_file_ack(int timeout_ms)
 {
     /* Reset state before waiting */
     file_ack_result = -1;
+    nack_bitmap_len = 0;
     k_sem_reset(&file_ack_sem);
 
     if (k_sem_take(&file_ack_sem, K_MSEC(timeout_ms)) != 0) {
@@ -234,11 +246,11 @@ static int udp_send(const uint8_t *data, uint16_t len)
 }
 
 /**
- * Fire-and-forget DATA send with pacing.
+ * Fire-and-forget DATA send.
  *
  * Sends all data as frames without waiting for per-frame ACK.
- * Slices data > UDP_MAX_DATA_PER_FRAME into multiple frames.
- * 1ms pacing between frames prevents WiFi TX queue overflow.
+ * Slices data > UDP_MAX_DATA_PER_FRAME into multiple frames. On a sendto
+ * failure, backs off briefly (CLIP_UDP_SEND_BACKOFF_US) before continuing.
  */
 static int udp_send_file_data_impl(const uint8_t *data, uint16_t len)
 {
@@ -253,6 +265,11 @@ static int udp_send_file_data_impl(const uint8_t *data, uint16_t len)
             data_len = UDP_MAX_DATA_PER_FRAME;
         }
 
+        /* CRC always covers the FULL file, independent of send success, so
+         * FILE_END's CRC matches the complete file the client reassembles.
+         * A frame whose sendto fails is later repaired by selective repeat. */
+        current_file_crc = crc32_ieee_update(current_file_crc, data + offset, data_len);
+
         uint8_t frame[MAX_FRAME_SIZE];
         uint16_t seq = next_seq;
         int frame_len = build_data_frame(frame, seq, data + offset, data_len);
@@ -262,20 +279,95 @@ static int udp_send_file_data_impl(const uint8_t *data, uint16_t len)
             if (!udp_ready) {
                 return -ENOTCONN;
             }
-            /* Transient send error — skip this frame, don't update CRC
-             * so CRC only reflects data actually received by client */
+            /* Transient send error — skip this frame (selective repeat will
+             * repair it). Back off briefly before the next frame. */
             LOG_WRN("DATA seq %d send error, continuing", seq);
-            next_seq = (seq + 1) & (UDP_SEQ_MODULO - 1);
-            offset += data_len;
-            continue;
+            if (CONFIG_CLIP_UDP_SEND_BACKOFF_US > 0) {
+                k_usleep(CONFIG_CLIP_UDP_SEND_BACKOFF_US);
+            }
         }
 
         next_seq = (seq + 1) & (UDP_SEQ_MODULO - 1);
-        current_file_crc = crc32_ieee_update(current_file_crc, data + offset, data_len);
         offset += data_len;
     }
 
     return len;
+}
+
+/**
+ * Send a single DATA frame at an EXPLICIT sequence number (selective retransmit).
+ * Used by the transfer layer to repair only the frames the client reported
+ * missing. Does NOT touch current_file_crc (the file CRC is already final).
+ */
+static int udp_send_file_data_at(uint16_t seq, const uint8_t *data, uint16_t len)
+{
+    if (!udp_ready) {
+        return -ENOTCONN;
+    }
+    if (len > UDP_MAX_DATA_PER_FRAME) {
+        len = UDP_MAX_DATA_PER_FRAME;
+    }
+    uint8_t frame[MAX_FRAME_SIZE];
+    int frame_len = build_data_frame(frame, seq, data, len);
+    return raw_sendto(frame, frame_len);
+}
+
+/**
+ * Selective-repeat repair: retransmit only the DATA frames the client reported
+ * missing in the last NACK bitmap (bit i set = seq i missing). Reads each
+ * missing frame by seq from the open file and resends it at its original seq,
+ * with @p pace_us between frames. Does not touch current_file_crc (already
+ * final). Returns the number of frames retransmitted, or a negative error.
+ */
+static int udp_repair_missing(struct fs_file_t *file, uint32_t file_size, uint32_t pace_us)
+{
+    if (!udp_ready) {
+        return -ENOTCONN;
+    }
+    if (nack_bitmap_len == 0) {
+        return 0;  /* no bitmap → caller falls back to whole-file retransmit */
+    }
+
+    static uint8_t fbuf[UDP_MAX_DATA_PER_FRAME];  /* single transfer thread */
+    int resent = 0;
+
+    for (uint16_t seq = 0; seq < nack_total_seqs; seq++) {
+        uint16_t byte = seq >> 3;
+        uint8_t  bit  = seq & 0x7;
+        if (byte >= nack_bitmap_len || !(nack_bitmap[byte] & (1u << bit))) {
+            continue;  /* not reported missing */
+        }
+
+        uint32_t off = (uint32_t)seq * UDP_MAX_DATA_PER_FRAME;
+        if (off >= file_size) {
+            break;  /* seq beyond file */
+        }
+        uint16_t flen = UDP_MAX_DATA_PER_FRAME;
+        if (off + flen > file_size) {
+            flen = (uint16_t)(file_size - off);  /* last (short) frame */
+        }
+
+        if (fs_seek(file, off, FS_SEEK_SET) != 0) {
+            return -EIO;
+        }
+        ssize_t n = fs_read(file, fbuf, flen);
+        if (n <= 0) {
+            return -EIO;
+        }
+
+        int ret = udp_send_file_data_at(seq, fbuf, (uint16_t)n);
+        if (ret < 0) {
+            return ret;
+        }
+        resent++;
+
+        if (pace_us > 0) {
+            k_usleep(pace_us);  /* repair pacing (递减 per round, set by caller) */
+        }
+    }
+
+    LOG_INF("selective repair: resent %d frame(s)", resent);
+    return resent;
 }
 
 static int udp_send_file_start_impl(const char *session_id, const char *filename, uint32_t size)
@@ -309,6 +401,14 @@ static int udp_send_file_end_impl(const char *filename)
 
     if (!udp_ready) {
         return -ENOTCONN;
+    }
+
+    /* Drain pause: UDP has no ordering guarantee, so a FILE_END sent
+     * immediately after the last DATA frame can overtake it and make the
+     * client CRC-check an incomplete file (NACK). Let in-flight DATA land
+     * first. */
+    if (CONFIG_CLIP_UDP_FILE_END_DELAY_US > 0) {
+        k_usleep(CONFIG_CLIP_UDP_FILE_END_DELAY_US);
     }
 
     uint32_t final_crc = current_file_crc;
@@ -481,10 +581,21 @@ void transport_udp_update_client_addr(const struct sockaddr *addr, socklen_t len
     }
 }
 
-void transport_udp_notify_file_ack(uint8_t result)
+void transport_udp_notify_file_ack(uint8_t result, const uint8_t *bitmap,
+				   uint16_t bitmap_len, uint16_t total_seqs)
 {
     update_activity();
     file_ack_result = (result == 0x00) ? 0 : 1;
+    /* On NACK, keep the missing-seq bitmap for selective retransmit (if the
+     * client provided one). No bitmap → caller falls back to whole-file send. */
+    if (file_ack_result == 1 && bitmap && bitmap_len > 0 &&
+        bitmap_len <= NACK_BITMAP_MAX_BYTES) {
+        memcpy(nack_bitmap, bitmap, bitmap_len);
+        nack_bitmap_len = bitmap_len;
+        nack_total_seqs = total_seqs;
+    } else {
+        nack_bitmap_len = 0;
+    }
     k_sem_give(&file_ack_sem);
 }
 

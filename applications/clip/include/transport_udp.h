@@ -183,8 +183,13 @@ void transport_udp_update_client_addr(const struct sockaddr *addr, socklen_t len
  * Signals the send thread that file verification result has arrived.
  *
  * @param result 0x00 = CRC OK, 0x01 = CRC mismatch
+ * @param bitmap   Missing-seq bitmap if result is NACK and the client supports
+ *                 selective retransmit (bit i set = seq i missing), NULL otherwise.
+ * @param bitmap_len Bitmap length in bytes (0 = no bitmap → whole-file retransmit).
+ * @param total_seqs Total DATA frames in the file (bitmap coverage).
  */
-void transport_udp_notify_file_ack(uint8_t result);
+void transport_udp_notify_file_ack(uint8_t result, const uint8_t *bitmap,
+				   uint16_t bitmap_len, uint16_t total_seqs);
 
 /**
  * @brief Get UDP transport pointer for registration

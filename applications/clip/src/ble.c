@@ -125,7 +125,7 @@ static void security_request_handler(struct k_work *work)
                  * reach here. So clearing here cannot be used to evict an
                  * owner — it only drops bonds that are already unusable.
                  * Clear them and disconnect so the peer re-pairs fresh. */
-                LOG_WRN("Bond pool full (-ENOMEM); clearing stale bonds");
+                LOG_WRN("bond pool full, clearing stale");
                 (void)ble_clear_bonds();
                 (void)bt_conn_disconnect(ble_ctx.conn,
                                          BT_HCI_ERR_REMOTE_USER_TERM_CONN);
@@ -281,7 +281,7 @@ static void resp_ccc_cfg_changed(const struct bt_gatt_attr *attr, uint16_t value
     /* Update transport when connection and notification are both ready */
     if (ble_ctx.notify_enabled && ble_ctx.conn) {
         transport_ble_update_connection(ble_ctx.conn, true);
-        LOG_DBG("BLE transport: connection and notification ready");
+        LOG_DBG("BLE: conn+notify ready");
     } else if (!ble_ctx.notify_enabled && ble_ctx.conn) {
         /* Notification disabled - clear transport */
         transport_ble_update_connection(ble_ctx.conn, false);
@@ -875,7 +875,7 @@ int ble_send_file_data(const uint8_t *data, uint16_t len)
         if (err == -ENOMEM || err == -EAGAIN || err == -EBUSY) {
             retry_count++;
             if (retry_count < max_retries) {
-                LOG_WRN("File notify failed (len=%u, err=%d), retrying %d/%d",
+                LOG_WRN("file notify fail (len=%u err=%d) retry %d/%d",
                         len, err, retry_count, max_retries);
                 continue;
             }

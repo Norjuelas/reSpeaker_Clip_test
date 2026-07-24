@@ -837,7 +837,7 @@ static int cmd_start_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
         } else if (strcmp(mode_str, "enhanced") == 0 || strcmp(mode_str, "merge") == 0) {
             rec_mode = MODE_ENHANCED;
         } else {
-            return create_json_response(false, "Invalid mode (use normal/stereo or enhanced/merge)", NULL, response, len);
+            return create_json_response(false, "invalid mode (normal/stereo/enhanced/merge)", NULL, response, len);
         }
 
         /* Apply mode for this session */
@@ -1680,7 +1680,7 @@ static int cmd_wificfg_handler(struct at_cmd_ctx *ctx, char *response, size_t le
 
         /* Validate channel: 1-13 (2.4GHz) or 36-165 (5GHz) */
         if (!((channel >= 1 && channel <= 13) || (channel >= 36 && channel <= 165))) {
-            return create_json_response(false, "Channel must be 1-13 (2.4GHz) or 36-165 (5GHz)",
+            return create_json_response(false, "channel: 1-13 (2.4G) or 36-165 (5G)",
                                        NULL, response, len);
         }
 

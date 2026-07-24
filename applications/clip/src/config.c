@@ -226,7 +226,7 @@ int config_init(void)
     // if (rc == 0) {
     //     LOG_INF("Settings file deleted - all data cleared");
     // } else {
-    //     LOG_WRN("Settings file unlink failed: %d (file may not exist yet)", rc);
+    //     LOG_WRN("settings unlink %d (may not exist)", rc);
     // }
 
     /* Initialize settings subsystem */

@@ -482,7 +482,7 @@ void clip_event_process(void)
         if (result == CLIP_EVENT_OK && next != TRANS_SAME) {
             /* Sanity check: warn if state leaves RECORDING while audio active */
             if (current == CLIP_STATE_RECORDING && audio_is_recording()) {
-                LOG_WRN("State leaving RECORDING (%d->%d) while audio is active",
+                LOG_WRN("leave REC (%d->%d) audio active",
                          current, new_state);
             }
             atomic_set(&g_state, (atomic_val_t)new_state);
@@ -562,7 +562,7 @@ static enum clip_event_result execute_transition(enum clip_event event,
              * now so the state machine never deadlocks in RECORDING (which
              * would drop the IDLE notification and make the host flood STOP).
              * The recording tail may be cut, which is acceptable. */
-            LOG_WRN("audio stop slow (SD busy?), committing IDLE async");
+            LOG_WRN("stop slow (SD busy), IDLE async");
         } else if (err) {
             LOG_ERR("audio_stop_recording failed: %d", err);
             return CLIP_EVENT_ERROR;

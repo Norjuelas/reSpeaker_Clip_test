@@ -415,7 +415,7 @@ int transfer_resume_from(const char *session_id, const char *start_file, struct 
         LOG_DBG("Starting from file %s (index=%u)", start_file, current_transfer.file_index);
     } else if (start_num > (int)current_transfer.total_files) {
         current_transfer.file_index = current_transfer.total_files - 1;
-        LOG_DBG("Start file %s doesn't exist yet, will wait for new files", start_file);
+        LOG_DBG("start file %s absent, waiting", start_file);
         if (current_transfer.total_files > 0) {
             generate_filename(current_transfer.total_files, last_transferred_file);
         }
@@ -792,38 +792,66 @@ process_next_file:
                                transfer_thread_running &&
                                current_transfer.state == TRANSFER_STATE_TRANSMITTING) {
                             file_retry++;
-                            LOG_WRN("file NACK, retry (%d/%d)", file_retry, TRANSFER_MAX_FILE_RETRIES);
+
+                            /* Repair pace (递减): halves each round toward 0
+                             * (full speed) as the file converges; the next
+                             * file's initial send is always full speed. */
+                            uint32_t repair_pace = CONFIG_CLIP_UDP_REPAIR_PACE_US;
+                            for (int i = 1; i < file_retry && repair_pace > 0; i++) {
+                                repair_pace >>= 1;
+                            }
+
+                            LOG_WRN("file NACK, retry (%d/%d)", file_retry,
+                                    TRANSFER_MAX_FILE_RETRIES);
 
                             /* Backoff: let WiFi channel settle before retransmit */
                             k_msleep(50 * file_retry);
 
-                            /* Seek back to file start */
-                            fs_seek(&transfer_file, 0, FS_SEEK_SET);
-                            current_transfer.bytes_transferred = 0;
+                            /* Selective-repeat: retransmit only the frames the
+                             * client reported missing in the NACK bitmap. Falls
+                             * back to whole-file retransmit if the transport
+                             * can't (or the client sent no bitmap). */
+                            bool did_selective = false;
+                            if (current_transport && current_transport->ops &&
+                                current_transport->ops->repair_missing) {
+                                int sr = current_transport->ops->repair_missing(
+                                    &transfer_file,
+                                    current_transfer.total_bytes, repair_pace);
+                                if (sr < 0) {
+                                    break;  /* fatal send error */
+                                }
+                                did_selective = (sr > 0);
+                            }
 
-                            /* Resend FILE_START (will reset transport file state) */
-                            send_file_ready_event(current_transfer.session_id,
-                                                   last_transferred_file,
-                                                   current_transfer.total_bytes);
+                            if (!did_selective) {
+                                /* Whole-file retransmit (legacy / no bitmap). */
+                                fs_seek(&transfer_file, 0, FS_SEEK_SET);
+                                current_transfer.bytes_transferred = 0;
 
-                            /* Resend all chunks */
-                            bool chunk_error = false;
-                            while (transfer_thread_running &&
-                                   current_transfer.state == TRANSFER_STATE_TRANSMITTING) {
-                                ret = transfer_send_chunk();
-                                if (ret == -EOF) {
-                                    break;
-                                } else if (ret < 0) {
-                                    chunk_error = true;
+                                /* Resend FILE_START (will reset transport file state) */
+                                send_file_ready_event(current_transfer.session_id,
+                                                       last_transferred_file,
+                                                       current_transfer.total_bytes);
+
+                                /* Resend all chunks */
+                                bool chunk_error = false;
+                                while (transfer_thread_running &&
+                                       current_transfer.state == TRANSFER_STATE_TRANSMITTING) {
+                                    ret = transfer_send_chunk();
+                                    if (ret == -EOF) {
+                                        break;
+                                    } else if (ret < 0) {
+                                        chunk_error = true;
+                                        break;
+                                    }
+                                }
+
+                                if (chunk_error) {
                                     break;
                                 }
                             }
 
-                            if (chunk_error) {
-                                break;
-                            }
-
-                            /* Resend FILE_END */
+                            /* Resend FILE_END and wait for FILE_ACK */
                             file_ret = send_file_complete_event(last_transferred_file);
                             if (file_ret == 0) {
                                 file_ok = true;
@@ -1008,7 +1036,7 @@ wait_for_write:
         while (storage_file_is_writing(current_transfer.session_id,
                                         current_transfer.current_file)) {
             if (!transport_is_connected()) {
-                LOG_INF("Transport disconnected while waiting for write");
+                LOG_INF("transport gone during write");
                 current_transfer.current_file[0] = '\0';
                 return -ENOTCONN;
             }
@@ -1216,7 +1244,7 @@ static int send_file_complete_event(const char *filename)
 static void send_transfer_complete_once(const char *session_id, int file_count)
 {
 	if (atomic_get(&transfer_complete_sent)) {
-		LOG_DBG("transfer_complete already sent, skipping duplicate");
+		LOG_DBG("transfer_complete dup, skip");
 		return;
 	}
 

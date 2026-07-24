@@ -307,6 +307,33 @@ config CLIP_UDP_CONNECTION_TIMEOUT_MS
 	int "UDP connection timeout (ms)"
 	default 30000
 
+config CLIP_UDP_SEND_BACKOFF_US
+	int "UDP send-error backoff (us), 0 to disable"
+	default 1000
+	help
+	  Delay after a UDP sendto failure before the next frame. Only fires on an
+	  actual send error (the socket is blocking, so this is rare), as a brief
+	  drain window. 0 disables.
+
+config CLIP_UDP_FILE_END_DELAY_US
+	int "UDP delay before FILE_END (us), 0 to disable"
+	default 5000
+	help
+	  Pause after the last DATA frame and before sending FILE_END. UDP is
+	  unordered, so FILE_END sent right after the last DATA can overtake it
+	  and make the client compute the file CRC before all DATA arrives (NACK).
+	  Lets in-flight DATA land first. 0 disables.
+
+config CLIP_UDP_REPAIR_PACE_US
+	int "UDP inter-frame pace during selective-repeat repair (us), 0 to disable"
+	default 1000
+	help
+	  Delay between retransmitted DATA frames when repairing a NACKed file
+	  (selective repeat). The link just dropped frames, so pacing the repair
+	  avoids re-overwhelming it. Halves each repair round (递减) toward full
+	  speed as the file converges; the next file's initial send is always full
+	  speed. 0 disables.
+
 # =============================================================================
 # WiFi Configuration
 # =============================================================================

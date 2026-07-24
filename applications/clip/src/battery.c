@@ -115,7 +115,7 @@ static int fg_state_settings_set(const char *key, size_t len,
 	 * blob may have been generated with a different model and is unsafe to
 	 * restore after the model update. */
 	if (len != expected_len) {
-		LOG_WRN("Ignoring incompatible fuel-gauge state (size %u)",
+		LOG_WRN("fg state incompatible (size %u)",
 			(unsigned int)len);
 		fg_state_reset();
 		return 0;
@@ -133,7 +133,7 @@ static int fg_state_settings_set(const char *key, size_t len,
 	    fg_state_record.format_version != FG_STATE_FORMAT_VERSION ||
 	    fg_state_record.state_size != nrf_fuel_gauge_state_size ||
 	    fg_state_record.model_crc != fg_model_crc()) {
-		LOG_WRN("Ignoring fuel-gauge state from a different model/version");
+		LOG_WRN("fg state: model/version mismatch, ignored");
 		fg_state_reset();
 		return 0;
 	}
@@ -412,7 +412,7 @@ static void read_and_update_locked(void)
 
 		/* Debug log for charging state */
 		if (charger_connected && !last_charging) {
-			LOG_DBG("Charger: VBUS=%d, trickle=%d, CC=%d, CV=%d, complete=%d, SoC=%u%%, full=%d",
+			LOG_DBG("Chg: VBUS=%d trk=%d CC=%d CV=%d done=%d SoC=%u%% full=%d",
 				vbus_connected, is_trickle, is_cc, is_cv, charger_complete, percent, battery_full);
 		}
 	} else {
@@ -553,7 +553,7 @@ static void pmic_event_callback(const struct device *dev, struct gpio_callback *
 		LOG_INF("PMIC event: VBUS removed");
 	}
 	if (pins & BIT(NPM13XX_EVENT_CHG_COMPLETED)) {
-		LOG_DBG("PMIC event: Charge completed (charger flag set)");
+		LOG_DBG("PMIC: charge complete");
 	}
 	if (pins & BIT(NPM13XX_EVENT_CHG_ERROR)) {
 		LOG_INF("PMIC event: Charge error");
@@ -615,7 +615,7 @@ int battery_init(void)
 	/* Read initial sensor values */
 	ret = read_sensors(&init_params.v0, &init_params.i0, &init_params.t0, &chg_status);
 	if (ret < 0) {
-		LOG_WRN("Failed to read sensors for fuel gauge init: %d", ret);
+		LOG_WRN("fg init: sensor read %d", ret);
 		/* Continue with basic battery monitoring */
 	} else {
 		/* Print initial readings (sensor convention: I negative = discharging) */
@@ -635,7 +635,7 @@ int battery_init(void)
 		/* Initialize fuel gauge */
 		ret = nrf_fuel_gauge_init(&init_params, NULL);
 		if (ret < 0) {
-			LOG_WRN("Failed to initialize fuel gauge: %d, using voltage-based SoC", ret);
+			LOG_WRN("fuel gauge init %d, using voltage SoC", ret);
 		} else {
 			fg_initialized = true;
 			LOG_INF("Fuel-gauge state: %s", fg_state_loaded ? "restored" : "new estimate");
@@ -671,7 +671,7 @@ int battery_init(void)
 
 	ret = mfd_npm13xx_add_callback(pmic_dev, &pmic_cb);
 	if (ret != 0) {
-		LOG_WRN("PMIC interrupt callback failed: %d (polling only)", ret);
+		LOG_WRN("PMIC cb failed %d (polling)", ret);
 		/* Continue with polling only */
 	}
 

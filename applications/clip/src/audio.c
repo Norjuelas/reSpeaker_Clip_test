@@ -289,7 +289,7 @@ int audio_start_recording(enum audio_mode mode)
         uint32_t uptime_sec = (uint32_t)(k_uptime_get() / 1000);
         snprintf(current_session_id, sizeof(current_session_id),
             "0%013u", uptime_sec);
-        LOG_WRN("Time not synchronized, using uptime-based session ID");
+        LOG_WRN("time unset, using uptime session id");
     }
 
     /* Reset counters */
@@ -301,7 +301,7 @@ int audio_start_recording(enum audio_mode mode)
     k_sem_give(&audio_start_sem);
     k_mutex_unlock(&audio_state_mutex);
 
-    LOG_INF("Recording start requested (mode=%d, session=%s)", mode, current_session_id);
+    LOG_INF("rec start (mode=%d, %s)", mode, current_session_id);
     return 0;
 }
 

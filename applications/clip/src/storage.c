@@ -1987,7 +1987,7 @@ int storage_add_bookmark(const char *session_id, uint32_t offset_sec)
 
         fs_close(&file);
 
-        LOG_DBG("Created bookmarks file with first bookmark at %u seconds", offset_sec);
+        LOG_DBG("bookmarks: first mark at %us", offset_sec);
     }
 
     return 0;
