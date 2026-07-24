@@ -555,7 +555,15 @@ static enum clip_event_result execute_transition(enum clip_event event,
         }
 
         err = audio_stop_recording();
-        if (err) {
+        if (err == -ETIMEDOUT) {
+            /* Stop was requested but the audio thread is slow to flush/close
+             * the file (SD busy, e.g. a concurrent transfer reading the card).
+             * The stop IS committed and completes asynchronously — commit IDLE
+             * now so the state machine never deadlocks in RECORDING (which
+             * would drop the IDLE notification and make the host flood STOP).
+             * The recording tail may be cut, which is acceptable. */
+            LOG_WRN("audio stop slow (SD busy?), committing IDLE async");
+        } else if (err) {
             LOG_ERR("audio_stop_recording failed: %d", err);
             return CLIP_EVENT_ERROR;
         }
