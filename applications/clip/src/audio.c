@@ -683,7 +683,7 @@ void audio_recording_thread(void *p1, void *p2, void *p3)
                 current_file_index++;
                 ret = storage_create_file(&current_storage_file, current_session_id, current_file_index);
                 if (ret != 0) {
-                    LOG_ERR("Failed to create new file for resume: %d", ret);
+                    LOG_ERR("resume file create %d", ret);
                     current_file_index--;
                     break;
                 }
@@ -719,8 +719,8 @@ void audio_recording_thread(void *p1, void *p2, void *p3)
                     dmic_timeout_count++;
 
                     if (dmic_timeout_count >= 2) {
-                        LOG_WRN("DMIC timeout recovery: retriggering DMIC");
-                        LOG_WRN("DSP avg=%u us/enc avg=%u us (frames=%u)",
+                        LOG_WRN("DMIC timeout, retrigger");
+                        LOG_WRN("DSP=%uus enc=%uus (frm=%u)",
                                 stats.frames_encoded > 0 ?
                                     (uint32_t)(dsp_time_total_us / stats.frames_encoded) : 0,
                                 stats.frames_encoded > 0 ?

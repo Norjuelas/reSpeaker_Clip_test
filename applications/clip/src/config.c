@@ -224,7 +224,7 @@ int config_init(void)
     // /* Delete the settings file to clear all data */
     // int rc = fs_unlink(CONFIG_SETTINGS_FILE_PATH);
     // if (rc == 0) {
-    //     LOG_INF("Settings file deleted - all data cleared");
+    //     LOG_INF("settings deleted, data cleared");
     // } else {
     //     LOG_WRN("settings unlink %d (may not exist)", rc);
     // }
@@ -256,7 +256,7 @@ int config_init(void)
     settings_load_watchdog_disarm();
 
     if (err) {
-        LOG_WRN("Config load failed: %d, saving defaults", err);
+        LOG_WRN("config load %d, save defaults", err);
         config_save();
     } else {
         LOG_INF("Config loaded: mode=%d", ctx->config.mode);

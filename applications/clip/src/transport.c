@@ -119,7 +119,7 @@ int transport_send_to(uint8_t type, const uint8_t *data, uint16_t len)
     k_mutex_unlock(&transport_lock);
 
     if (!tp) {
-        LOG_ERR("transport_send_to: transport %d is NULL", type);
+        LOG_ERR("transport_send_to: %d NULL", type);
         return -ENODEV;
     }
 

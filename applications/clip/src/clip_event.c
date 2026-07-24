@@ -684,7 +684,7 @@ static enum clip_event_result execute_transition(enum clip_event event,
             LOG_INF("Stopping recording before power off");
             int stop_rc = audio_stop_recording();
             if (stop_rc != 0) {
-                LOG_WRN("audio_stop_recording: %d (slow SD?), extra grace", stop_rc);
+                LOG_WRN("audio_stop %d (slow SD) grace", stop_rc);
                 k_sleep(K_MSEC(500));
             } else {
                 k_sleep(K_MSEC(100));

@@ -338,7 +338,7 @@ static void read_and_update_locked(void)
 					    SENSOR_CHAN_GAUGE_DESIRED_CHARGING_CURRENT,
 					    SENSOR_ATTR_CONFIGURATION, &cur) == 0) {
 				thermal_charge_disabled = true;
-				LOG_WRN("Charge disabled: temp %dC >= %dC (hot cutoff)",
+				LOG_WRN("charge off: temp %dC>=%dC (hot)",
 					(int)temp, (int)CHARGE_STOP_TEMP_C);
 			} else {
 				LOG_ERR("Charge disable failed (temp %dC)", (int)temp);
@@ -350,7 +350,7 @@ static void read_and_update_locked(void)
 					    SENSOR_CHAN_GAUGE_DESIRED_CHARGING_CURRENT,
 					    SENSOR_ATTR_CONFIGURATION, &cur) == 0) {
 				thermal_charge_disabled = false;
-				LOG_INF("Charge re-enabled: temp %dC < %dC (resume)",
+				LOG_INF("charge resume: temp %dC<%dC",
 					(int)temp, (int)CHARGE_RESUME_TEMP_C);
 			}
 		}

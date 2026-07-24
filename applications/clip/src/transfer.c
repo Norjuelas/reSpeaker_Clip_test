@@ -420,7 +420,7 @@ int transfer_resume_from(const char *session_id, const char *start_file, struct 
             generate_filename(current_transfer.total_files, last_transferred_file);
         }
     } else {
-        LOG_WRN("Invalid start file %s, starting from beginning", start_file);
+        LOG_WRN("bad start file %s, from begin", start_file);
         current_transfer.file_index = 0;
     }
 
@@ -617,7 +617,7 @@ int transfer_set_synced_files(const char *session_id, uint32_t count)
             storage_session_json_unlock();
             return 0;
         }
-        LOG_ERR("Failed to open session.json for writing: %d", ret);
+        LOG_ERR("session.json open(write) %d", ret);
         storage_session_json_unlock();
         return ret;
     }
@@ -631,7 +631,7 @@ int transfer_set_synced_files(const char *session_id, uint32_t count)
         return bytes_written;
     }
 
-    LOG_DBG("Updated synced count: %u for session %s", count, session_id);
+    LOG_DBG("synced=%u (%s)", count, session_id);
     storage_session_json_unlock();
     return 0;
 }
@@ -1202,7 +1202,7 @@ static int transfer_send_chunk(void)
 static void send_file_ready_event(const char *session_id, const char *filename, uint64_t size)
 {
     if (!session_id || session_id[0] == '\0') {
-        LOG_WRN("Cannot send file_ready: empty session_id");
+        LOG_WRN("file_ready: empty sid");
         return;
     }
 
@@ -1224,7 +1224,7 @@ static void send_file_ready_event(const char *session_id, const char *filename, 
 static int send_file_complete_event(const char *filename)
 {
     if (!filename || filename[0] == '\0') {
-        LOG_WRN("Cannot send file_complete: empty filename");
+        LOG_WRN("file_complete: empty filename");
         return -EINVAL;
     }
 
@@ -1249,7 +1249,7 @@ static void send_transfer_complete_once(const char *session_id, int file_count)
 	}
 
 	if (!session_id || session_id[0] == '\0') {
-		LOG_WRN("Cannot send transfer_complete: empty session_id");
+		LOG_WRN("transfer_complete: empty sid");
 		return;
 	}
 

@@ -33,7 +33,7 @@ int haptic_init(void)
 	LOG_INF("Initializing haptic motor control...");
 
 	if (!device_is_ready(gpio1_dev)) {
-		LOG_ERR("GPIO1 not ready for haptic motor control");
+		LOG_ERR("GPIO1 not ready (haptic)");
 		return -ENODEV;
 	}
 
@@ -41,7 +41,7 @@ int haptic_init(void)
 	int ret = gpio_pin_configure(gpio1_dev, HAPTIC_MOTOR_GPIO_PIN,
 				     GPIO_OUTPUT_LOW);
 	if (ret != 0 && ret != -EEXIST) {
-		LOG_ERR("Failed to configure haptic motor GPIO: %d", ret);
+		LOG_ERR("haptic GPIO config %d", ret);
 		return ret;
 	}
 

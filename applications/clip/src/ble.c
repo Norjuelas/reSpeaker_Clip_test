@@ -750,7 +750,7 @@ int ble_send(const uint8_t *data, uint16_t len)
         err = bt_gatt_notify(ble_ctx.conn, &clip_svc.attrs[4],
                              data + offset, chunk_len);
         if (err) {
-            LOG_ERR("Notify failed at chunk %d (offset %u): %d",
+            LOG_ERR("notify fail chunk %d off %u: %d",
                     chunk_count, (uint32_t)offset, err);
             return err;
         }
