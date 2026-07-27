@@ -805,7 +805,7 @@ process_next_file:
                                     TRANSFER_MAX_FILE_RETRIES);
 
                             /* Backoff: let WiFi channel settle before retransmit */
-                            k_msleep(50 * file_retry);
+                            k_msleep(CONFIG_CLIP_UDP_NACK_BACKOFF_MS * file_retry);
 
                             /* Selective-repeat: retransmit only the frames the
                              * client reported missing in the NACK bitmap. Falls
@@ -843,6 +843,13 @@ process_next_file:
                                     } else if (ret < 0) {
                                         chunk_error = true;
                                         break;
+                                    }
+                                    /* Pace the retransmit: the link just
+                                     * dropped frames, so don't re-blast at
+                                     * full speed — give the phone time to
+                                     * drain each burst. */
+                                    if (CONFIG_CLIP_UDP_REPAIR_PACE_US > 0) {
+                                        k_usleep(CONFIG_CLIP_UDP_REPAIR_PACE_US);
                                     }
                                 }
 

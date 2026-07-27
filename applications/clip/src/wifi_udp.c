@@ -73,8 +73,8 @@ static void handle_packet(const uint8_t *buf, size_t len)
         break;
 
     case UDP_FRAME_HEARTBEAT:
-        /* Heartbeat from client */
-        LOG_DBG("Heartbeat received from client");
+        /* Heartbeat from client (now sent every ~200 ms during transfer to
+         * keep the phone's WiFi out of power-save). Per-packet log removed. */
         client_active = true;
         break;
 

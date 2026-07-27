@@ -325,14 +325,23 @@ config CLIP_UDP_FILE_END_DELAY_US
 	  Lets in-flight DATA land first. 0 disables.
 
 config CLIP_UDP_REPAIR_PACE_US
-	int "UDP inter-frame pace during selective-repeat repair (us), 0 to disable"
+	int "UDP inter-frame pace during retransmit (us), 0 to disable"
 	default 1000
 	help
 	  Delay between retransmitted DATA frames when repairing a NACKed file
-	  (selective repeat). The link just dropped frames, so pacing the repair
-	  avoids re-overwhelming it. Halves each repair round (递减) toward full
-	  speed as the file converges; the next file's initial send is always full
-	  speed. 0 disables.
+	  (selective repeat OR whole-file). The link just dropped frames, so pacing
+	  the retransmit avoids re-overwhelming it. Halves each repair round (递减)
+	  toward full speed as the file converges; the next file's initial send is
+	  always full speed. 0 disables.
+
+config CLIP_UDP_NACK_BACKOFF_MS
+	int "UDP backoff between NACK retry rounds (ms)"
+	default 10
+	help
+	  Delay before each NACK retransmit round, multiplied by the retry number
+	  (10 ms, 20 ms, 30 ms ...). Lets the WiFi channel settle before resending.
+	  Was 50; lowered — the heartbeat keep-alive makes the link stable, so a
+	  long backoff just slows recovery.
 
 # =============================================================================
 # WiFi Configuration
@@ -392,6 +401,22 @@ config CLIP_BATTERY_WIFI_TX_LOAD_MA
 	  Estimated nRF7002 current (mA) drawn from VBAT-direct while a WiFi UDP
 	  file transfer is active (AP up + transfer). See CLIP_BATTERY_WIFI_AP_LOAD_MA
 	  for the calibration method. Default is an upper bound; trim to (total - |IBAT|).
+
+config CLIP_BATTERY_DISPLAY_MAX_STEP
+	int "Max displayed SoC change per poll (%)"
+	default 3
+	help
+	  Rate-limits the DISPLAYED state-of-charge toward the fuel-gauge value,
+	  DIRECTIONALLY, polled every 60 s: while charging the display only moves
+	  UP toward the gauge (catch up + track the charge); while discharging it
+	  only moves DOWN (track depletion). A normal charge/discharge changes by
+	  <= MAX_STEP per poll, so the display tracks it with ZERO lag. The gauge's
+	  voltage-reconciliation up-correction (the ~5-15% first-reboot jump after
+	  charge/discharge cycling) is therefore held while discharging (no upward
+	  creep on a discharging battery) and only corrected on the next charge.
+	  Set 0 to disable smoothing (display the raw gauge SoC directly). The
+	  displayed value is persisted across reboot so it resumes from the value
+	  shown before reboot (no cross-reboot lag accumulation).
 
 # =============================================================================
 # Debug Configuration

@@ -78,7 +78,7 @@ static float last_wifi_load_a = -1.0f;  /* logs WiFi-comp state transitions */
  * make a new firmware resume an incompatible estimate. */
 #define FG_STATE_KEY             "battery/fg_state"
 #define FG_STATE_MAGIC           0x46475331U /* "FGS1" */
-#define FG_STATE_FORMAT_VERSION  1U
+#define FG_STATE_FORMAT_VERSION  2U
 #define FG_STATE_BUF_SIZE        512U
 
 struct fg_state_record {
@@ -86,12 +86,18 @@ struct fg_state_record {
 	uint16_t format_version;
 	uint16_t state_size;
 	uint32_t model_crc;
+	uint8_t displayed_soc; /* last displayed (directional-smoothed) SoC, for the boot seed */
 	uint8_t state[FG_STATE_BUF_SIZE];
 };
 
 static struct fg_state_record fg_state_record;
 static bool fg_state_loaded;
 static uint8_t last_saved_soc = 255U;  /* last SoC% persisted (255 = force first save) */
+
+/* Directional-smoothed display SoC. Persisted across reboot so it resumes from
+ * the value shown before reboot (no cross-reboot lag accumulation). 0xFF means
+ * "not seeded yet" — the first poll seeds it from the gauge. */
+static uint8_t displayed_percent = 0xFF;
 
 static uint32_t fg_model_crc(void)
 {
@@ -185,7 +191,10 @@ void battery_poll(void)
 
 /* Save the fuel gauge state to settings (LittleFS). Call on SoC change + on
  * graceful shutdown/reboot so the SoC is continuous across reboots. */
-void battery_save_fg_state(void)
+/* Internal: assumes the caller holds battery_mutex (the nRF Fuel Gauge is
+ * non-reentrant, and nrf_fuel_gauge_state_get() here must not race
+ * nrf_fuel_gauge_process() in read_and_update_locked()). */
+static void battery_save_fg_state_unlocked(void)
 {
 	const size_t save_len = offsetof(struct fg_state_record, state) +
 				nrf_fuel_gauge_state_size;
@@ -203,6 +212,8 @@ void battery_save_fg_state(void)
 	fg_state_record.format_version = FG_STATE_FORMAT_VERSION;
 	fg_state_record.state_size = nrf_fuel_gauge_state_size;
 	fg_state_record.model_crc = fg_model_crc();
+	fg_state_record.displayed_soc =
+		(displayed_percent != 0xFF) ? displayed_percent : (uint8_t)last_percent;
 
 	int ret = nrf_fuel_gauge_state_get(fg_state_record.state,
 					   sizeof(fg_state_record.state));
@@ -216,6 +227,16 @@ void battery_save_fg_state(void)
 	} else {
 		fg_state_loaded = true;
 	}
+}
+
+/* Public: serializes against the battery poll (battery_mutex) so the gauge
+ * state_get here can't race nrf_fuel_gauge_process() on another thread. Safe
+ * to call from any context (e.g. the power-off work item). */
+void battery_save_fg_state(void)
+{
+	k_mutex_lock(&battery_mutex, K_FOREVER);
+	battery_save_fg_state_unlocked();
+	k_mutex_unlock(&battery_mutex);
 }
 
 static int read_sensors(float *voltage, float *current, float *temp, int32_t *chg_status)
@@ -435,23 +456,48 @@ static void read_and_update_locked(void)
 		charging = charger_connected && (!charger_complete || !battery_full);
 	}
 
-	/* The fuel gauge already estimates SoC from voltage, current,
-	 * temperature, and elapsed time; display that integer estimate
-	 * directly (additional application-level filtering caused multi-hour
-	 * lag and a visible jump after restart). One exception: force 100%
-	 * on the display when the NPM1300 reports charge complete — the
-	 * gauge plateaus at ~99% on a full charge (model full vs charger
-	 * CV-termination mismatch), so without this a full charge shows 99%.
-	 * Charging with WiFi on may keep the NPM1300 from ever reporting
-	 * complete (the nRF70 BUCKVBAT load at the battery terminal holds
-	 * the charge current above the termination threshold); that case
-	 * intentionally stays <100% and only reaches 100% once WiFi auto-offs
-	 * and the charger terminates. No sticky-after-unplug latch (that caused
-	 * the lag/jump f4f1297 removed). The raw gauge value (percent) is still
+	/* Directional-smoothed display SoC (CLIP_BATTERY_DISPLAY_MAX_STEP).
+	 * The gauge already estimates SoC from V/I/T/time; we only smooth the
+	 * DISPLAY value so it doesn't churn or jump:
+	 *  - charging: move UP toward the gauge only (catch up + track charge),
+	 *  - discharging/idle: move DOWN toward the gauge only (track depletion).
+	 * So a normal charge/discharge (<= MAX_STEP/poll) tracks with ZERO lag,
+	 * and the gauge's voltage-reconciliation up-correction (the ~5-15% jump
+	 * on the first reboot after cycling) is HELD while discharging (no upward
+	 * creep on a discharging battery) and only corrected on the next charge.
+	 * `displayed_percent` is persisted (seed on boot) so there is no
+	 * cross-reboot lag accumulation. The raw gauge value (percent) is still
 	 * logged as "actual" for calibration. */
-	uint8_t display_percent = percent;
+	uint8_t display_percent;
 	if (vbus_connected && charger_complete) {
+		/* Charge complete: force 100% immediately (gauge plateaus ~99%). */
 		display_percent = 100;
+		displayed_percent = 100;
+	} else if (displayed_percent == 0xFF) {
+		/* First poll with no persisted seed: start at the gauge value. */
+		display_percent = percent;
+		displayed_percent = percent;
+	} else if (charging) {
+		/* Charging: catch up toward the gauge, upward only, rate-limited. */
+		int diff = (int)percent - (int)displayed_percent;
+		if (diff > CONFIG_CLIP_BATTERY_DISPLAY_MAX_STEP) {
+			diff = CONFIG_CLIP_BATTERY_DISPLAY_MAX_STEP;
+		} else if (diff < 0) {
+			diff = 0;  /* don't decrease while charging */
+		}
+		displayed_percent = (uint8_t)((int)displayed_percent + diff);
+		display_percent = displayed_percent;
+	} else {
+		/* Discharging/idle: track depletion, downward only, rate-limited.
+		 * An upward gauge correction is held until the next charge. */
+		int diff = (int)percent - (int)displayed_percent;
+		if (diff < -CONFIG_CLIP_BATTERY_DISPLAY_MAX_STEP) {
+			diff = -CONFIG_CLIP_BATTERY_DISPLAY_MAX_STEP;
+		} else if (diff > 0) {
+			diff = 0;  /* don't increase while discharging */
+		}
+		displayed_percent = (uint8_t)((int)displayed_percent + diff);
+		display_percent = displayed_percent;
 	}
 
 	/* Update battery percent (display value) */
@@ -578,7 +624,7 @@ static void battery_level_handler(struct k_work *work)
 	 * to avoid wearing the LittleFS settings flash. The graceful shutdown/
 	 * reboot paths also save (a fresh copy) via battery_save_fg_state(). */
 	if (last_percent != last_saved_soc) {
-		battery_save_fg_state();
+		battery_save_fg_state_unlocked();  /* already under battery_mutex */
 		last_saved_soc = last_percent;
 	}
 	k_work_schedule(&battery_level_work, K_SECONDS(60));
@@ -639,6 +685,12 @@ int battery_init(void)
 		} else {
 			fg_initialized = true;
 			LOG_INF("Fuel-gauge state: %s", fg_state_loaded ? "restored" : "new estimate");
+
+			/* Seed the directional-smoothed display from the persisted value so
+			 * it resumes from the pre-reboot reading (no cross-reboot lag). */
+			if (fg_state_loaded) {
+				displayed_percent = fg_state_record.displayed_soc;
+			}
 
 			/* Configure charge current limits */
 			nrf_fuel_gauge_ext_state_update(NRF_FUEL_GAUGE_EXT_STATE_INFO_CHARGE_CURRENT_LIMIT,
