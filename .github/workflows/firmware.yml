@@ -59,8 +59,6 @@ jobs:
       - name: Build clip app
         run: |
           source "$GITHUB_WORKSPACE/ncs/zephyr/zephyr-env.sh"
-          # Auto-download the Zephyr SDK toolchain on first build.
-          west config --global zephyr.sdk install auto
           export ZEPHYR_EXTRA_MODULES="$GITHUB_WORKSPACE/respeaker_clip"
           west build -b clip/nrf5340/cpuapp "$GITHUB_WORKSPACE/respeaker_clip/applications/clip" \
             --build-dir build
