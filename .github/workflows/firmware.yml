@@ -38,7 +38,7 @@ jobs:
 
       - name: Initialize NCS v3.3.0 workspace
         run: |
-          west init -m https://github.com/nrfconnect/ncs ncs --mr v3.3.0
+          west init -m https://github.com/nrfconnect/sdk-nrf ncs --mr v3.3.0
           cd ncs
           west update
           pip3 install -r zephyr/scripts/requirements-base.txt
