@@ -24,15 +24,14 @@ jobs:
         with:
           path: respeaker_clip
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Install nrfutil + toolchain-manager
+      - name: Install nrfutil
         run: |
-          pip install nrfutil
+          curl -sSfL https://github.com/NordicSemiconductor/pc-nrfutil/releases/download/v6.1.7/nrfutil-linux -o nrfutil
+          chmod +x nrfutil
+          sudo mv nrfutil /usr/local/bin/
+          nrfutil self-upgrade || true
           nrfutil install toolchain-manager
+          nrfutil --version
 
       - name: Install NCS v3.3.0 (source + toolchain)
         run: nrfutil toolchain-manager install --ncs-version v3.3.0
