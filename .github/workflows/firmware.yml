@@ -56,7 +56,22 @@ jobs:
             fi
           done
 
+      - name: Cache Zephyr SDK
+        id: sdk-cache
+        uses: actions/cache@v4
+        with:
+          path: /opt/zephyr-sdk-0.16.5
+          key: zephyr-sdk-0.16.5-x86_64-minimal
+
+      - name: Install Zephyr SDK
+        if: steps.sdk-cache.outputs.cache-hit != 'true'
+        run: |
+          wget -q https://github.com/zephyrproject-rtos/sdk-ng/releases/download/v0.16.5/zephyr-sdk-0.16.5-x86_64-linux-minimal.tar.xz
+          tar xf zephyr-sdk-0.16.5-x86_64-linux-minimal.tar.xz -C /opt/
+
       - name: Build clip app
+        env:
+          ZEPHYR_SDK_INSTALL: /opt/zephyr-sdk-0.16.5
         run: |
           source "$GITHUB_WORKSPACE/ncs/zephyr/zephyr-env.sh"
           export ZEPHYR_EXTRA_MODULES="$GITHUB_WORKSPACE/respeaker_clip"
