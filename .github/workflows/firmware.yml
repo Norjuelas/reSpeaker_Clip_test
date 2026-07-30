@@ -57,10 +57,14 @@ jobs:
           west init -m https://github.com/nrfconnect/sdk-nrf --mr v3.3.0 ncs
           cd ncs
           west update --narrow -o=--depth=1
-          # Zephyr base deps + NCS deps (cryptography/ecdsa for image signing,
-          # nrf-regtool, etc.). nrf/scripts/requirements.txt is required — the
-          # Zephyr-only requirements miss the NCS bootloader keygen/signing tools.
-          pip3 install -r zephyr/scripts/requirements.txt -r nrf/scripts/requirements.txt
+          # Build-essential deps only. zephyr/requirements-BASE.txt (NOT the
+          # full requirements.txt) + nrf/requirements.txt. The full zephyr
+          # requirements.txt pulls requirements-extras.txt -> spsdk, whose git
+          # #egg= deps (spsdk-mcu-link/spsdk-pyocd) make pip's resolver backtrack
+          # through every setuptools_scm version and hang. The build doesn't
+          # need spsdk. nrf/requirements.txt supplies cryptography/ecdsa for
+          # image signing (keygen.py) which the zephyr-only set misses.
+          pip3 install -r zephyr/scripts/requirements-base.txt -r nrf/scripts/requirements.txt
 
       - name: Apply MCUboot patches (idempotent)
         run: |
