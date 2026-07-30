@@ -124,5 +124,7 @@ jobs:
           gh release create "$TAG" "output/$VER"/* \
             --title "$TAG" \
             --notes-file "respeaker_clip/docs/release_notes/$TAG.md" \
-            --prerelease \
-            --verify-tag
+            --prerelease
+          # No --verify-tag: it shells out to git, but the Actions workspace
+          # root isn't a git repo (the checkout lives under respeaker_clip/).
+          # The tag is guaranteed to exist — this workflow only runs on tag push.
