@@ -54,16 +54,35 @@ Field: type  seq_lo seq_hi len_lo len_hi crc32 (4 bytes)     data (N)
 Sent by client after verifying full-file CRC32 at FILE_END.
 
 ```
-Byte:  [0]   [1]
-Field: type  result
+OK:               [0]   [1]
+                  type  result(0x00)
+
+NACK whole-file:  [0]   [1]
+                  type  result(0x01)
+
+NACK + bitmap:    [0]   [1]      [2] [3]        [4 ... 4+B-1]
+                  type  result   total_seqs(2)  bitmap(B)
+                        (0x01)    LE
 ```
 
 | Field | Size | Description |
 |-------|------|-------------|
 | type | 1 | 0x03 |
-| result | 1 | 0x00 = CRC OK, 0x01 = CRC mismatch (request retransmit) |
+| result | 1 | 0x00 = CRC OK, 0x01 = CRC mismatch |
+| total_seqs | 2 | Total DATA frames in the file (only with bitmap). uint16 LE. |
+| bitmap | ceil(total_seqs/8) | Bit i set = seq i is MISSING (only with bitmap). |
 
-**Frame size**: 2 bytes (fixed).
+**Frame size**: 2 bytes for OK / legacy NACK; 4 + ceil(total_seqs/8) bytes for a
+selective NACK (bitmap). Distinguished by length.
+
+**Selective repeat (backward compatible)**: On a CRC mismatch, a client that tracks
+received seqs sends `result=0x01` + `total_seqs` + a bitmap of the missing frames. The
+server re-reads and retransmits only those seqs (at their original seq), then re-sends
+FILE_END — converging even when each round loses different frames. A legacy server reads
+only `result` (byte 1) and ignores the trailing fields → whole-file retransmit. A legacy
+client sends the 2-byte NACK → server retransmits the whole file. Retransmitted frames
+are paced (inter-frame delay halving each repair round, configurable via
+`CONFIG_CLIP_UDP_REPAIR_PACE_US`).
 
 ### FILE_START (0x10) — Server→Client
 
@@ -169,18 +188,17 @@ Client                              Server
 - **Fire-and-forget**: DATA frames are sent without waiting for per-frame ACK
 - **Per-frame CRC32**: Each DATA frame includes CRC of its payload for corruption detection
 - **Full-file CRC32**: Server accumulates CRC32 across all DATA frames for a file
-- **CRC on confirmed send only**: If `sendto()` fails, the frame's data is NOT included in the accumulated CRC, so the file CRC reflects only data actually received by the client
+- **CRC over the full file**: The file CRC covers every frame regardless of `sendto()` success, so FILE_END's CRC matches the complete file the client reassembles. A frame whose send fails is repaired by selective repeat.
 - **FILE_END + wait**: After sending all DATA, server sends FILE_END with accumulated CRC32 and waits for FILE_ACK
-- **File-level retransmit**: On NACK or timeout, server retransmits the entire file (up to 10 retries)
-- **No frame buffering**: Transient send errors are skipped; per-file CRC catches data loss
+- **Selective repeat**: On a NACK carrying a bitmap, server retransmits only the missing seqs (at their original seq), then re-sends FILE_END. Falls back to whole-file retransmit when no bitmap is present (legacy client). Up to 10 retries per file.
 - **Thread-safe cancel**: AT+CANCEL sets a volatile flag checked by the transfer thread; cancel handling (close file, send TRANSFER_DONE, cleanup) runs entirely in the transfer thread to avoid races with the AT command thread
 
 ### Client Side
 
 - **Discard corrupted frames**: Frames with per-frame CRC mismatch are silently dropped
-- **Accumulate data**: Valid DATA payloads are appended in order
+- **Accumulate data**: Valid DATA payloads are appended in order (out-of-order frames buffered by seq)
 - **Full-file verification**: On FILE_END, client compares its accumulated CRC32 with server's CRC32
-- **FILE_ACK response**: 0x00 = CRC OK (file saved), 0x01 = NACK (file discarded, server retransmits)
+- **FILE_ACK response**: 0x00 = CRC OK (file saved); 0x01 = NACK — with a missing-seq bitmap if the client tracks seqs (selective repair), or a bare 2-byte NACK (whole-file retransmit)
 
 ### Retransmission
 

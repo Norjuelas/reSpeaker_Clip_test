@@ -88,17 +88,20 @@ static void wifi_coex_configure(void)
 {
 	bool sep = IS_ENABLED(CONFIG_COEX_SEP_ANTENNAS);
 	bool ble = IS_ENABLED(CONFIG_SR_PROTOCOL_BLE);
+	enum nrf_wifi_pta_wlan_op_band band = (ap_channel <= 13) ?
+		NRF_WIFI_PTA_WLAN_OP_BAND_2_4_GHZ : NRF_WIFI_PTA_WLAN_OP_BAND_5_GHZ;
 	int ret;
 
 	ret = nrf_wifi_coex_config_non_pta(sep, ble);
 	if (ret) {
 		LOG_WRN("Coex non-PTA config failed: %d", ret);
 	}
-	ret = nrf_wifi_coex_config_pta(NRF_WIFI_PTA_WLAN_OP_BAND_5_GHZ, sep, ble);
+	ret = nrf_wifi_coex_config_pta(band, sep, ble);
 	if (ret) {
 		LOG_WRN("Coex PTA config failed: %d", ret);
 	}
-	LOG_INF("Coex PTA configured (5GHz, sep=%d, ble=%d)", sep, ble);
+	LOG_INF("Coex PTA configured (%s, sep=%d, ble=%d)",
+		(ap_channel <= 13) ? "2.4GHz" : "5GHz", sep, ble);
 }
 #endif
 

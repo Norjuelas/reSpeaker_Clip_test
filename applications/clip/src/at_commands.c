@@ -73,7 +73,7 @@ static void pair_reset_work_handler(struct k_work *work)
 
     err = storage_format_card();
     if (err != 0 && err != -ENODEV) {
-        LOG_WRN("SD erase during pairing reset failed: %d", err);
+        LOG_WRN("SD erase (pair reset) %d", err);
     }
 
     /* The AT reply was sent before this worker started. Reboot only after
@@ -671,7 +671,7 @@ static int cmd_factory_handler(struct at_cmd_ctx *ctx, char *response, size_t le
     /* Format SD card (clear FATFS recordings) */
     err = storage_format_card();
     if (err) {
-        LOG_WRN("SD format failed during factory reset: %d", err);
+        LOG_WRN("SD format fail (factory) %d", err);
     }
 
     /* Send response before clearing bonds (which may drop BLE link) */
@@ -837,7 +837,7 @@ static int cmd_start_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
         } else if (strcmp(mode_str, "enhanced") == 0 || strcmp(mode_str, "merge") == 0) {
             rec_mode = MODE_ENHANCED;
         } else {
-            return create_json_response(false, "Invalid mode (use normal/stereo or enhanced/merge)", NULL, response, len);
+            return create_json_response(false, "invalid mode (normal/stereo/enhanced/merge)", NULL, response, len);
         }
 
         /* Apply mode for this session */
@@ -898,7 +898,7 @@ static int cmd_stop_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
         /* Fallback: if audio is actually recording but state machine is
          * out of sync, stop audio directly */
         if (audio_is_recording() && info.result == CLIP_EVENT_INVALID) {
-            LOG_WRN("State/audio mismatch, forcing audio stop");
+            LOG_WRN("state/audio mismatch, force stop");
             audio_stop_recording();
         } else {
             return create_json_response(false, "Not recording", NULL, response, len);
@@ -1514,7 +1514,7 @@ static int cmd_delete_handler(struct at_cmd_ctx *ctx, char *response, size_t len
 
     int err = storage_delete_session(session_id);
     if (err == -EBUSY) {
-        return create_json_response(false, "Cannot delete current recording session", NULL, response, len);
+        return create_json_response(false, "cannot delete active session", NULL, response, len);
     } else if (err == -ENOENT) {
         return create_json_response(false, "Session not found", NULL, response, len);
     } else if (err != 0) {
@@ -1670,7 +1670,7 @@ static int cmd_wificfg_handler(struct at_cmd_ctx *ctx, char *response, size_t le
 
         char *colon = strchr(args, ':');
         if (!colon || colon == args || strlen(colon + 1) != 2) {
-            return create_json_response(false, "Invalid format (use: channel:CC, e.g. 36:US)",
+            return create_json_response(false, "usage: channel:CC e.g. 36:US",
                                        NULL, response, len);
         }
 
@@ -1680,7 +1680,7 @@ static int cmd_wificfg_handler(struct at_cmd_ctx *ctx, char *response, size_t le
 
         /* Validate channel: 1-13 (2.4GHz) or 36-165 (5GHz) */
         if (!((channel >= 1 && channel <= 13) || (channel >= 36 && channel <= 165))) {
-            return create_json_response(false, "Channel must be 1-13 (2.4GHz) or 36-165 (5GHz)",
+            return create_json_response(false, "channel: 1-13 (2.4G) or 36-165 (5G)",
                                        NULL, response, len);
         }
 
@@ -1690,7 +1690,7 @@ static int cmd_wificfg_handler(struct at_cmd_ctx *ctx, char *response, size_t le
                 if (reg_domain[i] >= 'a' && reg_domain[i] <= 'z') {
                     reg_domain[i] = reg_domain[i] - 'a' + 'A';
                 } else {
-                    return create_json_response(false, "Reg domain must be 2-letter country code",
+                    return create_json_response(false, "reg domain: 2-letter country",
                                                NULL, response, len);
                 }
             }
@@ -1732,9 +1732,9 @@ static int cmd_usb_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
 	    if (err == -EBUSY) {
 		const char *reason = "Busy";
 		if (audio_is_recording()) {
-		    reason = "Recording in progress, stop recording first";
+		    reason = "recording active, stop first";
 		} else if (transfer_is_active()) {
-		    reason = "Transfer in progress, cancel transfer first";
+		    reason = "transfer active, cancel first";
 		}
 		return create_json_response(false, reason, NULL, response, len);
 	    } else if (err) {

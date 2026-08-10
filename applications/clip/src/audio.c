@@ -289,7 +289,7 @@ int audio_start_recording(enum audio_mode mode)
         uint32_t uptime_sec = (uint32_t)(k_uptime_get() / 1000);
         snprintf(current_session_id, sizeof(current_session_id),
             "0%013u", uptime_sec);
-        LOG_WRN("Time not synchronized, using uptime-based session ID");
+        LOG_WRN("time unset, using uptime session id");
     }
 
     /* Reset counters */
@@ -301,7 +301,7 @@ int audio_start_recording(enum audio_mode mode)
     k_sem_give(&audio_start_sem);
     k_mutex_unlock(&audio_state_mutex);
 
-    LOG_INF("Recording start requested (mode=%d, session=%s)", mode, current_session_id);
+    LOG_INF("rec start (mode=%d, %s)", mode, current_session_id);
     return 0;
 }
 
@@ -683,7 +683,7 @@ void audio_recording_thread(void *p1, void *p2, void *p3)
                 current_file_index++;
                 ret = storage_create_file(&current_storage_file, current_session_id, current_file_index);
                 if (ret != 0) {
-                    LOG_ERR("Failed to create new file for resume: %d", ret);
+                    LOG_ERR("resume file create %d", ret);
                     current_file_index--;
                     break;
                 }
@@ -719,8 +719,8 @@ void audio_recording_thread(void *p1, void *p2, void *p3)
                     dmic_timeout_count++;
 
                     if (dmic_timeout_count >= 2) {
-                        LOG_WRN("DMIC timeout recovery: retriggering DMIC");
-                        LOG_WRN("DSP avg=%u us/enc avg=%u us (frames=%u)",
+                        LOG_WRN("DMIC timeout, retrigger");
+                        LOG_WRN("DSP=%uus enc=%uus (frm=%u)",
                                 stats.frames_encoded > 0 ?
                                     (uint32_t)(dsp_time_total_us / stats.frames_encoded) : 0,
                                 stats.frames_encoded > 0 ?

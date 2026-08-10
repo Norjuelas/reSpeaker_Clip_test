@@ -274,6 +274,16 @@ static struct mgmt_callback mcumgr_dfu_cb_stopped;
 #define SD_IDLE_POWEROFF_DELAY_MS  K_MSEC(CONFIG_CLIP_SD_IDLE_DELAY_MS)
 static struct k_work_delayable sd_idle_poweroff_work;
 
+/* Deferred fuel-gauge state save at the power-off level (so a 7 s PMIC hard
+ * reset that bypasses POWER_OFF_EXEC doesn't lose the SoC). Runs on the system
+ * workqueue so it can't block the main event thread / the 3 s power-off flow. */
+static struct k_work fg_save_work;
+static void fg_save_work_handler(struct k_work *work)
+{
+	ARG_UNUSED(work);
+	battery_save_fg_state();
+}
+
 /*
  * True only when genuinely idle: IDLE state, no recording/transfer/OTA,
  * USB not exposing the SD (MSC), FS log backend off, no file mid-write,
@@ -321,6 +331,7 @@ int clip_event_init(void)
 
     k_work_init_delayable(&ota_progress_work, ota_progress_work_handler);
     k_work_init_delayable(&sd_idle_poweroff_work, sd_idle_poweroff_work_handler);
+    k_work_init(&fg_save_work, fg_save_work_handler);
     storage_set_activity_cb(clip_storage_activity_notify);
     storage_set_busy_cb(clip_sd_busy);
     k_work_schedule(&sd_idle_poweroff_work, SD_IDLE_POWEROFF_DELAY_MS);
@@ -482,7 +493,7 @@ void clip_event_process(void)
         if (result == CLIP_EVENT_OK && next != TRANS_SAME) {
             /* Sanity check: warn if state leaves RECORDING while audio active */
             if (current == CLIP_STATE_RECORDING && audio_is_recording()) {
-                LOG_WRN("State leaving RECORDING (%d->%d) while audio is active",
+                LOG_WRN("leave REC (%d->%d) audio active",
                          current, new_state);
             }
             atomic_set(&g_state, (atomic_val_t)new_state);
@@ -555,7 +566,15 @@ static enum clip_event_result execute_transition(enum clip_event event,
         }
 
         err = audio_stop_recording();
-        if (err) {
+        if (err == -ETIMEDOUT) {
+            /* Stop was requested but the audio thread is slow to flush/close
+             * the file (SD busy, e.g. a concurrent transfer reading the card).
+             * The stop IS committed and completes asynchronously — commit IDLE
+             * now so the state machine never deadlocks in RECORDING (which
+             * would drop the IDLE notification and make the host flood STOP).
+             * The recording tail may be cut, which is acceptable. */
+            LOG_WRN("stop slow (SD busy), IDLE async");
+        } else if (err) {
             LOG_ERR("audio_stop_recording failed: %d", err);
             return CLIP_EVENT_ERROR;
         }
@@ -655,6 +674,13 @@ static enum clip_event_result execute_transition(enum clip_event event,
 
     case CLIP_EVENT_POWER_OFF_SHOW:
     {
+        /* A held-long-enough press triggers a PMIC hardware reset that
+         * bypasses the software POWER_OFF_EXEC shutdown (where the fuel-gauge
+         * state is normally persisted). Queue a save now, at the 3 s poweroff
+         * level, so a hard reset doesn't lose it. Deferred to the system
+         * workqueue so it cannot block this thread or the 3 s power-off flow;
+         * POWER_OFF_EXEC saves a fresh copy again on a graceful release. */
+        k_work_submit(&fg_save_work);
         display_post_event(UI_EVENT_POWER_OFF_SHOW);
         return CLIP_EVENT_OK;
     }
@@ -676,7 +702,7 @@ static enum clip_event_result execute_transition(enum clip_event event,
             LOG_INF("Stopping recording before power off");
             int stop_rc = audio_stop_recording();
             if (stop_rc != 0) {
-                LOG_WRN("audio_stop_recording: %d (slow SD?), extra grace", stop_rc);
+                LOG_WRN("audio_stop %d (slow SD) grace", stop_rc);
                 k_sleep(K_MSEC(500));
             } else {
                 k_sleep(K_MSEC(100));

@@ -697,7 +697,7 @@ static void render_status_bar(uint8_t *buf)
 
 	/* Right edge icon at (64, 12) */
 		struct transport *active_tp = transport_get_active();
-		LOG_DBG("icon: udp=%d xfer=%d ble=%d wifi=%d charge=%d untrx=%d",
+		LOG_DBG("icon: udp=%d xf=%d ble=%d wf=%d chg=%d utx=%d",
 			active_tp && active_tp->type == TRANSPORT_TYPE_UDP,
 			g_status.transferring, g_status.ble_connected,
 			g_status.wifi_running, g_status.battery_charging,

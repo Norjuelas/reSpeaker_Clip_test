@@ -43,6 +43,8 @@ typedef void (*transport_event_cb_t)(uint8_t type, uint8_t event,
 /**
  * @brief Transport operations
  */
+struct fs_file_t;  /* forward decl — repair_missing() reads an open file */
+
 struct transport_ops {
     /**
      * @brief Send data through transport (for AT command responses)
@@ -61,6 +63,21 @@ struct transport_ops {
      * @return Bytes sent on success, negative error code on failure
      */
     int (*send_file_data)(const uint8_t *data, uint16_t len);
+
+    /**
+     * @brief Selective-repeat repair: retransmit only the DATA frames the
+     *        client reported missing in the last NACK bitmap. Optional: NULL
+     *        means the transport can't repair by seq → caller retransmits the
+     *        whole file. Reads the missing-seq bitmap from the last FILE_ACK,
+     *        seeks/reads each missing frame from @p file, and resends it at its
+     *        original seq with @p pace_us delay between frames.
+     *
+     * @param file      Open file being transferred
+     * @param file_size File size in bytes (for seq→offset + last-frame length)
+     * @param pace_us   Inter-frame delay during repair (0 = full speed)
+     * @return Frames retransmitted on success (≥0), negative error code on failure
+     */
+    int (*repair_missing)(struct fs_file_t *file, uint32_t file_size, uint32_t pace_us);
 
     /**
      * @brief Send file start event (called before file data)

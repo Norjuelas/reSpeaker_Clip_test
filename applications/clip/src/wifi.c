@@ -101,7 +101,7 @@ static void wifi_coex_configure(bool is_5ghz)
 	{
 		LOG_WRN("Coex PTA config failed: %d", ret);
 	}
-	LOG_INF("Coex PTA configured (%s, sep=%d, ble=%d)", is_5ghz ? "5GHz" : "2.4GHz", sep, ble);
+	LOG_INF("coex PTA (%s sep=%d ble=%d)", is_5ghz ? "5GHz" : "2.4GHz", sep, ble);
 }
 #endif
 
@@ -219,7 +219,7 @@ int wifi_init(void)
 		ret = register_wifi_ready_callback(cb, iface);
 		if (ret)
 		{
-			LOG_WRN("WiFi ready callback registration failed: %d", ret);
+			LOG_WRN("wifi_ready cb reg failed %d", ret);
 		}
 	}
 
@@ -271,7 +271,7 @@ static int wifi_enable_ap(struct net_if *iface)
 
 		ret = net_mgmt(NET_REQUEST_WIFI_AP_ENABLE, iface, &req, sizeof(req));
 		if (ret) {
-			LOG_ERR("AP enable request failed: %d (attempt %d)", ret, attempt);
+			LOG_ERR("AP enable fail %d (try %d)", ret, attempt);
 			continue;
 		}
 
@@ -408,7 +408,7 @@ int wifi_on(void)
 	/* Start auto-off timeout */
 	schedule_wifi_timeout();
 
-	LOG_INF("WiFi AP started: SSID=%s ch=%d IP=%s port=%d",
+	LOG_INF("AP up: %s ch=%d %s:%d",
 			ap_ssid, WIFI_AP_CHANNEL, CONFIG_NET_CONFIG_MY_IPV4_ADDR, WIFI_AP_UDP_PORT);
 
 	ble_notify_event("wifi", "on");

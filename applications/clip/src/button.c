@@ -45,7 +45,7 @@ static void button_event_callback(const struct device *dev, enum button_action a
         break;
 
     case BUTTON_LONG_PRESS:
-	LOG_INF("LONG_PRESS (held >1s, still holding), state=%d", state);
+	LOG_INF("LONG_PRESS (>1s holding) state=%d", state);
 	if (state == CLIP_STATE_RECORDING) {
 		/* Stop recording immediately, vibrate to confirm.
 		 * User can continue holding for power-off (LEVEL_1/2/3).
@@ -65,7 +65,7 @@ static void button_event_callback(const struct device *dev, enum button_action a
     case BUTTON_LONG_PRESS_LEVEL_1:
     case BUTTON_LONG_PRESS_LEVEL_2:
     case BUTTON_LONG_PRESS_LEVEL_3:
-	LOG_INF("LONG_PRESS_LEVEL (power off screen), action=%d state=%d", action, state);
+	LOG_INF("LONG_PRESS_LVL (pwr off) act=%d st=%d", action, state);
 	if (clip_get_context()->status.battery_charging) {
 		LOG_INF("USB charging, ignore power off");
 		break;

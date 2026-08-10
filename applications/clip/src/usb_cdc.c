@@ -221,12 +221,12 @@ int usb_cdc_enable(void)
 	}
 
 	if (audio_is_recording()) {
-		LOG_WRN("Cannot enable USB: recording in progress");
+		LOG_WRN("USB blocked: recording");
 		return -EBUSY;
 	}
 
 	if (transfer_is_active()) {
-		LOG_WRN("Cannot enable USB: transfer in progress");
+		LOG_WRN("USB blocked: transfer");
 		return -EBUSY;
 	}
 

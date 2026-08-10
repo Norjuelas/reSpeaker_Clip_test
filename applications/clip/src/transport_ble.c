@@ -249,7 +249,7 @@ int transport_ble_init(void)
     current_file_crc = 0;
     max_data_payload = 20;  /* Safe default, updated on first send */
 
-    LOG_INF("BLE transport initialized (binary frame protocol)");
+    LOG_INF("BLE transport init (binary frame)");
     return 0;
 }
 

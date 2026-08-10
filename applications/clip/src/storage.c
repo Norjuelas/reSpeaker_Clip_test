@@ -1441,7 +1441,7 @@ int storage_list_chunks(const char *session_id, uint32_t *chunks, int max_chunks
     rc = fs_opendir(&dirp, dir_path);
     if (rc != 0)
     {
-        LOG_ERR("Failed to open session directory %s: %d", dir_path, rc);
+        LOG_ERR("session dir open %s: %d", dir_path, rc);
         return rc;
     }
 
@@ -1709,7 +1709,7 @@ static int create_session_json(const char *json_path, const char *session_id,
     written = fs_write(&file, json_buf, len);
     if (written != len)
     {
-        LOG_ERR("Failed to write session.json: %zd != %d", written, len);
+        LOG_ERR("session.json write %zd!=%d", written, len);
         fs_close(&file);
         return -EIO;
     }
@@ -1795,7 +1795,7 @@ static int update_session_json(const char *session_id, uint32_t duration_sec,
     rc = fs_open(&file, json_path, FS_O_CREATE | FS_O_WRITE);
     if (rc != 0)
     {
-        LOG_ERR("Failed to open session.json for update: %d", rc);
+        LOG_ERR("session.json open(update) %d", rc);
         k_mutex_unlock(&session_json_mutex);
         return rc;
     }
@@ -1827,7 +1827,7 @@ static int update_session_json(const char *session_id, uint32_t duration_sec,
     written = fs_write(&file, json_buf, len);
     if (written != len)
     {
-        LOG_ERR("Failed to write session.json: %zd != %d", written, len);
+        LOG_ERR("session.json write %zd!=%d", written, len);
         fs_close(&file);
         k_mutex_unlock(&session_json_mutex);
         return -EIO;
@@ -1987,7 +1987,7 @@ int storage_add_bookmark(const char *session_id, uint32_t offset_sec)
 
         fs_close(&file);
 
-        LOG_DBG("Created bookmarks file with first bookmark at %u seconds", offset_sec);
+        LOG_DBG("bookmarks: first mark at %us", offset_sec);
     }
 
     return 0;
