@@ -31,7 +31,10 @@ choice MCUBOOT_MODE
 endchoice
 
 # Dual-image update: application core + network core, staged in external flash.
+# When the nRF70 FW patch is relocated to external flash it becomes a third
+# MCUboot-managed image, so bump the count in that configuration.
 config MCUBOOT_UPDATEABLE_IMAGES
+	default 3 if WIFI_PATCHES_EXT_FLASH_STORE
 	default 2
 config MCUBOOT_NRF53_MULTI_IMAGE_UPDATE
 	default y

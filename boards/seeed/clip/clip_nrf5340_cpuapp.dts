@@ -323,14 +323,28 @@
 				reg = <0x000F0000 0x00040000>;
 			};
 
-			/* LittleFS partition (~6.8MB, 64KB aligned)
+			/* LittleFS partition (~6.4MB, 64KB aligned)
 			 * External flash: 8MB = 128 x 64KB blocks total
 			 * OTA slots: 15 + 4 = 19 blocks used
-			 * LittleFS: 128 - 19 = 109 blocks = 6960KB = 0x6D0000
+			 * nRF70 FW patch as MCUboot image 2: primary+secondary
+			 *   = 2 x 0x30000 = 6 blocks (384KB) at end
+			 * LittleFS: 128 - 19 - 6 = 103 blocks = 6592KB = 0x670000
+			 * Start kept at 0x130000 so existing device config/bonds survive.
 			 */
 			lfs_partition: partition@130000 {
 				label = "lfs-storage";
-				reg = <0x00130000 0x006D0000>;
+				reg = <0x00130000 0x00670000>;
+			};
+
+			/* nRF70 WiFi FW patch stored in external flash so the ~87KB
+			 * patch is not linked into the internal app image. Read in
+			 * chunks to the nRF70 at WiFi init. Address/size mirror the
+			 * nrf70_wifi_fw region in pm_static (MCUboot image 2 primary,
+			 * after the 0x200 mcuboot pad at 0x7a0000).
+			 */
+			nrf70_wifi_fw_partition: nrf70_fw_partition: partition@7a0200 {
+				label = "nrf70-wifi-fw";
+				reg = <0x007A0200 0x00020000>;
 			};
 		};
 	};
