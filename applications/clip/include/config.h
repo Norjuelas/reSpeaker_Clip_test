@@ -23,6 +23,8 @@
 #define CONFIG_KEY_WIFI_REG_DOMAIN 0x0E
 #define CONFIG_KEY_STA_SSID      0x0F
 #define CONFIG_KEY_STA_PSK       0x10
+#define CONFIG_KEY_UPLOAD_HOST   0x11
+#define CONFIG_KEY_UPLOAD_PORT   0x12
 
 
 /**
@@ -253,6 +255,32 @@ const char *config_get_sta_psk(void);
  * @return true if an SSID is stored
  */
 bool config_has_sta_credentials(void);
+
+/**
+ * @brief Store the address of the upload service
+ *
+ * Where recordings are pushed once the device is on the network. Persisted to
+ * LittleFS.
+ *
+ * @param host Service IPv4, dotted quad
+ * @param port Service UDP port
+ * @return 0 on success, -EINVAL if host or port is not usable
+ */
+int config_set_upload_endpoint(const char *host, uint16_t port);
+
+/**
+ * @brief Get the upload service address
+ *
+ * @return Dotted-quad string, empty if never configured
+ */
+const char *config_get_upload_host(void);
+
+/**
+ * @brief Get the upload service port
+ *
+ * @return Port number, 0 if never configured
+ */
+uint16_t config_get_upload_port(void);
 
 /**
  * @brief Arm/disarm the settings_load watchdog

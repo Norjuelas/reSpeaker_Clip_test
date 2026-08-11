@@ -755,6 +755,15 @@ int wifi_sta_on(void)
 		return -ETIMEDOUT;
 	}
 
+	/* The UDP server is not just for the AP: transfers are bidirectional, and
+	 * without it the FILE_ACK frames that drive retransmission never arrive. */
+	ret = wifi_udp_start();
+	if (ret)
+	{
+		LOG_WRN("UDP server start failed: %d", ret);
+		/* The link is still usable — transfers are what suffer */
+	}
+
 	LOG_WRN("STA up: %s -> %s", ssid, sta_ip);
 
 	return 0;
@@ -774,6 +783,7 @@ int wifi_sta_off(void)
 		return -ENODEV;
 	}
 
+	wifi_udp_stop();
 	net_dhcpv4_stop(iface);
 
 	ret = net_mgmt(NET_REQUEST_WIFI_DISCONNECT, iface, NULL, 0);

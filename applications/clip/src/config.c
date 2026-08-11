@@ -32,6 +32,8 @@ LOG_MODULE_REGISTER(config, CONFIG_CLIP_LOG_LEVEL);
 #define SETTING_WIFI_REG_DOMAIN "config/wifi_reg_domain"
 #define SETTING_STA_SSID        "config/sta_ssid"
 #define SETTING_STA_PSK         "config/sta_psk"
+#define SETTING_UPLOAD_HOST     "config/upload_host"
+#define SETTING_UPLOAD_PORT     "config/upload_port"
 #define SETTING_TIME_UNIX       "time/unix_timestamp"
 
 /* settings_load is normally <100 ms. A corrupt settings file (typically
@@ -61,6 +63,8 @@ static const struct config_entry config_table[] = {
     { SETTING_WIFI_REG_DOMAIN,  offsetof(struct clip_config, wifi_reg_domain), sizeof(char[3]) },
     { SETTING_STA_SSID,         offsetof(struct clip_config, sta_ssid),        sizeof(char[33]) },
     { SETTING_STA_PSK,          offsetof(struct clip_config, sta_psk),         sizeof(char[65]) },
+    { SETTING_UPLOAD_HOST,      offsetof(struct clip_config, upload_host),     sizeof(char[16]) },
+    { SETTING_UPLOAD_PORT,      offsetof(struct clip_config, upload_port),     sizeof(uint16_t) },
 };
 
 #define CONFIG_TABLE_SIZE (sizeof(config_table) / sizeof(config_table[0]))
@@ -324,6 +328,8 @@ static const char *key_to_setting(uint16_t key)
     case CONFIG_KEY_WIFI_REG_DOMAIN: return SETTING_WIFI_REG_DOMAIN;
     case CONFIG_KEY_STA_SSID:        return SETTING_STA_SSID;
     case CONFIG_KEY_STA_PSK:         return SETTING_STA_PSK;
+    case CONFIG_KEY_UPLOAD_HOST:     return SETTING_UPLOAD_HOST;
+    case CONFIG_KEY_UPLOAD_PORT:     return SETTING_UPLOAD_PORT;
     default:                    return NULL;
     }
 }
@@ -419,6 +425,21 @@ int config_set(uint16_t key, const void *value, size_t len)
             ret = -EINVAL;
         }
         break;
+    case CONFIG_KEY_UPLOAD_HOST:
+        if (len <= 15 && (value || len == 0)) {
+            memcpy(ctx->config.upload_host, value, len);
+            ctx->config.upload_host[len] = '\0';
+        } else {
+            ret = -EINVAL;
+        }
+        break;
+    case CONFIG_KEY_UPLOAD_PORT:
+        if (len == sizeof(uint16_t)) {
+            ctx->config.upload_port = *(const uint16_t *)value;
+        } else {
+            ret = -EINVAL;
+        }
+        break;
     default:
         return -EINVAL;
     }
@@ -502,6 +523,18 @@ int config_get(uint16_t key, void *value, size_t len)
     case CONFIG_KEY_STA_PSK:
         if (len >= sizeof(ctx->config.sta_psk)) {
             memcpy(value, ctx->config.sta_psk, sizeof(ctx->config.sta_psk));
+            return 0;
+        }
+        break;
+    case CONFIG_KEY_UPLOAD_HOST:
+        if (len >= sizeof(ctx->config.upload_host)) {
+            memcpy(value, ctx->config.upload_host, sizeof(ctx->config.upload_host));
+            return 0;
+        }
+        break;
+    case CONFIG_KEY_UPLOAD_PORT:
+        if (len == sizeof(uint16_t)) {
+            *(uint16_t *)value = ctx->config.upload_port;
             return 0;
         }
         break;
@@ -737,6 +770,35 @@ const char *config_get_sta_psk(void)
 bool config_has_sta_credentials(void)
 {
     return clip_get_context()->config.sta_ssid[0] != '\0';
+}
+
+int config_set_upload_endpoint(const char *host, uint16_t port)
+{
+    int ret;
+
+    if (!host || host[0] == '\0' || port == 0) {
+        return -EINVAL;
+    }
+    if (strlen(host) > 15) {
+        return -EINVAL;
+    }
+
+    ret = config_set(CONFIG_KEY_UPLOAD_HOST, host, strlen(host));
+    if (ret) {
+        return ret;
+    }
+
+    return config_set(CONFIG_KEY_UPLOAD_PORT, &port, sizeof(port));
+}
+
+const char *config_get_upload_host(void)
+{
+    return clip_get_context()->config.upload_host;
+}
+
+uint16_t config_get_upload_port(void)
+{
+    return clip_get_context()->config.upload_port;
 }
 
 int config_set_device_name(const char *name)

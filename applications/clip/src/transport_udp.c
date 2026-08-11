@@ -581,6 +581,36 @@ void transport_udp_update_client_addr(const struct sockaddr *addr, socklen_t len
     }
 }
 
+int transport_udp_set_peer(const char *ip, uint16_t port)
+{
+    struct sockaddr_in addr = {0};
+
+    if (!ip || ip[0] == '\0' || port == 0) {
+        return -EINVAL;
+    }
+
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(port);
+    if (zsock_inet_pton(AF_INET, ip, &addr.sin_addr) != 1) {
+        return -EINVAL;
+    }
+
+    /* In AP mode the peer is learned from whoever talks to us first. In station
+     * mode nobody talks first — the device is the one pushing files out — so the
+     * destination has to be set explicitly. */
+    k_mutex_lock(&udp_mutex, K_FOREVER);
+    memcpy(&udp_client_addr, &addr, sizeof(addr));
+    udp_client_len = sizeof(addr);
+    k_mutex_unlock(&udp_mutex);
+
+    transport_udp_update_active(true);
+    update_activity();
+
+    LOG_WRN("UDP peer set to %s:%u", ip, port);
+
+    return 0;
+}
+
 void transport_udp_notify_file_ack(uint8_t result, const uint8_t *bitmap,
 				   uint16_t bitmap_len, uint16_t total_seqs)
 {

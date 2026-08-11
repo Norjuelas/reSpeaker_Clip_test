@@ -178,6 +178,19 @@ void transport_udp_update_active(bool active);
 void transport_udp_update_client_addr(const struct sockaddr *addr, socklen_t len);
 
 /**
+ * @brief Point the transport at a fixed destination
+ *
+ * In AP mode the peer is whoever contacts us first. In station mode the device
+ * initiates, so the destination must be set explicitly — the address of the
+ * upload service on the network.
+ *
+ * @param ip   Destination IPv4, dotted quad
+ * @param port Destination UDP port
+ * @return 0 on success, -EINVAL if the address or port is not usable
+ */
+int transport_udp_set_peer(const char *ip, uint16_t port);
+
+/**
  * @brief Notify FILE_ACK received (called from wifi_udp server thread)
  *
  * Signals the send thread that file verification result has arrived.

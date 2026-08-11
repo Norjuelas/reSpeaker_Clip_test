@@ -78,6 +78,8 @@ struct clip_context {
         char wifi_reg_domain[3];    /* WiFi regulatory domain (2 chars + NUL, default "US") */
         char sta_ssid[33];          /* WiFi STA: network to join (32 chars + NUL) */
         char sta_psk[65];           /* WiFi STA: WPA2 passphrase or 64-hex PSK (+ NUL) */
+        char upload_host[16];       /* Upload service IPv4, dotted quad (+ NUL) */
+        uint16_t upload_port;       /* Upload service UDP port */
     } config;
 
     /* Status */

@@ -1896,6 +1896,119 @@ static int cmd_sta_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
     }
 }
 
+static int cmd_upcfg_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
+{
+    /*
+     * AT+UPCFG="192.168.2.5",8089  - Where to push recordings
+     * AT+UPCFG?                    - Query
+     */
+
+    if (ctx->type == AT_CMD_TYPE_SET || ctx->type == AT_CMD_TYPE_EXEC) {
+        char host[16];
+        const char *cursor;
+        int port;
+        int ret;
+
+        if (!ctx->args || strlen(ctx->args) == 0) {
+            return create_json_response(false, "usage: AT+UPCFG=\"ip\",port",
+                                        NULL, response, len);
+        }
+
+        cursor = ctx->args;
+        ret = parse_quoted(&cursor, host, sizeof(host));
+        if (ret == -E2BIG) {
+            return create_json_response(false, "Address too long (IPv4 only)",
+                                        NULL, response, len);
+        }
+        if (ret) {
+            return create_json_response(false, "usage: AT+UPCFG=\"ip\",port",
+                                        NULL, response, len);
+        }
+
+        while (*cursor == ' ') {
+            cursor++;
+        }
+        if (*cursor != ',') {
+            return create_json_response(false, "Missing port", NULL, response, len);
+        }
+        port = atoi(cursor + 1);
+        if (port <= 0 || port > 65535) {
+            return create_json_response(false, "Port must be 1-65535", NULL, response, len);
+        }
+
+        ret = config_set_upload_endpoint(host, (uint16_t)port);
+        if (ret) {
+            return create_json_response(false, "Invalid address", NULL, response, len);
+        }
+
+        char data[64];
+        snprintf(data, sizeof(data), "{\"host\":\"%s\",\"port\":%d}", host, port);
+        return create_json_response(true, "Saved", data, response, len);
+    } else {
+        char data[64];
+        snprintf(data, sizeof(data), "{\"host\":\"%s\",\"port\":%u}",
+                 config_get_upload_host(), config_get_upload_port());
+        return create_json_response(true, NULL, data, response, len);
+    }
+}
+
+static int cmd_upload_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
+{
+    /*
+     * AT+UPLOAD=<session_id>  - Push a session to the configured service
+     *
+     * Same transfer engine as AT+DOWNLOAD (CRC32, retries, selective repeat);
+     * what changes is who initiates and where the frames go. In AP mode the
+     * peer is whoever connected to us; here we aim at a service on the network.
+     */
+
+    struct transport *tp;
+    char session_id[64];
+    int ret;
+
+    if (!ctx->args || ctx->args[0] == '\0') {
+        return create_json_response(false, "Missing session_id", NULL, response, len);
+    }
+
+    if (!wifi_sta_is_connected()) {
+        return create_json_response(false, "Not on a network — run AT+STA=on first",
+                                    NULL, response, len);
+    }
+
+    if (config_get_upload_host()[0] == '\0' || config_get_upload_port() == 0) {
+        return create_json_response(false, "No upload endpoint — run AT+UPCFG first",
+                                    NULL, response, len);
+    }
+
+    if (transfer_is_active()) {
+        return create_json_response(false, "A transfer is already running",
+                                    NULL, response, len);
+    }
+
+    strncpy(session_id, ctx->args, sizeof(session_id) - 1);
+    session_id[sizeof(session_id) - 1] = '\0';
+
+    ret = transport_udp_set_peer(config_get_upload_host(), config_get_upload_port());
+    if (ret) {
+        return create_json_response(false, "Bad upload endpoint", NULL, response, len);
+    }
+
+    tp = transport_get(TRANSPORT_TYPE_UDP);
+    if (!tp) {
+        return create_json_response(false, "UDP transport unavailable", NULL, response, len);
+    }
+
+    ret = transfer_start(session_id, NULL, tp);
+    if (ret) {
+        return create_json_response(false, "Failed to start upload", NULL, response, len);
+    }
+
+    char data[160];
+    snprintf(data, sizeof(data), "{\"state\":\"uploading\",\"session\":\"%s\",\"to\":\"%s:%u\"}",
+             session_id, config_get_upload_host(), config_get_upload_port());
+    return create_json_response(true, NULL, data, response, len);
+}
+
 static int cmd_usb_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
 {
     if (ctx->type == AT_CMD_TYPE_SET || ctx->type == AT_CMD_TYPE_EXEC) {
@@ -2200,6 +2313,24 @@ int at_commands_register(void)
         .handler = cmd_stacfg_handler,
     };
     err = at_server_register_cmd(&stacfg_cmd);
+    if (err) return err;
+
+    /* UPCFG - Address of the upload service */
+    static const struct at_command upcfg_cmd = {
+        .name = "UPCFG",
+        .flags = AT_CMD_SET | AT_CMD_QUERY,
+        .handler = cmd_upcfg_handler,
+    };
+    err = at_server_register_cmd(&upcfg_cmd);
+    if (err) return err;
+
+    /* UPLOAD - Push a session to that service */
+    static const struct at_command upload_cmd = {
+        .name = "UPLOAD",
+        .flags = AT_CMD_SET,
+        .handler = cmd_upload_handler,
+    };
+    err = at_server_register_cmd(&upload_cmd);
     if (err) return err;
 
     /* STA - Join/leave that network */
