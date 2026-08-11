@@ -84,32 +84,21 @@ lfs_storage:
   device: DT_CHOSEN(nordic_pm_ext_flash)
   region: external_flash
 
-# nRF70 WiFi FW patch relocated to external flash as MCUboot image 2 -- keeps the
-# ~87KB patch out of the internal app image (CONFIG_NRF_WIFI_PATCHES_EXT_FLASH_STORE
-# + SB_CONFIG_WIFI_PATCHES_EXT_FLASH_STORE). Layout mirrors the Nordic nRF7002
-# reference pm_static: a 0x200 mcuboot pad + the 128KB patch form primary_2, with
-# an equal-size secondary_2 OTA staging slot. 64KB-aligned for the 64KB erase page.
-nrf70_wifi_fw_mcuboot_pad:
-  address: 0x7a0000
-  size: 0x200
-  device: DT_CHOSEN(nordic_pm_ext_flash)
-  region: external_flash
+# nRF70 WiFi FW patch in external flash, NOT as an MCUboot image.
+#
+# The obvious route (SB_CONFIG_WIFI_PATCHES_EXT_FLASH_STORE) turns this into
+# MCUboot image 2, which needs MCUBOOT_UPDATEABLE_IMAGES=3 — and the bootloader
+# already flashed on every device only handles 2. Updating it needs SWD, and the
+# case is sealed. See Doc 07.
+#
+# But nrf70_fw_ext reads the patch with plain flash_area_read() on
+# FIXED_PARTITION_ID(nrf70_fw_partition). Nothing requires that partition to be
+# an MCUboot image — that only governs how it gets *updated*. So the partition
+# stays and the MCUboot wrapper goes away: the app provisions the contents
+# itself from the SD card (see nrf70_fw_provision.c), which frees ~87KB of
+# internal flash on hardware we cannot reflash.
 nrf70_wifi_fw:
-  address: 0x7a0200
-  size: 0x20000
-  device: DT_CHOSEN(nordic_pm_ext_flash)
-  region: external_flash
-mcuboot_primary_2:
-  orig_span: &id_nrf70
-  - nrf70_wifi_fw_mcuboot_pad
-  - nrf70_wifi_fw
-  span: *id_nrf70
   address: 0x7a0000
-  size: 0x30000
-  device: DT_CHOSEN(nordic_pm_ext_flash)
-  region: external_flash
-mcuboot_secondary_2:
-  address: 0x7d0000
-  size: 0x30000
+  size: 0x20000
   device: DT_CHOSEN(nordic_pm_ext_flash)
   region: external_flash

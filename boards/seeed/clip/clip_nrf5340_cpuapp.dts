@@ -336,15 +336,18 @@
 				reg = <0x00130000 0x00670000>;
 			};
 
-			/* nRF70 WiFi FW patch stored in external flash so the ~87KB
-			 * patch is not linked into the internal app image. Read in
-			 * chunks to the nRF70 at WiFi init. Address/size mirror the
-			 * nrf70_wifi_fw region in pm_static (MCUboot image 2 primary,
-			 * after the 0x200 mcuboot pad at 0x7a0000).
+			/* nRF70 WiFi FW patch in external flash, keeping the ~87KB
+			 * patch out of the internal app image. Read in chunks to the
+			 * nRF70 at WiFi init.
+			 *
+			 * Deliberately NOT an MCUboot image: the bootloader in the
+			 * field only handles 2 and cannot be updated without SWD. The
+			 * app writes this partition itself from the SD card. No
+			 * mcuboot pad, so it starts at the erase-block boundary.
 			 */
-			nrf70_wifi_fw_partition: nrf70_fw_partition: partition@7a0200 {
+			nrf70_wifi_fw_partition: nrf70_fw_partition: partition@7a0000 {
 				label = "nrf70-wifi-fw";
-				reg = <0x007A0200 0x00020000>;
+				reg = <0x007A0000 0x00020000>;
 			};
 		};
 	};

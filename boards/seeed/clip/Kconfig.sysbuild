@@ -31,10 +31,28 @@ choice MCUBOOT_MODE
 endchoice
 
 # Dual-image update: application core + network core, staged in external flash.
-# When the nRF70 FW patch is relocated to external flash it becomes a third
-# MCUboot-managed image, so bump the count in that configuration.
+#
+# Stays at 2 even when the nRF70 patch lives in external flash. Bumping it to 3
+# produces images the deployed bootloader rejects (MGMT_ERR_EINVAL on upload),
+# and MCUboot itself cannot be replaced over USB — only over SWD, which the
+# sealed enclosure does not expose. The patch partition is provisioned by the
+# application instead of being an MCUboot-managed image.
+# Break the chain that would force a third MCUboot image.
+#
+# NCS derives it: WIFI_PATCHES_EXT_FLASH_STORE sets
+# MCUBOOT_WIFI_PATCHES_HAS_UPDATE_SLOT, which sets MIN_UPDATEABLE_IMAGES to 3,
+# which becomes a *range* on UPDATEABLE_IMAGES — so a plain default of 2 gets
+# clamped back up to 3.
+#
+# That coupling assumes the patch partition must be updateable through MCUboot.
+# Here it is not: the bootloader already programmed on every unit handles two
+# images and cannot be replaced without SWD, so the application provisions the
+# partition itself from the SD card. Clearing the intermediate symbol keeps the
+# patch out of the internal image while leaving MCUboot at two.
+config MCUBOOT_WIFI_PATCHES_HAS_UPDATE_SLOT
+	default n
+
 config MCUBOOT_UPDATEABLE_IMAGES
-	default 3 if WIFI_PATCHES_EXT_FLASH_STORE
 	default 2
 config MCUBOOT_NRF53_MULTI_IMAGE_UPDATE
 	default y
