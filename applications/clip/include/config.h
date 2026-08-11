@@ -21,6 +21,8 @@
 #define CONFIG_KEY_DEVICE_NAME   0x0C
 #define CONFIG_KEY_WIFI_CHANNEL  0x0D
 #define CONFIG_KEY_WIFI_REG_DOMAIN 0x0E
+#define CONFIG_KEY_STA_SSID      0x0F
+#define CONFIG_KEY_STA_PSK       0x10
 
 
 /**
@@ -218,6 +220,39 @@ int config_set_wifi_reg_domain(const char *reg_domain);
  * @return 2-letter country code string
  */
 const char *config_get_wifi_reg_domain(void);
+
+/**
+ * @brief Store the credentials of the network to join in station mode
+ *
+ * Persisted to LittleFS, so they survive a reboot and an OTA.
+ *
+ * @param ssid Network name, 1-32 chars. Required.
+ * @param psk  WPA2 passphrase (8-63 chars) or 64-char hex PSK. NULL or empty
+ *             for an open network.
+ * @return 0 on success, negative error code on failure
+ */
+int config_set_sta_credentials(const char *ssid, const char *psk);
+
+/**
+ * @brief Get the configured station-mode SSID
+ *
+ * @return SSID string, empty if never configured
+ */
+const char *config_get_sta_ssid(void);
+
+/**
+ * @brief Get the configured station-mode passphrase
+ *
+ * @return Passphrase string, empty for an open network
+ */
+const char *config_get_sta_psk(void);
+
+/**
+ * @brief Whether station-mode credentials have been configured
+ *
+ * @return true if an SSID is stored
+ */
+bool config_has_sta_credentials(void);
 
 /**
  * @brief Arm/disarm the settings_load watchdog

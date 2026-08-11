@@ -76,6 +76,8 @@ struct clip_context {
         char device_name[257];      /* User-defined device name (256 bytes + NUL) */
         uint8_t wifi_channel;       /* WiFi AP channel (default 36) */
         char wifi_reg_domain[3];    /* WiFi regulatory domain (2 chars + NUL, default "US") */
+        char sta_ssid[33];          /* WiFi STA: network to join (32 chars + NUL) */
+        char sta_psk[65];           /* WiFi STA: WPA2 passphrase or 64-hex PSK (+ NUL) */
     } config;
 
     /* Status */

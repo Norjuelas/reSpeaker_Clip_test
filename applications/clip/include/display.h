@@ -84,7 +84,7 @@ struct display_status {
 	bool battery_charging;         /**< Battery charging status */
 	bool ble_connected;            /**< BLE connected */
 	bool wifi_running;             /**< WiFi AP running */
-	bool wifi_sta_connected;       /**< WiFi station (client) connected */
+	bool wifi_ap_has_client;       /**< A client is associated to our AP */
 	uint32_t free_space_mb;        /**< Free storage space in MB */
 	bool transferring;             /**< File transfer in progress */
 };

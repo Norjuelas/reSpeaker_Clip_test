@@ -1627,7 +1627,7 @@ int display_update_status(const struct display_status *status)
 
 	/* Update WiFi and storage info */
 	g_status.wifi_running = wifi_ap_is_running();
-	g_status.wifi_sta_connected = wifi_is_sta_connected();
+	g_status.wifi_ap_has_client = wifi_ap_has_client();
 	struct clip_context *ctx = clip_get_context();
 	g_status.free_space_mb = ctx->status.free_space / 1024;
 	g_status.free_space_mb = g_status.free_space_mb > 0 ? g_status.free_space_mb : 0;

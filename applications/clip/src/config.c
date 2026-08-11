@@ -30,6 +30,8 @@ LOG_MODULE_REGISTER(config, CONFIG_CLIP_LOG_LEVEL);
 #define SETTING_DEVICE_NAME     "config/device_name"
 #define SETTING_WIFI_CHANNEL    "config/wifi_channel"
 #define SETTING_WIFI_REG_DOMAIN "config/wifi_reg_domain"
+#define SETTING_STA_SSID        "config/sta_ssid"
+#define SETTING_STA_PSK         "config/sta_psk"
 #define SETTING_TIME_UNIX       "time/unix_timestamp"
 
 /* settings_load is normally <100 ms. A corrupt settings file (typically
@@ -57,6 +59,8 @@ static const struct config_entry config_table[] = {
     { SETTING_DEVICE_NAME,      offsetof(struct clip_config, device_name),      sizeof(char[257]) },
     { SETTING_WIFI_CHANNEL,     offsetof(struct clip_config, wifi_channel),     sizeof(uint8_t) },
     { SETTING_WIFI_REG_DOMAIN,  offsetof(struct clip_config, wifi_reg_domain), sizeof(char[3]) },
+    { SETTING_STA_SSID,         offsetof(struct clip_config, sta_ssid),        sizeof(char[33]) },
+    { SETTING_STA_PSK,          offsetof(struct clip_config, sta_psk),         sizeof(char[65]) },
 };
 
 #define CONFIG_TABLE_SIZE (sizeof(config_table) / sizeof(config_table[0]))
@@ -318,6 +322,8 @@ static const char *key_to_setting(uint16_t key)
     case CONFIG_KEY_DEVICE_NAME:   return SETTING_DEVICE_NAME;
     case CONFIG_KEY_WIFI_CHANNEL:    return SETTING_WIFI_CHANNEL;
     case CONFIG_KEY_WIFI_REG_DOMAIN: return SETTING_WIFI_REG_DOMAIN;
+    case CONFIG_KEY_STA_SSID:        return SETTING_STA_SSID;
+    case CONFIG_KEY_STA_PSK:         return SETTING_STA_PSK;
     default:                    return NULL;
     }
 }
@@ -395,6 +401,24 @@ int config_set(uint16_t key, const void *value, size_t len)
             ret = -EINVAL;
         }
         break;
+    case CONFIG_KEY_STA_SSID:
+        /* len 0 clears the credential (AT+STACFG with an empty SSID) */
+        if (len <= 32 && (value || len == 0)) {
+            memcpy(ctx->config.sta_ssid, value, len);
+            ctx->config.sta_ssid[len] = '\0';
+        } else {
+            ret = -EINVAL;
+        }
+        break;
+    case CONFIG_KEY_STA_PSK:
+        /* Empty means an open network; 8-63 is a passphrase, 64 a raw hex PSK */
+        if (len <= 64 && (value || len == 0)) {
+            memcpy(ctx->config.sta_psk, value, len);
+            ctx->config.sta_psk[len] = '\0';
+        } else {
+            ret = -EINVAL;
+        }
+        break;
     default:
         return -EINVAL;
     }
@@ -464,6 +488,20 @@ int config_get(uint16_t key, void *value, size_t len)
     case CONFIG_KEY_WIFI_CHANNEL:
         if (len == sizeof(uint8_t)) {
             *(uint8_t *)value = ctx->config.wifi_channel;
+            return 0;
+        }
+        break;
+    case CONFIG_KEY_STA_SSID:
+        /* memcpy, not strncpy: the guard above already proves the destination
+         * fits the whole array, NUL included. */
+        if (len >= sizeof(ctx->config.sta_ssid)) {
+            memcpy(value, ctx->config.sta_ssid, sizeof(ctx->config.sta_ssid));
+            return 0;
+        }
+        break;
+    case CONFIG_KEY_STA_PSK:
+        if (len >= sizeof(ctx->config.sta_psk)) {
+            memcpy(value, ctx->config.sta_psk, sizeof(ctx->config.sta_psk));
             return 0;
         }
         break;
@@ -665,6 +703,40 @@ const char *config_get_wifi_password(void)
     }
 
     return ctx->config.wifi_password;
+}
+
+int config_set_sta_credentials(const char *ssid, const char *psk)
+{
+    int ret;
+
+    if (!ssid) {
+        return -EINVAL;
+    }
+    if (strlen(ssid) > 32 || (psk && strlen(psk) > 64)) {
+        return -EINVAL;
+    }
+
+    ret = config_set(CONFIG_KEY_STA_SSID, ssid, strlen(ssid));
+    if (ret) {
+        return ret;
+    }
+
+    return config_set(CONFIG_KEY_STA_PSK, psk ? psk : "", psk ? strlen(psk) : 0);
+}
+
+const char *config_get_sta_ssid(void)
+{
+    return clip_get_context()->config.sta_ssid;
+}
+
+const char *config_get_sta_psk(void)
+{
+    return clip_get_context()->config.sta_psk;
+}
+
+bool config_has_sta_credentials(void)
+{
+    return clip_get_context()->config.sta_ssid[0] != '\0';
 }
 
 int config_set_device_name(const char *name)

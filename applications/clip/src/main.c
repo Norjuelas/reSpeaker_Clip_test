@@ -261,6 +261,18 @@ int clip_init(void)
         LOG_WRN("USB init failed: %d", err);
     }
 
+#ifdef CONFIG_CLIP_USB_AT_AT_BOOT
+    /* Bring the USB AT channel up without waiting for AT+USB=on, which only
+     * arrives over BLE. A lost bond otherwise leaves no way in at all: the
+     * bootloader has no BLE, the app has no console under the production
+     * snippet, and the SD logs need an AT command to enable. A cable is the
+     * one link that always works. */
+    err = usb_cdc_enable();
+    if (err) {
+        LOG_WRN("USB AT channel not enabled: %d", err);
+    }
+#endif
+
     /* Initialize transfer subsystem */
     err = transfer_init();
     if (err) {
@@ -281,6 +293,19 @@ int clip_init(void)
         LOG_WRN("WiFi UDP init failed: %d", err);
         /* Continue anyway - UDP is optional */
     }
+
+#ifdef CONFIG_CLIP_STA_AUTOCONNECT
+    /* Join the stored network without waiting to be told. Otherwise reaching
+     * the network requires AT+STA=on over BLE, so a broken bond takes WiFi
+     * down with it — and the credentials are already on disk. Non-blocking:
+     * association plus DHCP runs on its own work queue. */
+    if (config_has_sta_credentials()) {
+        err = wifi_sta_connect_async_delayed(CONFIG_CLIP_STA_AUTOCONNECT_DELAY_MS);
+        if (err) {
+            LOG_WRN("STA autoconnect not scheduled: %d", err);
+        }
+    }
+#endif
 
     /* Register AT commands BEFORE starting server thread */
     err = at_commands_register();

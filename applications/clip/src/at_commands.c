@@ -1648,7 +1648,7 @@ static int cmd_wifi_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
             snprintf(data, sizeof(data),
                      "{\"running\":true,\"ssid\":\"%s\",\"password\":\"%s\",\"ip\":\"%s\",\"port\":%d,\"connected\":%s}",
                      wifi_get_ssid(), wifi_get_password(), wifi_get_ip_address(), WIFI_AP_UDP_PORT,
-                     wifi_is_sta_connected() ? "true" : "false");
+                     wifi_ap_has_client() ? "true" : "false");
         } else {
             snprintf(data, sizeof(data), "{\"running\":false}");
         }
@@ -1707,6 +1707,191 @@ static int cmd_wificfg_handler(struct at_cmd_ctx *ctx, char *response, size_t le
         char data[64];
         snprintf(data, sizeof(data), "{\"channel\":%u,\"reg_domain\":\"%s\"}",
                  config_get_wifi_channel(), config_get_wifi_reg_domain());
+        return create_json_response(true, NULL, data, response, len);
+    }
+}
+
+/**
+ * Extract one quoted field, advancing *cursor past it.
+ *
+ * Quoting (rather than the channel:CC style used by AT+WIFICFG) because an
+ * SSID may legally contain spaces, colons and commas.
+ */
+static int parse_quoted(const char **cursor, char *out, size_t out_size)
+{
+    const char *p = *cursor;
+    size_t n = 0;
+
+    while (*p == ' ') {
+        p++;
+    }
+    if (*p != '"') {
+        return -EINVAL;
+    }
+    p++;
+
+    while (*p && *p != '"') {
+        if (n + 1 >= out_size) {
+            return -E2BIG;
+        }
+        out[n++] = *p++;
+    }
+    if (*p != '"') {
+        return -EINVAL;  /* unterminated */
+    }
+
+    out[n] = '\0';
+    *cursor = p + 1;
+
+    return 0;
+}
+
+static int cmd_stacfg_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
+{
+    /*
+     * AT+STACFG="ssid","passphrase"  - Store credentials of the network to join
+     * AT+STACFG="ssid"               - Open network (no passphrase)
+     * AT+STACFG?                     - Query (never returns the passphrase)
+     */
+
+    if (ctx->type == AT_CMD_TYPE_SET || ctx->type == AT_CMD_TYPE_EXEC) {
+        char ssid[33];
+        char psk[65] = "";
+        const char *cursor;
+        int ret;
+
+        if (!ctx->args || strlen(ctx->args) == 0) {
+            return create_json_response(false, "usage: AT+STACFG=\"ssid\",\"psk\"",
+                                        NULL, response, len);
+        }
+
+        cursor = ctx->args;
+        ret = parse_quoted(&cursor, ssid, sizeof(ssid));
+        if (ret == -E2BIG) {
+            return create_json_response(false, "SSID too long (max 32)", NULL, response, len);
+        }
+        if (ret) {
+            return create_json_response(false, "usage: AT+STACFG=\"ssid\",\"psk\"",
+                                        NULL, response, len);
+        }
+        if (ssid[0] == '\0') {
+            return create_json_response(false, "SSID cannot be empty", NULL, response, len);
+        }
+
+        while (*cursor == ' ') {
+            cursor++;
+        }
+        if (*cursor == ',') {
+            cursor++;
+            ret = parse_quoted(&cursor, psk, sizeof(psk));
+            if (ret == -E2BIG) {
+                return create_json_response(false, "Passphrase too long (max 64)",
+                                            NULL, response, len);
+            }
+            if (ret) {
+                return create_json_response(false, "usage: AT+STACFG=\"ssid\",\"psk\"",
+                                            NULL, response, len);
+            }
+        }
+
+        /* WPA2 requires 8-63 chars, or exactly 64 for a raw hex PSK. Catching
+         * it here beats a mystifying association failure 20 seconds later. */
+        size_t psk_len = strlen(psk);
+        if (psk_len > 0 && (psk_len < 8 || psk_len > 64)) {
+            return create_json_response(false, "Passphrase must be 8-63 chars (or 64-hex PSK)",
+                                        NULL, response, len);
+        }
+
+        ret = config_set_sta_credentials(ssid, psk);
+        if (ret) {
+            return create_json_response(false, "Failed to save credentials", NULL, response, len);
+        }
+
+        char data[64];
+        snprintf(data, sizeof(data), "{\"ssid\":\"%s\",\"secured\":%s}",
+                 ssid, psk_len > 0 ? "true" : "false");
+        return create_json_response(true, "Saved (use AT+STA=on to connect)", data, response, len);
+    } else {
+        /* Query — deliberately omits the passphrase */
+        char data[64];
+        snprintf(data, sizeof(data), "{\"ssid\":\"%s\",\"secured\":%s}",
+                 config_get_sta_ssid(),
+                 config_get_sta_psk()[0] != '\0' ? "true" : "false");
+        return create_json_response(true, NULL, data, response, len);
+    }
+}
+
+static int cmd_sta_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
+{
+    /*
+     * AT+STA=on   - Join the configured network (async, watch the "sta" event)
+     * AT+STA=off  - Leave the network
+     * AT+STA?     - Query state and IP address
+     */
+
+    if (ctx->type == AT_CMD_TYPE_SET || ctx->type == AT_CMD_TYPE_EXEC) {
+        char arg[16];
+
+        if (!ctx->args || strlen(ctx->args) == 0) {
+            return create_json_response(false, "Missing argument (on/off)", NULL, response, len);
+        }
+
+        strncpy(arg, ctx->args, sizeof(arg) - 1);
+        arg[sizeof(arg) - 1] = '\0';
+        for (char *p = arg; *p; p++) {
+            if (*p >= 'A' && *p <= 'Z') {
+                *p = *p - 'A' + 'a';
+            }
+        }
+
+        if (strcmp(arg, "on") == 0 || strcmp(arg, "1") == 0) {
+            /* Association plus DHCP can take half a minute, far too long to
+             * hold the AT channel. Kick it off and report via the sta event. */
+            int ret = wifi_sta_connect_async();
+
+            if (ret == -ENOENT) {
+                return create_json_response(false, "No credentials — run AT+STACFG first",
+                                            NULL, response, len);
+            }
+            if (ret == -EALREADY) {
+                char data[64];
+                snprintf(data, sizeof(data), "{\"state\":\"connected\",\"ip\":\"%s\"}",
+                         wifi_sta_get_ip());
+                return create_json_response(true, NULL, data, response, len);
+            }
+            if (ret) {
+                return create_json_response(false, "Failed to start connection",
+                                            NULL, response, len);
+            }
+
+            char data[96];
+            snprintf(data, sizeof(data), "{\"state\":\"connecting\",\"ssid\":\"%s\"}",
+                     config_get_sta_ssid());
+            return create_json_response(true, "Connecting (watch the sta event)", data,
+                                        response, len);
+
+        } else if (strcmp(arg, "off") == 0 || strcmp(arg, "0") == 0) {
+            if (wifi_sta_off()) {
+                return create_json_response(false, "Failed to disconnect", NULL, response, len);
+            }
+            return create_json_response(true, NULL, "{\"state\":\"off\"}", response, len);
+
+        } else {
+            return create_json_response(false, "Invalid argument (use on/off)",
+                                        NULL, response, len);
+        }
+    } else {
+        char data[128];
+
+        if (wifi_sta_is_connected()) {
+            snprintf(data, sizeof(data), "{\"state\":\"connected\",\"ssid\":\"%s\",\"ip\":\"%s\"}",
+                     config_get_sta_ssid(), wifi_sta_get_ip());
+        } else {
+            snprintf(data, sizeof(data),
+                     "{\"state\":\"off\",\"ssid\":\"%s\",\"reg\":\"%s\",\"last_error\":\"%s\"}",
+                     config_get_sta_ssid(), config_get_wifi_reg_domain(),
+                     wifi_sta_get_fail_reason());
+        }
         return create_json_response(true, NULL, data, response, len);
     }
 }
@@ -2006,6 +2191,24 @@ int at_commands_register(void)
         .handler = cmd_wificfg_handler,
     };
     err = at_server_register_cmd(&wificfg_cmd);
+    if (err) return err;
+
+    /* STACFG - Credentials of the network to join in station mode */
+    static const struct at_command stacfg_cmd = {
+        .name = "STACFG",
+        .flags = AT_CMD_SET | AT_CMD_QUERY,
+        .handler = cmd_stacfg_handler,
+    };
+    err = at_server_register_cmd(&stacfg_cmd);
+    if (err) return err;
+
+    /* STA - Join/leave that network */
+    static const struct at_command sta_cmd = {
+        .name = "STA",
+        .flags = AT_CMD_SET | AT_CMD_QUERY | AT_CMD_EXEC,
+        .handler = cmd_sta_handler,
+    };
+    err = at_server_register_cmd(&sta_cmd);
     if (err) return err;
 
     /* NAME - Set/Get device name */

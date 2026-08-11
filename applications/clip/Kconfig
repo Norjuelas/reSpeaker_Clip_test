@@ -428,4 +428,45 @@ config CLIP_DEBUG_STATS
 	help
 	  Print thread stack usage and heap stats every 10 seconds.
 
+config CLIP_STA_AUTOCONNECT
+	bool "Join the stored WiFi network at boot"
+	depends on NRF70_STA_MODE
+	default y
+	help
+	  When station credentials are stored (AT+STACFG), try to join that
+	  network during startup instead of waiting for AT+STA=on.
+
+	  Keeps WiFi reachable when BLE is unavailable — a broken bond would
+	  otherwise make the network unreachable, since AT+STA=on only arrives
+	  over BLE. Also lets the device be found with an IP scanner after a
+	  plain power-up.
+
+	  Costs power: the radio comes up on every boot. Turn off for
+	  battery-sensitive production builds.
+
+config CLIP_USB_AT_AT_BOOT
+	bool "Enable the USB AT channel at boot"
+	default n
+	help
+	  Bring up USB CDC ACM during startup instead of waiting for AT+USB=on.
+
+	  AT+USB=on can only arrive over BLE, so a lost bond locks you out of the
+	  device entirely: MCUboot has no BLE, the production snippet has no UART
+	  console, and turning on the SD logs itself needs an AT command. With
+	  this enabled a plain USB cable is always a way in.
+
+	  Costs idle current (USB stays enumerated) — development builds only.
+
+config CLIP_STA_AUTOCONNECT_DELAY_MS
+	int "Delay before the boot-time WiFi join, in milliseconds"
+	depends on CLIP_STA_AUTOCONNECT
+	default 10000
+	help
+	  Wait this long after startup before bringing the radio up.
+
+	  Not cosmetic: powering the nRF70 allocates ~60KB of heap, and doing it
+	  while the rest of the system is still initialising hung the device mid
+	  boot animation. The delay lets startup finish first. Lower it only if
+	  you have verified the device still boots reliably.
+
 endif # CLIP
