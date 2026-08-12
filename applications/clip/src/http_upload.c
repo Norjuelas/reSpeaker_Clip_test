@@ -7,8 +7,9 @@
  *
  * Plain HTTP for now. The audio is conversation recordings, so shipping this to
  * devices in the field without TLS is not defensible — see Doc 13 for the fleet
- * CA and mTLS plan. The room for TLS already exists: the nRF70 firmware moving
- * out of the image left ~52KB free, and TLS measures ~45KB.
+ * CA and mTLS plan. Room is tight: the nRF70 firmware moving out of the image
+ * freed ~52KB, but the HTTP client and TCP took most of it back. 27KB are left
+ * against the ~45KB a default TLS build costs, so it has to be trimmed.
  *
  * Streams straight from the SD card. A recording is a few hundred KB and there
  * is no RAM to buffer one whole.
@@ -261,4 +262,284 @@ out:
 	fs_close(&file);
 
 	return ret;
+}
+
+/* A POST whose body is already in memory. The audio path streams from the SD
+ * card because a recording does not fit in RAM; a health snapshot is 400 bytes
+ * and does not need any of that machinery. */
+int http_post_json(const char *url, const char *body, size_t body_len)
+{
+	const char *host = config_get_upload_host();
+	uint16_t port = config_get_upload_port();
+	struct http_request req = {0};
+	struct upload_ctx ctx = {0};
+	uint8_t *recv_buf;
+	char len_hdr[32];
+	char dev_hdr[64];
+	int sock;
+	int ret;
+
+	if (!url || !body || body_len == 0) {
+		return -EINVAL;
+	}
+	if (host[0] == '\0' || port == 0) {
+		return -ENOENT;
+	}
+	if (!wifi_sta_is_connected()) {
+		return -ENETDOWN;
+	}
+
+	recv_buf = k_malloc(RECV_BUF_SIZE);
+	if (!recv_buf) {
+		return -ENOMEM;
+	}
+
+	sock = connect_to_endpoint(host, port);
+	if (sock < 0) {
+		k_free(recv_buf);
+		return sock;
+	}
+
+	snprintf(len_hdr, sizeof(len_hdr), "Content-Length: %u\r\n",
+		 (unsigned int)body_len);
+	snprintf(dev_hdr, sizeof(dev_hdr), "X-Device-Id: %s\r\n", get_device_id());
+
+	const char *headers[] = { len_hdr, dev_hdr, NULL };
+
+	req.method = HTTP_POST;
+	req.url = url;
+	req.host = host;
+	req.protocol = "HTTP/1.1";
+	req.header_fields = headers;
+	req.content_type_value = "application/json";
+	req.payload = body;
+	req.payload_len = body_len;
+	req.response = response_cb;
+	req.recv_buf = recv_buf;
+	req.recv_buf_len = RECV_BUF_SIZE;
+
+	ret = http_client_req(sock, &req, HTTP_TIMEOUT_MS, &ctx);
+	if (ret >= 0 && (!ctx.done || ctx.status < 200 || ctx.status > 299)) {
+		ret = -EIO;
+	} else if (ret >= 0) {
+		ret = 0;
+	}
+
+	zsock_close(sock);
+	k_free(recv_buf);
+
+	return ret;
+}
+
+/* ------------------------------------------------------------------------
+ * The upload thread
+ *
+ * A session upload used to run straight on the AT server thread, which meant
+ * the command channel was held for the whole transfer. Two seconds with the
+ * test files, but a real session is minutes — and the channel is also how you
+ * ask the device what is going on when it misbehaves. TLS will make this worse
+ * (a handshake is seconds on its own), so the work moves here first.
+ * ------------------------------------------------------------------------ */
+
+/* 10KB, and the number is measured rather than argued.
+ *
+ * It was briefly cut to 6KB on the reasoning that this thread carries no
+ * command parser — the device went down on the first upload. Put back to the
+ * 8KB the AT thread had been doing the same work on, CONFIG_INIT_STACKS then
+ * reported 1164 bytes left over: peak use is ~7KB, so 6KB never had a chance
+ * and 8KB was running at 86%. The AT thread had been that close all along
+ * without anyone knowing.
+ *
+ * 10KB puts the margin near 30%, which matters because TLS goes on top of this
+ * same path and a handshake is not free. Re-read stack_free in AT+HTTPUP?
+ * after that lands rather than assuming this still holds. */
+#define UPLOAD_STACK_SIZE 10240
+#define UPLOAD_WQ_PRIORITY 6
+
+static K_THREAD_STACK_DEFINE(upload_stack, UPLOAD_STACK_SIZE);
+static struct k_work_q upload_wq;
+static struct k_work upload_work;
+static bool upload_wq_started;
+
+/* Guards everything below it. The AT thread reads this while the upload thread
+ * writes it. */
+static K_MUTEX_DEFINE(status_lock);
+static struct http_upload_status status;
+static char pending_session[STORAGE_SESSION_ID_LEN];
+
+static void status_set_state(enum http_upload_state st, int err)
+{
+	k_mutex_lock(&status_lock, K_FOREVER);
+	status.state = st;
+	status.last_error = err;
+	k_mutex_unlock(&status_lock);
+}
+
+static void record_stack_headroom(void)
+{
+#ifdef CONFIG_INIT_STACKS
+	size_t unused = 0;
+
+	if (k_thread_stack_space_get(&upload_wq.thread, &unused) != 0) {
+		return;
+	}
+
+	k_mutex_lock(&status_lock, K_FOREVER);
+	status.stack_free = unused;
+	k_mutex_unlock(&status_lock);
+
+	/* At WRN so it survives into the SD log on a production build. If this
+	 * ever reads low, it is the warning the last two overflows never gave. */
+	LOG_WRN("upload thread: %u of %u stack bytes still free",
+		(unsigned int)unused, (unsigned int)UPLOAD_STACK_SIZE);
+#endif /* CONFIG_INIT_STACKS */
+}
+
+static uint32_t count_session_files(const char *session_id)
+{
+	struct storage_session_info *sessions;
+	uint32_t count = 0;
+	int found;
+
+	/* From the heap, never the stack: MAX_SESSIONS is 100 and each entry is
+	 * ~56 bytes. On the stack this was a 5.6KB local that took the device
+	 * down. */
+	sessions = k_malloc(sizeof(*sessions) * CONFIG_CLIP_STORAGE_MAX_SESSIONS);
+	if (!sessions) {
+		return 0;
+	}
+
+	found = storage_list_sessions(sessions, CONFIG_CLIP_STORAGE_MAX_SESSIONS);
+	for (int i = 0; i < found; i++) {
+		if (strcmp(sessions[i].session_id, session_id) == 0) {
+			count = sessions[i].file_count;
+			break;
+		}
+	}
+
+	k_free(sessions);
+	return count;
+}
+
+static void upload_work_fn(struct k_work *work)
+{
+	char session_id[STORAGE_SESSION_ID_LEN];
+	uint32_t file_count;
+	int err = 0;
+
+	ARG_UNUSED(work);
+
+	k_mutex_lock(&status_lock, K_FOREVER);
+	strncpy(session_id, pending_session, sizeof(session_id) - 1);
+	session_id[sizeof(session_id) - 1] = '\0';
+	strncpy(status.session_id, session_id, sizeof(status.session_id) - 1);
+	status.files_done = 0;
+	status.bytes_sent = 0;
+	status.files_total = 0;
+	status.state = HTTP_UPLOAD_RUNNING;
+	status.last_error = 0;
+	k_mutex_unlock(&status_lock);
+
+	file_count = count_session_files(session_id);
+	if (file_count == 0) {
+		LOG_ERR("%s: unknown session, or it has no files", session_id);
+		status_set_state(HTTP_UPLOAD_FAILED, -ENOENT);
+		record_stack_headroom();
+		return;
+	}
+
+	k_mutex_lock(&status_lock, K_FOREVER);
+	status.files_total = file_count;
+	k_mutex_unlock(&status_lock);
+
+	for (uint32_t idx = 1; idx <= file_count; idx++) {
+		char path[128];
+		char name[32];
+		struct fs_dirent st;
+
+		if (storage_build_chunk_path(session_id, idx, path, sizeof(path)) != 0 ||
+		    fs_stat(path, &st) != 0) {
+			continue;
+		}
+
+		snprintf(name, sizeof(name), "%04u.opus", (unsigned int)idx);
+
+		err = http_upload_file(session_id, name, path, (size_t)st.size);
+		if (err) {
+			LOG_ERR("%s: file %u of %u failed: %d", session_id,
+				(unsigned int)idx, (unsigned int)file_count, err);
+			break;
+		}
+
+		k_mutex_lock(&status_lock, K_FOREVER);
+		status.files_done++;
+		status.bytes_sent += (uint32_t)st.size;
+		k_mutex_unlock(&status_lock);
+	}
+
+	status_set_state(err ? HTTP_UPLOAD_FAILED : HTTP_UPLOAD_DONE, err);
+	record_stack_headroom();
+
+	LOG_WRN("%s: %u of %u files sent%s", session_id,
+		(unsigned int)status.files_done, (unsigned int)file_count,
+		err ? " (stopped on error)" : "");
+}
+
+int http_upload_init(void)
+{
+	if (upload_wq_started) {
+		return 0;
+	}
+
+	k_work_queue_init(&upload_wq);
+	k_work_queue_start(&upload_wq, upload_stack,
+			   K_THREAD_STACK_SIZEOF(upload_stack),
+			   UPLOAD_WQ_PRIORITY, NULL);
+	k_thread_name_set(&upload_wq.thread, "http_upload");
+	k_work_init(&upload_work, upload_work_fn);
+	upload_wq_started = true;
+
+	return 0;
+}
+
+int http_upload_session_async(const char *session_id)
+{
+	if (!session_id || session_id[0] == '\0') {
+		return -EINVAL;
+	}
+	if (!upload_wq_started) {
+		return -ENODEV;
+	}
+	if (config_get_upload_host()[0] == '\0' || config_get_upload_port() == 0) {
+		return -ENOENT;
+	}
+	if (!wifi_sta_is_connected()) {
+		return -ENETDOWN;
+	}
+
+	k_mutex_lock(&status_lock, K_FOREVER);
+	if (status.state == HTTP_UPLOAD_RUNNING) {
+		k_mutex_unlock(&status_lock);
+		return -EBUSY;
+	}
+	strncpy(pending_session, session_id, sizeof(pending_session) - 1);
+	pending_session[sizeof(pending_session) - 1] = '\0';
+	/* Claimed here, not in the work item: otherwise two commands arriving
+	 * close together both see IDLE and both queue. */
+	status.state = HTTP_UPLOAD_RUNNING;
+	k_mutex_unlock(&status_lock);
+
+	k_work_submit_to_queue(&upload_wq, &upload_work);
+	return 0;
+}
+
+void http_upload_get_status(struct http_upload_status *out)
+{
+	if (!out) {
+		return;
+	}
+
+	k_mutex_lock(&status_lock, K_FOREVER);
+	*out = status;
+	k_mutex_unlock(&status_lock);
 }

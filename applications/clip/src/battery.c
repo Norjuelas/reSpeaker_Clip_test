@@ -10,7 +10,22 @@
 #include <zephyr/drivers/sensor/npm13xx_charger.h>
 #include <zephyr/drivers/gpio.h>
 #include <zephyr/drivers/mfd/npm13xx.h>
+#ifdef CONFIG_BT_BAS
 #include <zephyr/bluetooth/services/bas.h>
+#else
+/* El servicio de bateria BLE se va con el Bluetooth. Macros vacias en vez de
+ * seis #ifdef repartidos por read_and_update_locked(): la logica de la bateria
+ * y del cargador es la misma con radio o sin ella, y lo unico que sobra es
+ * anunciarla por GATT. */
+#define bt_bas_set_battery_level(pct)             ((void)(pct))
+#define bt_bas_bls_set_battery_charge_state(st)   ((void)(st))
+#define bt_bas_bls_set_battery_charge_type(ty)    ((void)(ty))
+#define BT_BAS_BLS_CHARGE_STATE_CHARGING             0
+#define BT_BAS_BLS_CHARGE_STATE_DISCHARGING_ACTIVE   0
+#define BT_BAS_BLS_CHARGE_TYPE_TRICKLE               0
+#define BT_BAS_BLS_CHARGE_TYPE_CONSTANT_VOLTAGE      0
+#define BT_BAS_BLS_CHARGE_TYPE_CONSTANT_CURRENT      0
+#endif
 #include <zephyr/logging/log.h>
 #include <zephyr/sys/crc.h>
 #include <nrf_fuel_gauge.h>

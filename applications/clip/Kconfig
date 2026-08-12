@@ -482,3 +482,26 @@ config CLIP_STA_AUTOCONNECT_DELAY_MS
 	  you have verified the device still boots reliably.
 
 endif # CLIP
+
+config CLIP_HEALTH_INTERVAL_S
+	int "Seconds between health heartbeats"
+	depends on NRF70_STA_MODE
+	default 300
+	range 30 3600
+	help
+	  How often the device POSTs its state to /health on the configured
+	  endpoint. Five minutes is a compromise: often enough that a panel
+	  showing 100 devices is not stale, rare enough that the radio is not
+	  waking constantly on a 170 mAh cell.
+
+	  Each beat is one short POST, so the cost is the radio wake-up rather
+	  than the bytes.
+
+config CLIP_HEALTH_AUTOSTART
+	bool "Start the heartbeat at boot"
+	depends on NRF70_STA_MODE
+	default y
+	help
+	  Begin beating as soon as there is a network and an endpoint, without
+	  waiting for AT+HEALTH=on. A device in the field has nobody to type the
+	  command — this is what makes it visible in the panel on its own.

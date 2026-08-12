@@ -37,6 +37,8 @@
 #include "battery.h"
 #include "haptic.h"
 #include "usb_cdc.h"
+#include "http_upload.h"
+#include "health.h"
 
 LOG_MODULE_REGISTER(main, CONFIG_CLIP_LOG_LEVEL);
 
@@ -194,6 +196,7 @@ int clip_init(void)
         return err;
     }
 
+#ifdef CONFIG_BT
     /* Initialize BLE transport (now that BLE is ready) */
     err = transport_ble_init();
     if (err) {
@@ -207,6 +210,7 @@ int clip_init(void)
         LOG_ERR("BLE transport register failed: %d", err);
         return err;
     }
+#endif /* CONFIG_BT */
 
     /* Initialize UDP transport */
     err = transport_udp_init();
@@ -301,6 +305,23 @@ int clip_init(void)
     if (err) {
         LOG_WRN("WiFi UDP init failed: %d", err);
         /* Continue anyway - UDP is optional */
+    }
+
+    /* The thread that carries HTTP uploads, so they never sit on the AT
+     * channel. Only starts a work queue; it costs nothing until something is
+     * queued onto it. */
+    err = http_upload_init();
+    if (err) {
+        LOG_WRN("HTTP upload init failed: %d", err);
+        /* Continue anyway - uploads are optional */
+    }
+
+    /* Health heartbeat. Also reads the reset cause, which is why it runs even
+     * when there is no endpoint yet: a device that rebooted on a watchdog
+     * should be able to say so once someone configures where to say it. */
+    err = health_init();
+    if (err) {
+        LOG_WRN("Health init failed: %d", err);
     }
 
 #ifdef CONFIG_CLIP_STA_AUTOCONNECT

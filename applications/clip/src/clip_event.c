@@ -15,8 +15,13 @@
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/drivers/regulator.h>
+#ifdef CONFIG_MCUMGR
+/* El seguimiento del progreso de OTA cuelga entero de mcumgr, que llega con el
+ * transporte SMP sobre BLE. Sin Bluetooth no hay actualizacion por radio y
+ * estas cabeceras no existen en el build. */
 #include <zephyr/mgmt/mcumgr/mgmt/callbacks.h>
 #include <zephyr/mgmt/mcumgr/grp/img_mgmt/img_mgmt.h>
+#endif
 #include <nrfx_clock.h>
 #include "clip_event.h"
 #include "clip.h"
@@ -103,10 +108,16 @@ struct k_sem event_notify_sem;
 /* OTA Progress Polling (Work Queue)                                             */
 /* ========================================================================== */
 
+/* Fuera de la guarda a proposito: clip_sd_busy() lo consulta para no cortar la
+ * alimentacion de la SD a media actualizacion, y esa logica no sabe nada de
+ * Bluetooth. Sin mcumgr se queda en false para siempre, que es exactamente lo
+ * que corresponde: no puede haber un OTA por radio en curso. */
+static bool ota_in_progress = false;
+
+#ifdef CONFIG_MCUMGR
 #define OTA_PROGRESS_POLL_INTERVAL_MS  200
 
 static struct k_work_delayable ota_progress_work;
-static bool ota_in_progress = false;
 
 static void ota_progress_work_handler(struct k_work *work)
 {
@@ -126,6 +137,7 @@ static void ota_progress_work_handler(struct k_work *work)
         }
     }
 }
+#endif /* CONFIG_MCUMGR */
 
 /* ========================================================================== */
 /* State                                                                       */
@@ -134,10 +146,12 @@ static void ota_progress_work_handler(struct k_work *work)
 static atomic_t g_state;
 static atomic_t g_boost_refcnt;
 
+#ifdef CONFIG_MCUMGR
 /* OTA progress tracking - protected by ota_mutex (accessed from MCUmgr cb + work queue) */
 static K_MUTEX_DEFINE(ota_mutex);
 static size_t g_ota_total_size = 0;
 static uint32_t g_ota_chunk_count = 0;
+#endif /* CONFIG_MCUMGR */
 
 /* ========================================================================== */
 /* Forward Declarations                                                         */
@@ -151,6 +165,7 @@ static enum clip_event_result execute_transition(enum clip_event event,
 /* Init                                                                        */
 /* ========================================================================== */
 
+#ifdef CONFIG_MCUMGR
 /* MCUmgr DFU callback — notifies display on OTA start/progress/pending */
 static enum mgmt_cb_return mcumgr_dfu_cb(uint32_t event, enum mgmt_cb_return prev_status,
                                           int32_t *rc, uint16_t *group, bool *abort_more,
@@ -266,6 +281,7 @@ static struct mgmt_callback mcumgr_dfu_cb_started;
 static struct mgmt_callback mcumgr_dfu_cb_chunk;
 static struct mgmt_callback mcumgr_dfu_cb_pending;
 static struct mgmt_callback mcumgr_dfu_cb_stopped;
+#endif /* CONFIG_MCUMGR */
 
 /* ========================================================================== */
 /* SD Idle Power-Off (Work Queue)                                             */
@@ -329,13 +345,16 @@ int clip_event_init(void)
     atomic_set(&g_state, CLIP_STATE_IDLE);
     k_sem_init(&event_notify_sem, 0, 1);
 
+#ifdef CONFIG_MCUMGR
     k_work_init_delayable(&ota_progress_work, ota_progress_work_handler);
+#endif
     k_work_init_delayable(&sd_idle_poweroff_work, sd_idle_poweroff_work_handler);
     k_work_init(&fg_save_work, fg_save_work_handler);
     storage_set_activity_cb(clip_storage_activity_notify);
     storage_set_busy_cb(clip_sd_busy);
     k_work_schedule(&sd_idle_poweroff_work, SD_IDLE_POWEROFF_DELAY_MS);
 
+#ifdef CONFIG_MCUMGR
     mcumgr_dfu_cb_started.callback = mcumgr_dfu_cb;
     mcumgr_dfu_cb_started.event_id = MGMT_EVT_OP_IMG_MGMT_DFU_STARTED;
     mgmt_callback_register(&mcumgr_dfu_cb_started);
@@ -351,6 +370,7 @@ int clip_event_init(void)
     mcumgr_dfu_cb_stopped.callback = mcumgr_dfu_cb;
     mcumgr_dfu_cb_stopped.event_id = MGMT_EVT_OP_IMG_MGMT_DFU_STOPPED;
     mgmt_callback_register(&mcumgr_dfu_cb_stopped);
+#endif /* CONFIG_MCUMGR */
 
     LOG_INF("Event dispatcher initialized");
     return 0;

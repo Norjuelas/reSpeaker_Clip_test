@@ -8,6 +8,55 @@
 #define CLIP_HTTP_UPLOAD_H
 
 #include <stddef.h>
+#include <stdint.h>
+
+#include "storage.h"
+
+enum http_upload_state {
+	HTTP_UPLOAD_IDLE = 0,
+	HTTP_UPLOAD_RUNNING,
+	HTTP_UPLOAD_DONE,
+	HTTP_UPLOAD_FAILED,
+};
+
+struct http_upload_status {
+	enum http_upload_state state;
+	char session_id[STORAGE_SESSION_ID_LEN];
+	uint32_t files_total;
+	uint32_t files_done;
+	uint32_t bytes_sent;
+	int last_error;
+	/* Bytes still unused on the upload thread's stack at the end of the last
+	 * job. Exposed on purpose: two stack overflows in this firmware came from
+	 * sizes picked by eye, so the number is worth being able to read. 0 means
+	 * it has not been measured (CONFIG_INIT_STACKS off). */
+	size_t stack_free;
+};
+
+/**
+ * @brief Start the upload work queue
+ *
+ * Call once at boot. Uploads run on their own thread from here on.
+ */
+int http_upload_init(void);
+
+/**
+ * @brief Queue a whole session for upload and return immediately
+ *
+ * The work happens on the upload thread, so the caller — normally the AT
+ * server — keeps its channel free. Poll http_upload_get_status() for progress.
+ *
+ * @retval 0         queued
+ * @retval -EBUSY    an upload is already running
+ * @retval -ENOENT   no endpoint configured (AT+UPCFG)
+ * @retval -ENETDOWN not joined to a network (AT+STA=on)
+ */
+int http_upload_session_async(const char *session_id);
+
+/**
+ * @brief Read the state of the current or last upload
+ */
+void http_upload_get_status(struct http_upload_status *out);
 
 /**
  * @brief POST one recording to the configured HTTP endpoint
@@ -18,6 +67,9 @@
  *
  * Plain HTTP. Fine for the concept test, not for devices in the field carrying
  * conversation audio; see Doc 13 for the fleet CA and mTLS plan.
+ *
+ * Blocks until the endpoint answers. Call it from the upload thread, not from
+ * the AT server.
  *
  * @param session_id Session the file belongs to
  * @param filename   Name to store it under
@@ -31,5 +83,15 @@
  */
 int http_upload_file(const char *session_id, const char *filename,
 		     const char *path, size_t size);
+
+/**
+ * @brief POST a body that is already in memory
+ *
+ * For small payloads — the health heartbeat — where streaming from the SD card
+ * would be machinery for nothing. Blocks until the endpoint answers.
+ *
+ * @retval 0 if the endpoint answered 2xx
+ */
+int http_post_json(const char *url, const char *body, size_t body_len);
 
 #endif /* CLIP_HTTP_UPLOAD_H */

@@ -26,6 +26,7 @@
 #include "transport_udp.h"
 #include "nrf70_fw_provision.h"
 #include "http_upload.h"
+#include "health.h"
 #include "app_version.h"
 #include "audio.h"
 #include <zephyr/fs/fs.h>
@@ -2047,90 +2048,114 @@ static int cmd_nrf70fw_handler(struct at_cmd_ctx *ctx, char *response, size_t le
     return create_json_response(true, NULL, data, response, len);
 }
 
+static int cmd_health_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
+{
+    /*
+     * AT+HEALTH?        - the snapshot the heartbeat sends
+     * AT+HEALTH=on|off  - start or stop the periodic beat
+     * AT+HEALTH=now     - send one immediately
+     */
+    char snapshot[512];
+    int n;
+
+    if (ctx->type == AT_CMD_TYPE_SET && ctx->args && ctx->args[0] != '\0') {
+        char arg[8];
+
+        strncpy(arg, ctx->args, sizeof(arg) - 1);
+        arg[sizeof(arg) - 1] = '\0';
+
+        if (strcmp(arg, "on") == 0) {
+            health_set_enabled(true);
+            return create_json_response(true, "Heartbeat on", NULL, response, len);
+        }
+        if (strcmp(arg, "off") == 0) {
+            health_set_enabled(false);
+            return create_json_response(true, "Heartbeat off", NULL, response, len);
+        }
+        if (strcmp(arg, "now") == 0) {
+            if (health_beat_now() != 0) {
+                return create_json_response(false, "Heartbeat is not running",
+                                            NULL, response, len);
+            }
+            return create_json_response(true, "Beat queued", NULL, response, len);
+        }
+        return create_json_response(false, "Expected on, off or now", NULL,
+                                    response, len);
+    }
+
+    n = health_snapshot_json(snapshot, sizeof(snapshot));
+    if (n < 0) {
+        return create_json_response(false, "Could not build the snapshot",
+                                    NULL, response, len);
+    }
+
+    return create_json_response(true, NULL, snapshot, response, len);
+}
+
+static const char *upload_state_txt(enum http_upload_state st)
+{
+    switch (st) {
+    case HTTP_UPLOAD_RUNNING: return "running";
+    case HTTP_UPLOAD_DONE:    return "done";
+    case HTTP_UPLOAD_FAILED:  return "failed";
+    default:                  return "idle";
+    }
+}
+
 static int cmd_httpup_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
 {
     /*
-     * AT+HTTPUP=<session_id>  - POST every file of a session to the endpoint
+     * AT+HTTPUP=<session_id>  - queue a session for upload; returns at once
+     * AT+HTTPUP?              - how the current or last one went
      *
-     * Runs synchronously: a test session is one 6KB file, so it returns fast.
-     * Long sessions would hold the AT channel for the whole upload — move this
-     * to a work queue before anything ships.
+     * The transfer runs on its own thread. It used to run right here, which
+     * held the AT channel for the whole upload — and that channel is how you
+     * ask the device what it is doing when it stops behaving.
      */
-    /* From the heap, never the stack: MAX_SESSIONS is 100 and each entry is
-     * ~56 bytes, so this array is ~5.6KB against an 8KB AT thread that also
-     * has to fit http_client_req underneath. Putting it on the stack blew it
-     * and took the device down mid-upload. */
-    struct storage_session_info *sessions;
     char session_id[STORAGE_SESSION_ID_LEN];
-    uint32_t file_count = 0;
-    uint32_t uploaded = 0;
-    int found;
+    struct http_upload_status st;
+    char data[224];
     int ret;
+
+    if (ctx->type == AT_CMD_TYPE_TEST || ctx->type == AT_CMD_TYPE_READ) {
+        http_upload_get_status(&st);
+        snprintf(data, sizeof(data),
+                 "{\"state\":\"%s\",\"session\":\"%s\",\"files_done\":%u,"
+                 "\"files_total\":%u,\"bytes\":%u,\"error\":%d,\"stack_free\":%u}",
+                 upload_state_txt(st.state), st.session_id,
+                 (unsigned int)st.files_done, (unsigned int)st.files_total,
+                 (unsigned int)st.bytes_sent, st.last_error,
+                 (unsigned int)st.stack_free);
+        return create_json_response(true, NULL, data, response, len);
+    }
 
     if (!ctx->args || ctx->args[0] == '\0') {
         return create_json_response(false, "Missing session_id", NULL, response, len);
-    }
-    if (!wifi_sta_is_connected()) {
-        return create_json_response(false, "Not on a network — run AT+STA=on first",
-                                    NULL, response, len);
-    }
-    if (config_get_upload_host()[0] == '\0' || config_get_upload_port() == 0) {
-        return create_json_response(false, "No endpoint — run AT+UPCFG first",
-                                    NULL, response, len);
     }
 
     strncpy(session_id, ctx->args, sizeof(session_id) - 1);
     session_id[sizeof(session_id) - 1] = '\0';
 
-    sessions = k_malloc(sizeof(*sessions) * CONFIG_CLIP_STORAGE_MAX_SESSIONS);
-    if (!sessions) {
-        return create_json_response(false, "No heap to list sessions", NULL,
-                                    response, len);
-    }
-
-    found = storage_list_sessions(sessions, CONFIG_CLIP_STORAGE_MAX_SESSIONS);
-    for (int i = 0; i < found; i++) {
-        if (strcmp(sessions[i].session_id, session_id) == 0) {
-            file_count = sessions[i].file_count;
-            break;
-        }
-    }
-    k_free(sessions);
-
-    if (file_count == 0) {
-        return create_json_response(false, "Unknown session, or it has no files",
+    ret = http_upload_session_async(session_id);
+    switch (ret) {
+    case 0:
+        break;
+    case -EBUSY:
+        return create_json_response(false, "An upload is already running",
+                                    NULL, response, len);
+    case -ENOENT:
+        return create_json_response(false, "No endpoint — run AT+UPCFG first",
+                                    NULL, response, len);
+    case -ENETDOWN:
+        return create_json_response(false, "Not on a network — run AT+STA=on first",
+                                    NULL, response, len);
+    default:
+        return create_json_response(false, "Could not queue the upload",
                                     NULL, response, len);
     }
 
-    for (uint32_t idx = 1; idx <= file_count; idx++) {
-        char path[128];
-        char name[32];
-        struct fs_dirent st;
-
-        if (storage_build_chunk_path(session_id, idx, path, sizeof(path)) != 0) {
-            continue;
-        }
-        if (fs_stat(path, &st) != 0) {
-            continue;
-        }
-
-        snprintf(name, sizeof(name), "%04u.opus", (unsigned int)idx);
-
-        ret = http_upload_file(session_id, name, path, (size_t)st.size);
-        if (ret) {
-            char msg[96];
-
-            snprintf(msg, sizeof(msg), "Upload failed on file %u of %u: %d",
-                     (unsigned int)idx, (unsigned int)file_count, ret);
-            return create_json_response(false, msg, NULL, response, len);
-        }
-        uploaded++;
-    }
-
-    char data[128];
-    snprintf(data, sizeof(data), "{\"session\":\"%s\",\"uploaded\":%u,\"to\":\"%s:%u\"}",
-             session_id, (unsigned int)uploaded, config_get_upload_host(),
-             config_get_upload_port());
+    snprintf(data, sizeof(data), "{\"session\":\"%s\",\"state\":\"queued\",\"to\":\"%s:%u\"}",
+             session_id, config_get_upload_host(), config_get_upload_port());
     return create_json_response(true, NULL, data, response, len);
 }
 
@@ -2470,10 +2495,19 @@ int at_commands_register(void)
     /* HTTPUP - POST a session to the HTTP endpoint */
     static const struct at_command httpup_cmd = {
         .name = "HTTPUP",
-        .flags = AT_CMD_SET,
+        .flags = AT_CMD_SET | AT_CMD_QUERY,
         .handler = cmd_httpup_handler,
     };
     err = at_server_register_cmd(&httpup_cmd);
+    if (err) return err;
+
+    /* HEALTH - What the device says about itself */
+    static const struct at_command health_cmd = {
+        .name = "HEALTH",
+        .flags = AT_CMD_SET | AT_CMD_QUERY | AT_CMD_EXEC,
+        .handler = cmd_health_handler,
+    };
+    err = at_server_register_cmd(&health_cmd);
     if (err) return err;
 
     /* STA - Join/leave that network */

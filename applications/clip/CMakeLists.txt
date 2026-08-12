@@ -13,9 +13,7 @@ target_sources(app PRIVATE
     src/main.c
     src/clip_event.c
     src/config.c
-    src/ble.c
     src/transport.c
-    src/transport_ble.c
     src/at_server.c
     src/at_commands.c
     src/audio.c
@@ -26,6 +24,7 @@ target_sources(app PRIVATE
     src/display.c
     src/icons.c
     src/http_upload.c
+    src/health.c
     src/nrf70_fw_provision.c
     src/wifi.c
     src/wifi_udp.c
@@ -33,3 +32,13 @@ target_sources(app PRIVATE
     src/battery.c
     src/usb_cdc.c
 )
+
+
+# Bluetooth: la implementacion real, o una superficie vacia. Sacar el host BT
+# libera ~15KB de FLASH, que es lo que faltaba para que TLS entrara. Volver
+# atras es CONFIG_BT=y — ningun sitio de llamada cambia. Ver Doc 14.
+if(CONFIG_BT)
+    target_sources(app PRIVATE src/ble.c src/transport_ble.c)
+else()
+    target_sources(app PRIVATE src/ble_stub.c)
+endif()
