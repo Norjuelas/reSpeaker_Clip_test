@@ -23,6 +23,7 @@
 #include "clip_event.h"
 #include "config.h"
 #include "battery.h"
+#include "transport_udp.h"
 #include "app_version.h"
 #include "audio.h"
 #include "storage.h"

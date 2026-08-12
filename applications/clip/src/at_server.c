@@ -35,9 +35,16 @@ static struct {
     .running = false,
 };
 
-/* Command registry */
+/* Command registry.
+ *
+ * The size is a hard cap: at_server_register_cmd() returns -ENOMEM past it, and
+ * at_commands_register() propagates that to clip_init(), which aborts startup —
+ * the device boots far enough to enumerate USB CDC and then answers nothing at
+ * all. Adding a command without room here is silently fatal, so keep headroom. */
+#define AT_MAX_COMMANDS 48
+
 static struct {
-    const struct at_command *cmds[32];
+    const struct at_command *cmds[AT_MAX_COMMANDS];
     int count;
 } cmd_registry = { .count = 0 };
 
@@ -51,7 +58,9 @@ int at_server_register_cmd(const struct at_command *cmd)
         return -EINVAL;
     }
 
-    if (cmd_registry.count >= 32) {
+    if (cmd_registry.count >= AT_MAX_COMMANDS) {
+        LOG_ERR("AT registry full (%d): '%s' rejected — raise AT_MAX_COMMANDS",
+                AT_MAX_COMMANDS, cmd->name);
         return -ENOMEM;
     }
 
