@@ -30,6 +30,7 @@
 #include "button.h"
 #include "display.h"
 #include "wifi.h"
+#include "nrf70_fw_provision.h"
 #include "wifi_udp.h"
 #include "transport_udp.h"
 #include "clip_event.h"
@@ -278,6 +279,14 @@ int clip_init(void)
     if (err) {
         LOG_WRN("Transfer init failed: %d", err);
         /* Continue anyway - transfer is optional */
+    }
+
+    /* The nRF7002 patch lives in a flash partition, not in this image. Fill it
+     * from the SD card before WiFi comes up — an empty partition makes
+     * net_if_up() fail with -EIO and takes both AP and station mode down. */
+    err = nrf70_fw_provision();
+    if (err) {
+        LOG_WRN("nRF70 patch not provisioned: %d — WiFi will not start", err);
     }
 
     /* Initialize WiFi subsystem */

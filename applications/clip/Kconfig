@@ -444,6 +444,18 @@ config CLIP_STA_AUTOCONNECT
 	  Costs power: the radio comes up on every boot. Turn off for
 	  battery-sensitive production builds.
 
+config CLIP_NRF70_FW_PATH
+	string "Path to the nRF7002 firmware patch on the SD card"
+	default "/SD:/nrf70.bin"
+	help
+	  Where nrf70_fw_provision() looks for the patch that gets written into
+	  nrf70_fw_partition.
+
+	  The patch is kept out of the application image to save ~87KB, and the
+	  partition is not managed by MCUboot (the deployed bootloader only
+	  handles two images), so the application provisions it from this file.
+	  Copy build-*/nrf70.bin to the card under this name.
+
 config CLIP_USB_AT_AT_BOOT
 	bool "Enable the USB AT channel at boot"
 	default n
