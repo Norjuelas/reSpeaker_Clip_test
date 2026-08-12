@@ -6,16 +6,21 @@
  * The BLE surface with nothing behind it, built instead of ble.c and
  * transport_ble.c when CONFIG_BT=n.
  *
- * Why the Bluetooth stack is gone: TLS needs ~38KB and the image only had 27KB
- * of FLASH left. Nothing else in the build came close to covering the gap — the
- * Opus decoder is 6KB, USB MSC 3.9KB, the UDP transport 2KB — while the BT host
- * is ~15KB and pays for it in one piece. Doc 14 has the measurements.
+ * Why the Bluetooth stack is gone, and it is not the FLASH: the device is meant
+ * to be reachable only over the USB cable or over WiFi by an approved path. An
+ * open, unauthenticated radio channel is attack surface across 100 deployed
+ * devices, and that applies to the AP mode too — its SSID and fixed password
+ * are the same on every unit. Doc 14 §2.
  *
- * What this costs, plainly: the mobile SDKs under mobile/ talk to the device
- * over BLE and stop working. The remaining ways in are the USB CDC cable and
- * WiFi. That is a real loss, taken deliberately to get audio encrypted in
- * flight, and it is meant to be reversible — set CONFIG_BT=y and ble.c comes
- * back with every caller untouched.
+ * That removing BLE also frees ~15KB, which is what let TLS fit, is a happy
+ * coincidence rather than the reason. If space stopped being tight tomorrow,
+ * BLE would still be out.
+ *
+ * What it costs, plainly: the mobile SDKs under mobile/ talk to the device over
+ * BLE and stop working, and BLE OTA goes with it — leaving the cable as the only
+ * way to update, which is why an HTTP OTA is now required rather than nice to
+ * have. Reversible all the same: set CONFIG_BT=y and ble.c comes back with every
+ * caller untouched.
  *
  * Stubs rather than #ifdefs at the call sites: fourteen BLE functions are
  * called from six files that have nothing to do with Bluetooth (audio, wifi,
