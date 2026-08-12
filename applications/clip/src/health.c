@@ -124,7 +124,7 @@ int health_snapshot_json(char *buf, size_t len)
 		     "\"battery_pct\":%u,\"battery_mv\":%u,\"charging\":%s,"
 		     "\"battery_temp_c\":%d,"
 		     "\"sd_mounted\":%s,\"sd_free_mb\":%u,\"sd_total_mb\":%u,"
-		     "\"chunks_written\":%u,"
+		     "\"sd_used_mb\":%u,"
 		     "\"wifi\":%s,\"ip\":\"%s\",\"ssid\":\"%s\","
 		     "\"state\":\"%s\","
 		     "\"upload_state\":\"%s\",\"upload_done\":%u,"
@@ -136,13 +136,17 @@ int health_snapshot_json(char *buf, size_t len)
 		     have_storage && st.is_mounted ? "true" : "false",
 		     have_storage ? st.free_space_mb : 0,
 		     have_storage ? st.total_mb : 0,
-		     /* Trozos escritos desde el arranque, no sesiones guardadas:
-		      * storage lleva un contador de escrituras, no un censo. El
-		      * numero que un operador querria — cuantas grabaciones
-		      * quedan por subir — necesita el registro de subidas que
-		      * todavia no existe. Mejor un nombre honesto que una cifra
-		      * que parece otra cosa. */
-		     have_storage ? st.total_chunks : 0,
+		     /* Espacio ocupado, no el contador de trozos: st.total_chunks
+		      * solo sube en storage_write_chunk(), a la que la grabacion
+		      * no llama nunca — se vio en la primera prueba real, con el
+		      * device grabando y el campo clavado en 0. Un numero muerto
+		      * en un panel es peor que un campo ausente.
+		      *
+		      * Lo que un operador querria de verdad es cuantas sesiones
+		      * quedan por subir; eso necesita el registro de subidas, que
+		      * no existe. Mientras tanto el espacio ocupado si se mueve
+		      * al grabar y sirve de senal. */
+		     have_storage ? (st.total_mb - st.free_space_mb) : 0,
 		     wifi_sta_is_connected() ? "true" : "false",
 		     /* wifi_sta_get_ip(), no wifi_get_ip_address(): esa segunda
 		      * devuelve la del punto de acceso (192.168.4.1), que es la

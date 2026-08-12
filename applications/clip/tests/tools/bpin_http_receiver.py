@@ -79,6 +79,7 @@ PANEL_HTML = """<!doctype html>
  .bad{color:#b91c1c;font-weight:600}
  .ok{color:#15803d}
  .stale{opacity:.45}
+ .test{background:#fde68a;color:#78350f;padding:.05rem .3rem;border-radius:3px;font-size:.7rem;font-weight:600}
  .empty{padding:3rem;text-align:center;color:#888;background:#fff}
  @media (prefers-color-scheme:dark){
   body{background:#16181c;color:#e6e6e6} table{background:#1e2126;box-shadow:none}
@@ -126,7 +127,7 @@ def _panel_html():
         return _render(0, now, table)
 
     out = ["<table><tr><th>device</th><th>visto</th><th>uptime</th><th>reinicio</th>"
-           "<th>bater\u00eda</th><th>SD libre</th><th>trozos</th><th>red</th>"
+           "<th>bater\u00eda</th><th>SD libre</th><th>SD usada</th><th>red</th>"
            "<th>estado</th><th>subida</th></tr>"]
 
     for dev, b in rows:
@@ -135,6 +136,7 @@ def _panel_html():
         # Dos latidos perdidos y el device se marca apagado: con 300 s de
         # intervalo, 900 s es la se\u00f1al de que algo pasa, no un retraso.
         stale = ' class="stale"' if age > 900 else ""
+        tag = ' <span class="test">prueba</span>' if b.get("_test") else ""
 
         pct = b.get("battery_pct", 0)
         bat_cls = "bad" if pct < 15 else ("warn" if pct < 30 else "ok")
@@ -155,13 +157,13 @@ def _panel_html():
 
         out.append(
             f"<tr{stale}>"
-            f'<td class="id">{dev}</td>'
+            f'<td class="id">{dev}{tag}</td>'
             f"<td>{seen.strftime('%H:%M:%S')}</td>"
             f"<td>{_fmt_uptime(b.get('uptime_s'))}</td>"
             f'<td class="{rst_cls}">{reset}</td>'
             f'<td class="{bat_cls}">{pct}%{chg} <small>({b.get("battery_mv",0)}mV)</small></td>'
             f'<td class="{sd_cls}">{free} MB</td>'
-            f"<td>{b.get('chunks_written', 0)}</td>"
+            f"<td>{b.get('sd_used_mb', 0)} MB</td>"
             f"<td>{b.get('ip') or DASH}</td>"
             f"<td>{b.get('state', '?')}</td>"
             f"<td>{up_txt}</td>"
@@ -224,6 +226,11 @@ class Handler(BaseHTTPRequestHandler):
 
             dev = beat.get("device") or self.headers.get("X-Device-Id", "?")
             beat["_seen"] = datetime.datetime.now().isoformat(timespec="seconds")
+            # De donde vino. Un latido inyectado a mano para probar el panel se
+            # ve igual que uno real, y eso ya confundio una vez: dos devices de
+            # prueba pasaron por unidades desplegadas. La cabecera la pone el
+            # firmware; lo que no la trae, no es un device.
+            beat["_test"] = self.headers.get("X-Device-Id", "") != dev
             with DEVICES_LOCK:
                 DEVICES[dev] = beat
             log(f"latido {dev}  bat {beat.get('battery_pct')}%  "
@@ -261,6 +268,15 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
+            return
+
+        if self.path == "/purge-test":
+            with DEVICES_LOCK:
+                gone = [k for k, v in DEVICES.items() if v.get("_test")]
+                for k in gone:
+                    del DEVICES[k]
+            log(f"borrados {len(gone)} latidos de prueba")
+            self._reply(200, f"borrados {len(gone)}\n".encode())
             return
 
         if self.path == "/devices.json":
