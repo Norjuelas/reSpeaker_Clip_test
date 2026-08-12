@@ -44,6 +44,12 @@ struct fw_header {
  * is needed once per device lifetime, not on every boot. */
 #define COPY_CHUNK 2048
 
+/* Outcome of the provisioning attempt at boot. Kept because the boot-time logs
+ * proved unreliable to retrieve: AT+NRF70FW? serves this instead of us having
+ * to catch the log window. -EINPROGRESS means it never ran. */
+static int last_provision_result = -EINPROGRESS;
+static bool last_provision_wrote;
+
 /**
  * Whether the partition already holds this exact patch.
  *
@@ -136,6 +142,40 @@ static int copy_file_to_partition(struct fs_file_t *file,
 	return 0;
 }
 
+int nrf70_fw_partition_status(struct nrf70_fw_status *out)
+{
+	const struct flash_area *fa;
+	struct fw_header have;
+	int err;
+
+	if (!out) {
+		return -EINVAL;
+	}
+	memset(out, 0, sizeof(*out));
+
+	err = flash_area_open(NRF70_FW_PARTITION_ID, &fa);
+	if (err) {
+		return err;
+	}
+
+	out->partition_size = fa->fa_size;
+	err = flash_area_read(fa, 0, &have, sizeof(have));
+	flash_area_close(fa);
+
+	if (err) {
+		return err;
+	}
+
+	out->signature = have.signature;
+	out->version = have.version;
+	out->len = have.len;
+	out->provisioned = (have.signature != 0xFFFFFFFFU && have.signature != 0);
+	out->last_result = last_provision_result;
+	out->wrote_this_boot = last_provision_wrote;
+
+	return 0;
+}
+
 int nrf70_fw_provision(void)
 {
 	const struct flash_area *fa;
@@ -154,6 +194,7 @@ int nrf70_fw_provision(void)
 	if (storage_ensure_mounted() != 0) {
 		LOG_ERR("No SD card — cannot provision the nRF70 patch");
 		flash_area_close(fa);
+		last_provision_result = -ENODEV;
 		return -ENODEV;
 	}
 
@@ -162,6 +203,7 @@ int nrf70_fw_provision(void)
 		 * working, and the file only needs to be present once. */
 		LOG_WRN("%s not found on the SD card", CONFIG_CLIP_NRF70_FW_PATH);
 		flash_area_close(fa);
+		last_provision_result = -ENOENT;
 		return -ENOENT;
 	}
 
@@ -193,10 +235,12 @@ int nrf70_fw_provision(void)
 		err = 0;
 	} else {
 		err = copy_file_to_partition(&file, fa, (size_t)stat.size);
+		last_provision_wrote = (err == 0);
 	}
 
 	fs_close(&file);
 	flash_area_close(fa);
+	last_provision_result = err;
 
 	return err;
 }

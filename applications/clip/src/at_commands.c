@@ -24,6 +24,7 @@
 #include "config.h"
 #include "battery.h"
 #include "transport_udp.h"
+#include "nrf70_fw_provision.h"
 #include "app_version.h"
 #include "audio.h"
 #include "storage.h"
@@ -2010,6 +2011,40 @@ static int cmd_upload_handler(struct at_cmd_ctx *ctx, char *response, size_t len
     return create_json_response(true, NULL, data, response, len);
 }
 
+static int cmd_nrf70fw_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
+{
+    /*
+     * AT+NRF70FW?  - Is the nRF7002 patch partition provisioned?
+     *
+     * The patch is not in the application image; it is read from a flash
+     * partition the app fills from the SD card at boot. When that fails the
+     * only symptom is net_if_up() returning -EIO, and the production build
+     * does not write boot-time logs to the card — so this exists to answer the
+     * question directly.
+     */
+    struct nrf70_fw_status st;
+    char data[160];
+    int ret;
+
+    ARG_UNUSED(ctx);
+
+    ret = nrf70_fw_partition_status(&st);
+    if (ret) {
+        return create_json_response(false, "Cannot read the patch partition",
+                                    NULL, response, len);
+    }
+
+    snprintf(data, sizeof(data),
+             "{\"provisioned\":%s,\"signature\":\"0x%08X\",\"version\":%u,"
+             "\"len\":%u,\"partition\":%u,\"last_result\":%d,\"wrote\":%s}",
+             st.provisioned ? "true" : "false", (unsigned int)st.signature,
+             (unsigned int)st.version, (unsigned int)st.len,
+             (unsigned int)st.partition_size, st.last_result,
+             st.wrote_this_boot ? "true" : "false");
+
+    return create_json_response(true, NULL, data, response, len);
+}
+
 static int cmd_usb_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
 {
     if (ctx->type == AT_CMD_TYPE_SET || ctx->type == AT_CMD_TYPE_EXEC) {
@@ -2332,6 +2367,15 @@ int at_commands_register(void)
         .handler = cmd_upload_handler,
     };
     err = at_server_register_cmd(&upload_cmd);
+    if (err) return err;
+
+    /* NRF70FW - Is the WiFi firmware partition provisioned? */
+    static const struct at_command nrf70fw_cmd = {
+        .name = "NRF70FW",
+        .flags = AT_CMD_QUERY,
+        .handler = cmd_nrf70fw_handler,
+    };
+    err = at_server_register_cmd(&nrf70fw_cmd);
     if (err) return err;
 
     /* STA - Join/leave that network */
