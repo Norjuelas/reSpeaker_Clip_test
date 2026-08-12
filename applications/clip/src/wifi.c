@@ -14,6 +14,7 @@
 #include <zephyr/net/dhcpv4.h>
 #include <zephyr/net/dhcpv4_server.h>
 #include <zephyr/drivers/hwinfo.h>
+#include <zephyr/random/random.h>
 #include <stdio.h>
 #include <string.h>
 #include <net/wifi_ready.h>
@@ -62,6 +63,12 @@ static char sta_ip[NET_IPV4_ADDR_LEN];
 static int sta_fail_reason;
 static char sta_fail_text[32];
 
+/* Reconnection state. sta_want_connected separates "the link dropped" from
+ * "the user asked us to disconnect" — without it, AT+STA=off would fight an
+ * automatic retry forever. */
+static bool sta_want_connected;
+static uint32_t sta_backoff_ms;
+
 /* wifi_sta_on() blocks for up to 35s waiting on association + DHCP. That must
  * not run on the system workqueue — a watchdog guards it, and the display and
  * transfer paths queue work there too. Hence a dedicated queue. */
@@ -73,6 +80,11 @@ static char sta_fail_text[32];
 static K_THREAD_STACK_DEFINE(sta_work_stack, 6144);
 static struct k_work_q sta_work_q;
 static bool sta_work_q_started;
+
+/* Declared here because the disconnect event handler below schedules it. */
+static void sta_reconnect_work_handler(struct k_work *work);
+static K_WORK_DELAYABLE_DEFINE(sta_reconnect_work, sta_reconnect_work_handler);
+static void sta_schedule_reconnect(void);
 
 static struct net_mgmt_event_callback wifi_mgmt_cb;
 static struct net_mgmt_event_callback wifi_sta_cb;
@@ -261,6 +273,11 @@ static void wifi_sta_event_handler(struct net_mgmt_event_callback *cb,
 		sta_associated = false;
 		sta_ip[0] = '\0';
 		ble_notify_event("sta", "off");
+		/* An unexpected drop schedules a retry; a deliberate AT+STA=off does
+		 * not, because wifi_sta_off() clears sta_want_connected first. Without
+		 * this the device stayed silently off the network until someone power
+		 * cycled it — observed over a 10h soak test. */
+		sta_schedule_reconnect();
 		/* Same treatment as an AP client vanishing: a transfer in flight has
 		 * nowhere to go. */
 		k_work_submit(&wifi_transfer_cancel_work);
@@ -612,6 +629,16 @@ int wifi_off(void)
 #define STA_CONNECT_TIMEOUT_SEC 20
 #define STA_DHCP_TIMEOUT_SEC    15
 
+/* Reconnection backoff. Starts short so a blip recovers quickly, then backs off
+ * so a genuinely absent AP is not hammered.
+ *
+ * The jitter matters more than it looks: when an AP reboots, every device in
+ * the store loses the link at the same instant. Retrying on a fixed schedule
+ * makes them stampede the AP together, over and over. Spreading each retry over
+ * a random window desynchronises the fleet. */
+#define STA_RECONNECT_MIN_MS   5000
+#define STA_RECONNECT_MAX_MS   120000
+
 int wifi_sta_on(void)
 {
 	struct net_if *iface;
@@ -631,6 +658,9 @@ int wifi_sta_on(void)
 		LOG_DBG("STA already connected");
 		return 0;
 	}
+
+	/* From here on, an unexpected drop should bring the link back by itself. */
+	sta_want_connected = true;
 
 	/* AP and STA cannot coexist: the interface only holds one IPv4 address
 	 * (NET_IF_UNICAST_IPV4_ADDR_COUNT=1), and the AP owns a static one. */
@@ -774,6 +804,12 @@ int wifi_sta_off(void)
 	struct net_if *iface = net_if_get_first_wifi();
 	int ret;
 
+	/* Deliberate disconnect: stop retrying before touching the link, or the
+	 * work item would race us and reconnect what the user just turned off. */
+	sta_want_connected = false;
+	sta_backoff_ms = 0;
+	k_work_cancel_delayable(&sta_reconnect_work);
+
 	if (!sta_associated)
 	{
 		return 0;
@@ -814,6 +850,53 @@ int wifi_sta_off(void)
 	ble_notify_event("sta", "off");
 
 	return 0;
+}
+
+static void sta_schedule_reconnect(void)
+{
+	uint32_t delay, jitter;
+
+	if (!sta_want_connected || !sta_work_q_started)
+	{
+		return;
+	}
+
+	if (sta_backoff_ms == 0)
+	{
+		sta_backoff_ms = STA_RECONNECT_MIN_MS;
+	}
+
+	/* Up to +50% of the current backoff, so a fleet that lost the same AP does
+	 * not retry in lockstep. */
+	jitter = sys_rand32_get() % (sta_backoff_ms / 2 + 1);
+	delay = sta_backoff_ms + jitter;
+
+	LOG_WRN("STA reconnect in %u ms", delay);
+	k_work_schedule_for_queue(&sta_work_q, &sta_reconnect_work, K_MSEC(delay));
+
+	sta_backoff_ms *= 2;
+	if (sta_backoff_ms > STA_RECONNECT_MAX_MS)
+	{
+		sta_backoff_ms = STA_RECONNECT_MAX_MS;
+	}
+}
+
+static void sta_reconnect_work_handler(struct k_work *work)
+{
+	ARG_UNUSED(work);
+
+	if (!sta_want_connected || sta_associated)
+	{
+		return;
+	}
+
+	if (wifi_sta_on() == 0)
+	{
+		sta_backoff_ms = STA_RECONNECT_MIN_MS; /* recovered — reset the ramp */
+		return;
+	}
+
+	sta_schedule_reconnect();
 }
 
 static void sta_connect_work_handler(struct k_work *work)
