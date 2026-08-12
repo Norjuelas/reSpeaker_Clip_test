@@ -26,7 +26,15 @@
 
 LOG_MODULE_REGISTER(nrf70_fw, CONFIG_CLIP_LOG_LEVEL);
 
-#define NRF70_FW_PARTITION_ID FIXED_PARTITION_ID(nrf70_fw_partition)
+/* The partition the driver actually reads.
+ *
+ * Not nrf70_fw_partition: with SB_CONFIG_WIFI_PATCHES_EXT_FLASH_STORE the
+ * sysbuild generates its own nrf70_wifi_fw partition, and that is the one
+ * nrf70_fw_ext opens — verified on hardware, the driver reported
+ * fa_id=12 off=0x7c0000 while this code was writing to id 11 at 0x7a0000.
+ * Writing to the wrong one produced a valid-looking partition and a WiFi
+ * stack that could never load its firmware. */
+#define NRF70_FW_PARTITION_ID FIXED_PARTITION_ID(nrf70_wifi_fw)
 
 /* Mirrors struct nrf70_fw_image_info (nrf_wifi/fw_if/umac_if/inc/fw/patch_info.h).
  * Only the leading fields are needed to tell a provisioned partition from an
