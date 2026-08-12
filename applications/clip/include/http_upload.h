@@ -17,7 +17,7 @@
  * the device id in X-Device-Id.
  *
  * Plain HTTP. Fine for the concept test, not for devices in the field carrying
- * conversation audio; see Doc 12 for the fleet CA and mTLS plan.
+ * conversation audio; see Doc 13 for the fleet CA and mTLS plan.
  *
  * @param session_id Session the file belongs to
  * @param filename   Name to store it under

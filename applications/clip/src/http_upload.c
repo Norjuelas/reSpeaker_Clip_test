@@ -6,7 +6,7 @@
  * Pushes recordings to an HTTP endpoint.
  *
  * Plain HTTP for now. The audio is conversation recordings, so shipping this to
- * devices in the field without TLS is not defensible — see Doc 12 for the fleet
+ * devices in the field without TLS is not defensible — see Doc 13 for the fleet
  * CA and mTLS plan. The room for TLS already exists: the nRF70 firmware moving
  * out of the image left ~52KB free, and TLS measures ~45KB.
  *

@@ -8,7 +8,7 @@ identificador en la cabecera X-Device-Id.
 
 Sin TLS a proposito: es la prueba de concepto. Los audios son conversaciones, y
 mandarlos en claro no es defendible en campo — el plan de mTLS con CA de flota
-esta en el Doc 12. La ruta a HTTPS ya esta abierta: sacar el firmware del nRF70
+esta en el Doc 13. La ruta a HTTPS ya esta abierta: sacar el firmware del nRF70
 de la imagen dejo ~52KB libres y TLS mide ~45KB.
 
 Subir a S3 es el siguiente paso: se hace en store(), que es el unico sitio que
