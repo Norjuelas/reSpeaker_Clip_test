@@ -21,6 +21,7 @@ import datetime
 import json
 import sys
 import threading
+from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -34,6 +35,27 @@ MAX_JSON = 8 * 1024
 # el certificado de cada device (Doc 13).
 DEVICES = {}
 DEVICES_LOCK = threading.Lock()
+
+# Las ultimas transferencias, para poder ver que viajo y si llego. Un latido
+# cada 5 minutos no cuenta nada de lo que paso en medio.
+TRANSFERS = deque(maxlen=200)
+
+# El .opus del Clip son tramas Opus en crudo, sin contenedor: ningun reproductor
+# lo abre. Se envuelve en Ogg al recibirlo, que es cuando se sabe que esta
+# completo. clip/codec.py lo hace sin dependencias externas.
+# Se carga el modulo por ruta, no como paquete: clip/__init__.py arrastra bleak
+# (el cliente BLE) y aqui no pinta nada. Importarlo normalmente hacia fallar la
+# conversion en silencio, que es la peor forma de fallar.
+try:
+    import importlib.util as _ilu
+    _spec = _ilu.spec_from_file_location(
+        "clip_codec", Path(__file__).resolve().parents[1] / "clip" / "codec.py")
+    _mod = _ilu.module_from_spec(_spec)
+    _spec.loader.exec_module(_mod)
+    convert_to_ogg_opus = _mod.convert_to_ogg_opus
+except Exception as _e:
+    print(f"[aviso] sin conversion a Ogg: {_e}", flush=True)
+    convert_to_ogg_opus = None
 
 
 def log(msg):
@@ -59,6 +81,15 @@ def store(device_id, session, filename, data):
             n += 1
 
     path.write_bytes(data)
+
+    # Y una copia reproducible al lado. Si falla, el .opus crudo sigue estando:
+    # perder el audio por un problema de empaquetado seria absurdo.
+    if convert_to_ogg_opus is not None:
+        try:
+            convert_to_ogg_opus(path, path.with_suffix(".ogg"))
+        except Exception as e:
+            log(f"no se pudo envolver en Ogg ({e}); el .opus crudo esta intacto")
+
     return path
 
 
@@ -89,6 +120,8 @@ PANEL_HTML = """<!doctype html>
 <h1>Devices</h1>
 <div class="sub">@@COUNT@@ con latido \u00b7 refresco cada 15 s \u00b7 @@NOW@@</div>
 @@TABLE@@
+<h1 style="margin-top:2rem">Transferencias</h1>
+@@XFER@@
 """
 
 
@@ -113,7 +146,33 @@ def _render(count, now, table):
     return (PANEL_HTML
             .replace("@@COUNT@@", str(count))
             .replace("@@NOW@@", now.strftime("%H:%M:%S"))
-            .replace("@@TABLE@@", table))
+            .replace("@@TABLE@@", table)
+            .replace("@@XFER@@", _xfer_html()))
+
+
+def _xfer_html():
+    """Que viajo y si llego. El latido dice como esta el device ahora; esto dice
+    que paso en medio, que es lo que se pregunta cuando falta un audio."""
+    with DEVICES_LOCK:
+        rows = list(TRANSFERS)[:25]
+    if not rows:
+        return '<div class="empty">Ninguna transferencia todavia.</div>'
+
+    out = ["<table><tr><th>hora</th><th>device</th><th>sesion</th><th>fichero</th>"
+           "<th>bytes</th><th>resultado</th></tr>"]
+    for t in rows:
+        if t["ok"]:
+            res = '<span class="ok">llego</span>'
+            if t.get("playable"):
+                res += ' <small>+ogg</small>'
+        else:
+            res = f'<span class="bad">fallo</span> <small>{t.get("error","")}</small>'
+        out.append(
+            f'<tr><td>{t["at"][11:]}</td><td class="id">{t["device"]}</td>'
+            f'<td>{t["session"]}</td><td>{t["file"]}</td>'
+            f'<td>{t["bytes"]}</td><td>{res}</td></tr>')
+    out.append("</table>")
+    return "".join(out)
 
 
 def _panel_html():
@@ -252,11 +311,25 @@ class Handler(BaseHTTPRequestHandler):
 
         data, err = self._read_body(MAX_BODY)
         if err:
+            # Un viaje fallido tiene que verse. Es el caso que importa.
+            with DEVICES_LOCK:
+                TRANSFERS.appendleft({
+                    "at": datetime.datetime.now().isoformat(timespec="seconds"),
+                    "device": device_id or "?", "session": session,
+                    "file": filename, "bytes": 0, "ok": False, "error": err,
+                })
             log(err)
             self._reply(400, err.encode() + b"\n")
             return
 
         path = store(device_id, session, filename, data)
+        with DEVICES_LOCK:
+            TRANSFERS.appendleft({
+                "at": datetime.datetime.now().isoformat(timespec="seconds"),
+                "device": device_id or "?", "session": session,
+                "file": filename, "bytes": len(data), "ok": True,
+                "playable": path.with_suffix(".ogg").exists(),
+            })
         log(f"{device_id or '?'}  {session}/{filename}  {len(data)} bytes -> {path}")
         self._reply(200, b"ok\n")
 

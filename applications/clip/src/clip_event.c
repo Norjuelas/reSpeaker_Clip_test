@@ -24,6 +24,7 @@
 #endif
 #include <nrfx_clock.h>
 #include "clip_event.h"
+#include "health.h"
 #include "clip.h"
 #include "audio.h"
 #include "haptic.h"
@@ -486,14 +487,34 @@ void clip_event_process(void)
             goto notify;
         }
 
-        /* Special case: recording blocked while USB MSC active */
+        /* Special case: recording blocked while USB MSC active.
+         *
+         * El motivo es real — USB MSC expone la microSD al ordenador, y grabar
+         * mientras el host puede escribir corrompe la FAT. Pero ojo con cuando
+         * se dispara: CLIP_USB_AT_AT_BOOT enciende USB en cada arranque haya
+         * cable o no, y usb_cdc solo lo apaga tras 10 minutos sin VBUS. Eso
+         * deja una ventana de 10 min despues de cada reinicio en la que el
+         * boton no graba, sin cable de por medio.
+         *
+         * Se aviso en campo como "USB Busy" sin explicacion. La solucion de
+         * fondo es separar el canal serie CDC (que es lo que queremos siempre
+         * disponible) del almacenamiento MSC (que es lo que estorba), y
+         * bloquear solo por el segundo. Ver Doc 14. */
         if (usb_cdc_is_enabled() && item.event == CLIP_EVENT_START) {
-            LOG_INF("Recording blocked: USB MSC active");
+            LOG_WRN("Recording blocked: USB active (MSC could be writing the SD)");
             display_post_event(UI_EVENT_USB_BLOCKED);
             if (item.result) {
                 item.result->result = CLIP_EVENT_INVALID;
             }
             goto notify;
+        }
+
+        /* Un latido cada 5 minutos no sirve para responder "esta grabando
+         * ahora?": el panel puede ir ese retraso por detras, y se vio — el
+         * device grabando y la tabla marcando IDLE. Los cambios de estado son
+         * raros y valen un POST inmediato. */
+        if (item.event == CLIP_EVENT_START || item.event == CLIP_EVENT_STOP) {
+            health_beat_now();
         }
 
         uint8_t next = transition_table[current][item.event];
