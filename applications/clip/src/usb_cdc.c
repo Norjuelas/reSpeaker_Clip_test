@@ -187,11 +187,13 @@ int usb_cdc_init(void)
 		return err;
 	}
 
+#ifdef CONFIG_CLIP_USB_MSC
 	err = usbd_register_class(&clip_usbd, "msc_0", USBD_SPEED_FS, 1);
 	if (err) {
 		LOG_ERR("MSC class: %d", err);
 		return err;
 	}
+#endif
 
 	/* Initialize USB device */
 	err = usbd_init(&clip_usbd);
@@ -210,7 +212,8 @@ int usb_cdc_init(void)
 	k_work_init_delayable(&usb_timeout_work, usb_timeout_handler);
 
 	/* USB starts disabled; use AT+USB=on to enable */
-	LOG_INF("USB CDC+MSC initialized (disabled)");
+	LOG_INF("USB %s initialized (disabled)",
+		IS_ENABLED(CONFIG_CLIP_USB_MSC) ? "CDC+MSC" : "CDC");
 	return 0;
 }
 

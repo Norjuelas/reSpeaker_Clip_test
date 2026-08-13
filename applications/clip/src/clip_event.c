@@ -500,7 +500,8 @@ void clip_event_process(void)
          * fondo es separar el canal serie CDC (que es lo que queremos siempre
          * disponible) del almacenamiento MSC (que es lo que estorba), y
          * bloquear solo por el segundo. Ver Doc 14. */
-        if (usb_cdc_is_enabled() && item.event == CLIP_EVENT_START) {
+        if (IS_ENABLED(CONFIG_CLIP_USB_MSC) && usb_cdc_is_enabled() &&
+            item.event == CLIP_EVENT_START) {
             LOG_WRN("Recording blocked: USB active (MSC could be writing the SD)");
             display_post_event(UI_EVENT_USB_BLOCKED);
             if (item.result) {

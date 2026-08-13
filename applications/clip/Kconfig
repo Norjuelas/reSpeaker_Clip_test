@@ -505,3 +505,26 @@ config CLIP_HEALTH_AUTOSTART
 	  Begin beating as soon as there is a network and an endpoint, without
 	  waiting for AT+HEALTH=on. A device in the field has nobody to type the
 	  command — this is what makes it visible in the panel on its own.
+
+config CLIP_USB_MSC
+	bool "Exponer la microSD como unidad USB"
+	default y
+	help
+	  Presenta la tarjeta al ordenador como un disco extraible.
+
+	  Es una exposicion real y conviene no endulzarla: la carcasa es cerrada y
+	  la tarjeta no se saca, de modo que MSC es LA via para llevarse todas las
+	  grabaciones con solo enchufar un cable.
+
+	  Sigue encendido porque apagarlo ahora deja ciego sin proteger. Con la
+	  carcasa cerrada, MSC es el unico acceso fisico a la tarjeta: sin el, el
+	  log de /SD:/LOG no se puede leer nunca mas, nrf70.bin no se puede
+	  provisionar, y no queda rescate si la red no levanta.
+
+	  El orden es cifrar primero, cerrar despues. Con el audio cifrado en
+	  reposo, montar la tarjeta deja de dar nada util.
+
+	  El precio de tenerlo encendido, mientras tanto: no se puede grabar
+	  mientras USB esta activo, y como el canal AT enciende USB al arrancar,
+	  el boton queda muerto diez minutos tras cada reinicio con un "USB Busy"
+	  en pantalla.
