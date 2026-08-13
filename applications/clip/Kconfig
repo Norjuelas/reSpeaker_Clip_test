@@ -528,3 +528,19 @@ config CLIP_USB_MSC
 	  mientras USB esta activo, y como el canal AT enciende USB al arrancar,
 	  el boton queda muerto diez minutos tras cada reinicio con un "USB Busy"
 	  en pantalla.
+
+config CLIP_UPLOAD_TLS
+	bool "Subir el audio por TLS"
+	depends on NRF70_STA_MODE
+	default n
+	help
+	  Cifra la subida de audio y el latido de salud.
+
+	  Apagado por defecto porque no cabe con Bluetooth: TLS recortado mide
+	  ~38KB y la imagen con BLE no tiene ese hueco. Se enciende junto con
+	  overlay-tls.conf, que quita BLE y recorta mbedTLS al minimo.
+
+	  La CA se lee de /SD:/ca.pem al primer envio, no se compila dentro: asi
+	  una misma imagen vale para toda la flota. Sin ese fichero el device
+	  cifra igual pero no verifica con quien habla — protege de quien escucha
+	  la red, no de quien se hace pasar por el servicio.

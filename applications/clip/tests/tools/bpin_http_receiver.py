@@ -571,13 +571,30 @@ def main():
     ap.add_argument("--port", type=int, default=8080)
     ap.add_argument("--bind", default="0.0.0.0")
     ap.add_argument("--out", type=Path, default=Path("./recordings"))
+    ap.add_argument("--cert", type=Path,
+                    help="certificado del servicio (PEM). Con el, se sirve TLS.")
+    ap.add_argument("--key", type=Path, help="clave privada del certificado")
     args = ap.parse_args()
 
     OUT_DIR = args.out
     OUT_DIR.mkdir(parents=True, exist_ok=True)
 
     server = ThreadingHTTPServer((args.bind, args.port), Handler)
-    log(f"Escuchando en http://{args.bind}:{args.port} -> {OUT_DIR.resolve()}")
+
+    # TLS si se dan certificado y clave. El device negocia ECDHE-ECDSA y nada
+    # mas — el certificado tiene que ser de curva eliptica (P-256); con RSA el
+    # handshake falla sin decir por que.
+    if args.cert and args.key:
+        import ssl
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        ctx.load_cert_chain(str(args.cert), str(args.key))
+        # El device recorta mbedTLS a TLS 1.2: sin esto el servidor ofreceria
+        # 1.3 y no habria terreno comun.
+        ctx.maximum_version = ssl.TLSVersion.TLSv1_2
+        server.socket = ctx.wrap_socket(server.socket, server_side=True)
+        log(f"TLS activo con {args.cert.name}")
+    esquema = "https" if (args.cert and args.key) else "http"
+    log(f"Escuchando en {esquema}://{args.bind}:{args.port} -> {OUT_DIR.resolve()}")
     log(f"Panel de salud: http://localhost:{args.port}/")
     log("Configura el device con: AT+UPCFG=\"<ip-de-esta-maquina>\",%d" % args.port)
 

@@ -25,6 +25,10 @@
 #include <string.h>
 #include <errno.h>
 
+#ifdef CONFIG_CLIP_UPLOAD_TLS
+#include <zephyr/net/tls_credentials.h>
+#endif
+
 #include "http_upload.h"
 #include "config.h"
 #include "storage.h"
@@ -37,6 +41,73 @@ LOG_MODULE_REGISTER(http_upload, CONFIG_CLIP_LOG_LEVEL);
 #define SEND_CHUNK      1024
 #define HTTP_TIMEOUT_MS 15000
 #define CONNECT_TIMEOUT_MS 5000
+
+#ifdef CONFIG_CLIP_UPLOAD_TLS
+/* La CA se lee de la tarjeta, no se compila dentro. Asi una misma imagen sirve
+ * para toda la flota y cambiar de CA no obliga a reconstruir 100 firmwares —
+ * encaja con que la configuracion de entrega ya se hace por cable.
+ *
+ * El contrapunto: la tarjeta es escribible por USB, de modo que quien tenga el
+ * device puede cambiar la CA en la que confia. Eso lo cierra el certificado
+ * por device del Doc 13, no esto. */
+#define CA_PATH        "/SD:/ca.pem"
+#define CA_MAX_LEN     2048
+#define CA_SEC_TAG     42
+
+static bool ca_loaded;
+
+static int load_ca(void)
+{
+	struct fs_file_t f;
+	uint8_t *pem;
+	ssize_t n;
+	int ret;
+
+	if (ca_loaded) {
+		return 0;
+	}
+
+	fs_file_t_init(&f);
+	ret = fs_open(&f, CA_PATH, FS_O_READ);
+	if (ret) {
+		LOG_WRN("Sin CA en %s (%d): se hablara TLS sin validar al servidor",
+			CA_PATH, ret);
+		return ret;
+	}
+
+	pem = k_malloc(CA_MAX_LEN);
+	if (!pem) {
+		fs_close(&f);
+		return -ENOMEM;
+	}
+
+	n = fs_read(&f, pem, CA_MAX_LEN - 1);
+	fs_close(&f);
+
+	if (n <= 0) {
+		k_free(pem);
+		return -EIO;
+	}
+
+	/* PEM y terminado en NUL: mbedTLS lo exige, y el tamano que se le pasa
+	 * tiene que incluir ese NUL. Sin el, el parseo falla con un error que no
+	 * menciona el terminador por ninguna parte. */
+	pem[n] = '\0';
+
+	ret = tls_credential_add(CA_SEC_TAG, TLS_CREDENTIAL_CA_CERTIFICATE,
+				 pem, (size_t)n + 1);
+	k_free(pem);
+
+	if (ret) {
+		LOG_ERR("La CA de %s no se pudo cargar: %d", CA_PATH, ret);
+		return ret;
+	}
+
+	ca_loaded = true;
+	LOG_WRN("CA cargada de %s (%u bytes)", CA_PATH, (unsigned int)n);
+	return 0;
+}
+#endif /* CONFIG_CLIP_UPLOAD_TLS */
 
 struct upload_ctx {
 	struct fs_file_t *file;
@@ -141,11 +212,43 @@ static int connect_to_endpoint(const char *host, uint16_t port)
 		return -EINVAL;
 	}
 
+#ifdef CONFIG_CLIP_UPLOAD_TLS
+	sock = zsock_socket(AF_INET, SOCK_STREAM, IPPROTO_TLS_1_2);
+#else
 	sock = zsock_socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+#endif
 	if (sock < 0) {
 		LOG_ERR("socket failed: %d", -errno);
 		return -errno;
 	}
+
+#ifdef CONFIG_CLIP_UPLOAD_TLS
+	{
+		sec_tag_t tags[] = { CA_SEC_TAG };
+		int verify;
+
+		load_ca();
+
+		/* Sin CA no se puede verificar nada, y fingir que si seria peor que
+		 * no cifrar: daria una sensacion de seguridad que no existe. Se cifra
+		 * igualmente — protege de quien escucha la red — pero queda dicho en
+		 * el log que no se comprueba con quien se habla. */
+		verify = ca_loaded ? TLS_PEER_VERIFY_REQUIRED : TLS_PEER_VERIFY_NONE;
+		if (!ca_loaded) {
+			LOG_WRN("TLS sin verificar al servidor: cifra, pero no autentica");
+		}
+
+		if (ca_loaded &&
+		    zsock_setsockopt(sock, SOL_TLS, TLS_SEC_TAG_LIST, tags,
+				     sizeof(tags)) < 0) {
+			LOG_ERR("TLS_SEC_TAG_LIST: %d", -errno);
+		}
+		zsock_setsockopt(sock, SOL_TLS, TLS_PEER_VERIFY, &verify,
+				 sizeof(verify));
+		/* El endpoint es una IP, no un nombre: SNI no aplica y pedirlo hace
+		 * fallar el handshake. Cuando el servicio tenga nombre, aqui va. */
+	}
+#endif
 
 	/* Without this, a wrong address or a service that is not listening makes
 	 * connect() block for the stack's full retry sequence, and the caller —
