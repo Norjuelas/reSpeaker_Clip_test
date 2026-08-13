@@ -125,6 +125,18 @@ PANEL_HTML = """<!doctype html>
 """
 
 
+def _ago(sec):
+    """Cuanto hace del ultimo latido, en palabras."""
+    sec = int(sec)
+    if sec < 90:
+        return f"hace {sec}s"
+    if sec < 5400:
+        return f"hace {sec // 60} min"
+    if sec < 172800:
+        return f"hace {sec // 3600} h"
+    return f"hace {sec // 86400} dias"
+
+
 def _fmt_uptime(sec):
     try:
         sec = int(sec)
@@ -196,6 +208,11 @@ def _panel_html():
         # intervalo, 900 s es la se\u00f1al de que algo pasa, no un retraso.
         stale = ' class="stale"' if age > 900 else ""
         tag = ' <span class="test">prueba</span>' if b.get("_test") else ""
+        # La antiguedad, no la hora del reloj. Mostrar solo "13:45:16" hacia que
+        # un latido de ayer se leyera igual que uno de hace un minuto — paso, y
+        # se tomo por dato fresco. El gris atenuado no basta: no sobrevive a
+        # copiar la tabla a otro sitio.
+        age_cls = "bad" if age > 3600 else ("warn" if age > 900 else "ok")
 
         pct = b.get("battery_pct", 0)
         bat_cls = "bad" if pct < 15 else ("warn" if pct < 30 else "ok")
@@ -217,7 +234,7 @@ def _panel_html():
         out.append(
             f"<tr{stale}>"
             f'<td class="id">{dev}{tag}</td>'
-            f"<td>{seen.strftime('%H:%M:%S')}</td>"
+            f'<td class="{age_cls}">{_ago(age)}</td>'
             f"<td>{_fmt_uptime(b.get('uptime_s'))}</td>"
             f'<td class="{rst_cls}">{reset}</td>'
             f'<td class="{bat_cls}">{pct}%{chg} <small>({b.get("battery_mv",0)}mV)</small></td>'
