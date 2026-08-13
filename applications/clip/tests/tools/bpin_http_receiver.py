@@ -250,7 +250,7 @@ def _panel_html():
             f'<td class="{bat_cls}">{pct}%{chg} <small>({b.get("battery_mv",0)}mV)</small></td>'
             f'<td class="{sd_cls}">{free} MB</td>'
             f"<td>{b.get('sd_used_mb', 0)} MB</td>"
-            f"<td>{b.get('ip') or DASH}</td>"
+            f"<td>{b.get('ip') or (b.get('wifi_err') or DASH)}</td>"
             f"<td>{b.get('state', '?')}</td>"
             f"<td>{up_txt}</td>"
             f"</tr>")

@@ -126,6 +126,7 @@ int health_snapshot_json(char *buf, size_t len)
 		     "\"sd_mounted\":%s,\"sd_free_mb\":%u,\"sd_total_mb\":%u,"
 		     "\"sd_used_mb\":%u,"
 		     "\"wifi\":%s,\"ip\":\"%s\",\"ssid\":\"%s\","
+		     "\"wifi_err\":\"%s\","
 		     "\"state\":\"%s\","
 		     "\"upload_state\":\"%s\",\"upload_done\":%u,"
 		     "\"upload_total\":%u,\"upload_err\":%d}",
@@ -153,6 +154,11 @@ int health_snapshot_json(char *buf, size_t len)
 		      * misma en los 100 devices y no sirve para encontrar
 		      * ninguno en la red. */
 		     wifi_sta_get_ip(), ctx->config.sta_ssid,
+		     /* Por que no hay red, no solo que no la hay. Con 100 devices en
+		      * tiendas, "sin red" a secas es una llamada de soporte; "clave
+		      * incorrecta" o "no-dhcp" se resuelve sin desplazarse. Vacio
+		      * cuando esta conectado. */
+		     wifi_sta_is_connected() ? "" : wifi_sta_get_fail_reason(),
 		     clip_state_to_string(clip_event_get_state()),
 		     up.state == HTTP_UPLOAD_RUNNING ? "running" :
 		     up.state == HTTP_UPLOAD_DONE    ? "done" :

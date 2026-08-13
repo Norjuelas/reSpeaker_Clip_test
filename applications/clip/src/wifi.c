@@ -913,6 +913,18 @@ static void sta_connect_work_handler(struct k_work *work)
 	ret = wifi_sta_on();
 	if (ret)
 	{
+		/* Al log antes que a BLE. Esto solo avisaba por ble_notify_event, de
+		 * modo que un arranque que no consigue red no dejaba rastro en ninguna
+		 * parte salvo que hubiera un telefono emparejado escuchando en ese
+		 * instante. Con BLE retirado no lo veria nadie: el device queda mudo y
+		 * en el panel parece apagado, sin explicacion.
+		 *
+		 * A WRN para que sobreviva al backend de fichero de la SD, que es lo
+		 * unico que queda en una unidad en tienda. */
+		LOG_WRN("Autoconnect a '%s' fallo: %s (%d)", config_get_sta_ssid(),
+				sta_fail_text[0] ? sta_fail_text : "sin motivo del supplicant",
+				ret);
+
 		/* Report the reason, not just the fact. -ETIMEDOUT after association
 		 * means DHCP never answered, which is a different problem entirely
 		 * from the AP refusing us. */
