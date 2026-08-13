@@ -22,6 +22,15 @@ import json
 import sys
 import threading
 from collections import deque
+from urllib.parse import parse_qs, urlparse
+
+# Configuracion por cable y flasheo. Opcional: si falta pyserial o nrfutil el
+# panel de salud sigue funcionando igual, solo desaparece la pestana.
+try:
+    import panel_admin
+except Exception as _e:
+    print(f"[aviso] pestana de configuracion no disponible: {_e}", flush=True)
+    panel_admin = None
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -117,6 +126,7 @@ PANEL_HTML = """<!doctype html>
   th{background:#24272d;color:#aaa} th,td{border-bottom:1px solid #2c3037} .empty{background:#1e2126}
  }
 </style>
+<nav style="margin-bottom:1rem"><a href="/">Devices</a> &middot; <a href="/config">Configurar por cable</a></nav>
 <h1>Devices</h1>
 <div class="sub">@@COUNT@@ con latido \u00b7 refresco cada 15 s \u00b7 @@NOW@@</div>
 @@TABLE@@
@@ -249,11 +259,120 @@ def _panel_html():
     return _render(len(rows), now, "".join(out))
 
 
+
+ADMIN_HTML = """<!doctype html>
+<meta charset="utf-8"><title>B\u00b7Pin \u2014 configurar</title>
+<style>
+ body{font:14px/1.6 -apple-system,system-ui,sans-serif;margin:2rem;max-width:820px;color:#1a1a1a;background:#fafafa}
+ h1{font-size:1.2rem;margin:1.5rem 0 .3rem} h1:first-of-type{margin-top:0}
+ .card{background:#fff;padding:1.2rem;box-shadow:0 1px 3px rgba(0,0,0,.1);margin-bottom:1.5rem}
+ label{display:block;margin:.6rem 0 .15rem;font-size:.8rem;color:#555;text-transform:uppercase;letter-spacing:.03em}
+ input,select{width:100%;padding:.45rem;border:1px solid #ccc;border-radius:3px;font:inherit;background:#fff;color:inherit}
+ button{margin-top:1rem;padding:.5rem 1.1rem;border:0;border-radius:3px;background:#1a1a1a;color:#fff;font:inherit;cursor:pointer}
+ button.warn{background:#b45309}
+ table{border-collapse:collapse;width:100%;font-size:.85rem}
+ td,th{text-align:left;padding:.35rem .5rem;border-bottom:1px solid #eee}
+ .tag{font-family:ui-monospace,monospace;font-size:.8rem;background:#e0e7ff;color:#3730a3;padding:.05rem .35rem;border-radius:3px}
+ .none{color:#999}
+ pre{background:#f4f4f4;padding:.7rem;overflow-x:auto;font-size:.8rem;white-space:pre-wrap}
+ .sub{color:#666;font-size:.85rem;margin-bottom:.8rem}
+ @media (prefers-color-scheme:dark){
+  body{background:#16181c;color:#e6e6e6}.card{background:#1e2126;box-shadow:none}
+  input,select{background:#24272d;border-color:#3a3f47;color:#e6e6e6}
+  button{background:#e6e6e6;color:#16181c}pre{background:#24272d}
+  td,th{border-bottom:1px solid #2c3037}.tag{background:#312e81;color:#c7d2fe}}
+</style>
+<nav style="margin-bottom:1rem"><a href="/">Devices</a> &middot; <a href="/config">Configurar por cable</a></nav>
+
+<h1>Device conectado</h1>
+<div class="card"><div id="dev" class="sub">buscando\u2026</div></div>
+
+<h1>Configuraci\u00f3n de entrega</h1>
+<div class="card">
+ <div class="sub">Lo que se hace una vez, con el device en la mano. En tienda no
+ se toca nada m\u00e1s: s\u00f3lo mantenerlo cargado y encendido.</div>
+ <label>Puerto</label><select id="port"></select>
+ <label>Red WiFi (SSID)</label><input id="ssid" placeholder="Fenix">
+ <label>Contrase\u00f1a</label><input id="psk" type="password">
+ <label>Servicio \u2014 IP</label><input id="host" placeholder="192.168.2.18">
+ <label>Servicio \u2014 puerto</label><input id="uport" value="8080">
+ <button onclick="cfg()">Configurar</button>
+ <pre id="cfgout" hidden></pre>
+</div>
+
+<h1>Firmware</h1>
+<div class="card">
+ <div class="sub">El device debe estar <b>en modo recovery</b>. Se intenta
+ <code>AT+DFU</code> primero; si ya est\u00e1 en recovery, sigue igual.</div>
+ <table id="builds"><tr><th>etiqueta</th><th>fichero</th><th>tama\u00f1o</th><th>fecha</th><th></th></tr></table>
+ <pre id="flashout" hidden></pre>
+</div>
+
+<script>
+const $=i=>document.getElementById(i);
+const show=(el,t)=>{el.hidden=false;el.textContent=t};
+
+async function load(){
+  const d=await (await fetch("/api/device")).json();
+  $("port").innerHTML=(d.ports||[]).map(p=>`<option>${p}</option>`).join("")
+    ||"<option>(ningun puerto)</option>";
+  $("dev").innerHTML = d.info && d.info.firmware
+    ? `<b>firmware ${d.info.firmware}</b> en ${d.info.port}`
+      + (d.info.sta&&d.info.sta.ip?` \u00b7 ${d.info.sta.ip} (${d.info.sta.ssid||""})`:" \u00b7 sin red")
+    : `<span class="none">${(d.info&&d.info.error)||"sin device por cable"}</span>`;
+
+  const b=await (await fetch("/api/builds")).json();
+  $("builds").innerHTML='<tr><th>etiqueta</th><th>fichero</th><th>tama\u00f1o</th><th>fecha</th><th></th></tr>'
+    + b.builds.map(x=>`<tr><td><span class="tag">${x.tag}</span></td>`
+      +`<td>${x.nombre}</td><td>${(x.bytes/1024).toFixed(0)} KB</td>`
+      +`<td>${x.modificado}</td>`
+      +`<td><button class="warn" onclick="flash('${x.ruta}')">instalar</button></td></tr>`).join("");
+}
+
+async function cfg(){
+  show($("cfgout"),"configurando\u2026");
+  const r=await fetch("/api/wifi",{method:"POST",body:JSON.stringify({
+    port:$("port").value,ssid:$("ssid").value,psk:$("psk").value,
+    host:$("host").value,upload_port:$("uport").value||8080})});
+  show($("cfgout"),JSON.stringify(await r.json(),null,1));
+  $("psk").value="";
+  load();
+}
+
+async function flash(ruta){
+  if(!confirm("Instalar "+ruta+"?\\n\\nEl device debe estar en recovery."))return;
+  show($("flashout"),"instalando "+ruta+"\u2026 (puede tardar un par de minutos)");
+  const r=await fetch("/api/flash",{method:"POST",
+    body:JSON.stringify({ruta:ruta,port:$("port").value})});
+  show($("flashout"),JSON.stringify(await r.json(),null,1));
+  setTimeout(load,8000);
+}
+load();
+</script>
+"""
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
     def log_message(self, fmt, *args):
         pass  # el log propio basta
+
+    def _html(self, text):
+        body = text.encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _json(self, obj, code=200):
+        body = json.dumps(obj, indent=1).encode()
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
     def _reply(self, code, body=b""):
         self.send_response(code)
@@ -286,6 +405,49 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         parts = [p for p in self.path.split("/") if p]
+
+        if parts and parts[0] == "api":
+            # Reescribir el firmware o las credenciales solo desde esta maquina.
+            # El receptor esta expuesto a la red para recibir audio; esto no.
+            if self.client_address[0] not in ("127.0.0.1", "::1"):
+                self._json({"ok": False, "error": "solo desde localhost"}, 403)
+                return
+            if not panel_admin:
+                self._json({"ok": False, "error": "modulo no disponible"}, 503)
+                return
+
+            body, err = self._read_body(MAX_JSON)
+            if err:
+                self._json({"ok": False, "error": err}, 400)
+                return
+            try:
+                req = json.loads(body)
+            except json.JSONDecodeError:
+                self._json({"ok": False, "error": "json invalido"}, 400)
+                return
+
+            if parts == ["api", "wifi"]:
+                # La contrasena no pasa por el log en ningun momento.
+                log(f"configurando {req.get('port')} -> red {req.get('ssid')!r}")
+                try:
+                    pasos = panel_admin.configure(
+                        req["port"], req.get("ssid", ""), req.get("psk", ""),
+                        req.get("host", ""), req.get("upload_port", 8080))
+                    self._json({"ok": all(p["ok"] for p in pasos), "pasos": pasos})
+                except Exception as e:
+                    self._json({"ok": False, "error": f"{type(e).__name__}: {e}"}, 500)
+                return
+
+            if parts == ["api", "flash"]:
+                log(f"instalando {req.get('ruta')} en {req.get('port')}")
+                try:
+                    self._json(panel_admin.flash(req["ruta"], req["port"]))
+                except Exception as e:
+                    self._json({"ok": False, "error": f"{type(e).__name__}: {e}"}, 500)
+                return
+
+            self._json({"ok": False, "error": "ruta desconocida"}, 404)
+            return
 
         if parts == ["health"]:
             body, err = self._read_body(MAX_JSON)
@@ -358,6 +520,24 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
+            return
+
+        if self.path == "/config":
+            self._html(ADMIN_HTML)
+            return
+
+        if self.path == "/api/device":
+            if not panel_admin:
+                self._json({"ports": [], "info": {"error": "modulo no disponible"}})
+                return
+            ports = panel_admin.serial_ports()
+            info = panel_admin.device_info(ports[0]) if ports else {}
+            self._json({"ports": ports, "info": info})
+            return
+
+        if self.path == "/api/builds":
+            self._json(panel_admin.builds() if panel_admin
+                       else {"builds": [], "tags": []})
             return
 
         if self.path == "/purge-test":
