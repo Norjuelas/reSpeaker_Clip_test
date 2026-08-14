@@ -56,11 +56,16 @@ LOG_MODULE_REGISTER(http_upload, CONFIG_CLIP_LOG_LEVEL);
 
 static bool ca_loaded;
 
+/* Propiedad permanente del proceso: tls_credential_add() se queda con el
+ * puntero, asi que este buffer tiene que sobrevivir a la funcion que lo pide. */
+static uint8_t *ca_buf;
+
 static int load_ca(void)
 {
 	struct fs_file_t f;
 	uint8_t *pem;
 	ssize_t n;
+	bool is_pem;
 	int ret;
 
 	if (ca_loaded) {
@@ -89,22 +94,44 @@ static int load_ca(void)
 		return -EIO;
 	}
 
-	/* PEM y terminado en NUL: mbedTLS lo exige, y el tamano que se le pasa
-	 * tiene que incluir ese NUL. Sin el, el parseo falla con un error que no
-	 * menciona el terminador por ninguna parte. */
+	/* Los dos formatos, y la longitud NO es la misma para cada uno.
+	 *
+	 * PEM es texto y mbedTLS exige que el tamano incluya el NUL final. DER es
+	 * binario y el tamano tiene que ser exacto: pasarle uno de mas corrompe la
+	 * estructura ASN.1 y el parseo falla.
+	 *
+	 * Se acepta PEM porque es lo que sale de openssl y lo que cualquiera tiene
+	 * a mano, y DER porque no necesita el decodificador (unos 2KB de FLASH que
+	 * en esta imagen se notan). */
 	pem[n] = '\0';
+	is_pem = (n > 10 && memcmp(pem, "-----BEGIN", 10) == 0);
 
 	ret = tls_credential_add(CA_SEC_TAG, TLS_CREDENTIAL_CA_CERTIFICATE,
-				 pem, (size_t)n + 1);
-	k_free(pem);
-
+				 pem, is_pem ? (size_t)n + 1 : (size_t)n);
 	if (ret) {
 		LOG_ERR("La CA de %s no se pudo cargar: %d", CA_PATH, ret);
+		k_free(pem);
 		return ret;
 	}
 
+	/* El buffer NO se libera, y no es un descuido.
+	 *
+	 * tls_credential_add() guarda el puntero — `credential->buf = cred` — sin
+	 * copiar nada. Liberarlo deja la credencial apuntando a memoria libre.
+	 *
+	 * El sintoma que produjo es instructivo: la primera conexion funcionaba,
+	 * porque el heap recien liberado todavia conservaba el contenido, y a
+	 * partir de la segunda fallaba con TLS_SEC_TAG_LIST: -22. Y ese EINVAL
+	 * salia como EHOSTUNREACH en connect(), acusando a la red de un puntero
+	 * colgante. Un fallo intermitente que empeora con el uso es de los peores
+	 * de diagnosticar.
+	 *
+	 * Vive lo que viva el device: la CA se carga una vez y se usa siempre. */
+	ca_buf = pem;
+
 	ca_loaded = true;
-	LOG_WRN("CA cargada de %s (%u bytes)", CA_PATH, (unsigned int)n);
+	LOG_WRN("CA cargada de %s: %u bytes en %s", CA_PATH, (unsigned int)n,
+		is_pem ? "PEM" : "DER");
 	return 0;
 }
 #endif /* CONFIG_CLIP_UPLOAD_TLS */
