@@ -25,6 +25,7 @@ target_sources(app PRIVATE
     src/icons.c
     src/http_upload.c
     src/health.c
+    src/upload_registry.c
     src/nrf70_fw_provision.c
     src/wifi.c
     src/wifi_udp.c

@@ -987,6 +987,29 @@ int wifi_sta_connect_async(void)
 	return wifi_sta_connect_async_delayed(0);
 }
 
+int wifi_get_mac(char *buf, size_t len)
+{
+	struct net_if *iface = net_if_get_first_wifi();
+	struct net_linkaddr *la;
+
+	if (!buf || len < 18) {
+		return -EINVAL;
+	}
+	if (!iface) {
+		return -ENODEV;
+	}
+
+	la = net_if_get_link_addr(iface);
+	if (!la || la->len != 6) {
+		return -ENODEV;
+	}
+
+	snprintf(buf, len, "%02X:%02X:%02X:%02X:%02X:%02X",
+		 la->addr[0], la->addr[1], la->addr[2],
+		 la->addr[3], la->addr[4], la->addr[5]);
+	return 0;
+}
+
 uint32_t wifi_sta_offline_minutes(void)
 {
 	if (sta_offline_since == 0)

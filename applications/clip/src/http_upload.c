@@ -33,6 +33,7 @@
 #include "config.h"
 #include "storage.h"
 #include "wifi.h"
+#include "upload_registry.h"
 
 LOG_MODULE_REGISTER(http_upload, CONFIG_CLIP_LOG_LEVEL);
 
@@ -604,6 +605,16 @@ static void upload_work_fn(struct k_work *work)
 			continue;
 		}
 
+		if (upload_registry_has(session_id, idx)) {
+			/* Ya esta en S3. Volver a mandarlo duplicaria audio, y con
+			 * subidas periodicas cada pocos minutos eso pasaria en cada
+			 * pasada. */
+			k_mutex_lock(&status_lock, K_FOREVER);
+			status.files_done++;
+			k_mutex_unlock(&status_lock);
+			continue;
+		}
+
 		snprintf(name, sizeof(name), "%04u.opus", (unsigned int)idx);
 
 		err = http_upload_file(session_id, name, path, (size_t)st.size);
@@ -612,6 +623,10 @@ static void upload_work_fn(struct k_work *work)
 				(unsigned int)idx, (unsigned int)file_count, err);
 			break;
 		}
+
+		/* Anotar solo tras un 2xx confirmado: si el endpoint no lo acepto,
+		 * el fichero tiene que volver a intentarse. */
+		upload_registry_mark(session_id, idx);
 
 		k_mutex_lock(&status_lock, K_FOREVER);
 		status.files_done++;
@@ -627,6 +642,78 @@ static void upload_work_fn(struct k_work *work)
 		err ? " (stopped on error)" : "");
 }
 
+/* ------------------------------------------------------------------------
+ * La subida periodica
+ *
+ * El firmware ya corta la grabacion en trozos de 5 minutos por su cuenta, asi
+ * que no hay que trocear nada: basta con pasar cada cierto tiempo y mandar lo
+ * que haya cerrado y no este anotado en el registro.
+ *
+ * Se eligieron 15 minutos y no 5 por la radio. Subir en cuanto se cierra un
+ * trozo significa despertar el WiFi cada 5 minutos durante toda la jornada; a
+ * 15 se agrupan tres ficheros por conexion, y en una celda de 170 mAh la
+ * diferencia importa. El precio es que se pueden perder hasta 15 minutos de
+ * audio si el device muere sin subir — contra 5. Se asume: el audio sigue en
+ * la tarjeta y se sube en cuanto vuelva.
+ * ------------------------------------------------------------------------ */
+
+static struct k_work_delayable periodic_work;
+
+static void periodic_work_fn(struct k_work *work)
+{
+	struct storage_session_info *sessions;
+	int found;
+
+	ARG_UNUSED(work);
+
+	if (!wifi_sta_is_connected() ||
+	    config_get_upload_host()[0] == '\0' || config_get_upload_port() == 0) {
+		goto reschedule;
+	}
+
+	/* Nunca por encima de una subida en curso ni de una grabacion: el hilo es
+	 * uno solo y la tarjeta esta ocupada. */
+	k_mutex_lock(&status_lock, K_FOREVER);
+	if (status.state == HTTP_UPLOAD_RUNNING) {
+		k_mutex_unlock(&status_lock);
+		goto reschedule;
+	}
+	k_mutex_unlock(&status_lock);
+
+	sessions = k_malloc(sizeof(*sessions) * CONFIG_CLIP_STORAGE_MAX_SESSIONS);
+	if (!sessions) {
+		goto reschedule;
+	}
+
+	found = storage_list_sessions(sessions, CONFIG_CLIP_STORAGE_MAX_SESSIONS);
+
+	/* De la mas antigua a la mas nueva: si la ventana no da para todas, lo que
+	 * lleva mas tiempo esperando sale primero. */
+	for (int i = found - 1; i >= 0; i--) {
+		bool pending = false;
+
+		for (uint32_t idx = 1; idx <= sessions[i].file_count; idx++) {
+			if (!upload_registry_has(sessions[i].session_id, idx)) {
+				pending = true;
+				break;
+			}
+		}
+
+		if (pending) {
+			LOG_WRN("Subida periodica: %s tiene ficheros sin enviar",
+				sessions[i].session_id);
+			http_upload_session_async(sessions[i].session_id);
+			break;
+		}
+	}
+
+	k_free(sessions);
+
+reschedule:
+	k_work_schedule_for_queue(&upload_wq, &periodic_work,
+				  K_MINUTES(CONFIG_CLIP_UPLOAD_INTERVAL_MIN));
+}
+
 int http_upload_init(void)
 {
 	if (upload_wq_started) {
@@ -640,6 +727,14 @@ int http_upload_init(void)
 	k_thread_name_set(&upload_wq.thread, "http_upload");
 	k_work_init(&upload_work, upload_work_fn);
 	upload_wq_started = true;
+
+#if CONFIG_CLIP_UPLOAD_INTERVAL_MIN > 0
+	k_work_init_delayable(&periodic_work, periodic_work_fn);
+	/* La primera pasada no es inmediata: al arrancar todavia no hay red, y
+	 * ademas conviene que una grabacion recien empezada tenga tiempo de cerrar
+	 * su primer trozo. */
+	k_work_schedule_for_queue(&upload_wq, &periodic_work, K_MINUTES(2));
+#endif
 
 	return 0;
 }

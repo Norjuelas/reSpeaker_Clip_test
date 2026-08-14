@@ -17,6 +17,7 @@
 #include <strings.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <zephyr/drivers/hwinfo.h>
 #include "at_commands.h"
 #include "at_server.h"
 #include "clip.h"
@@ -305,7 +306,24 @@ static int cmd_device_handler(struct at_cmd_ctx *ctx, char *response, size_t len
     char name_buf[32];
 
     snprintf(name_buf, sizeof(name_buf), "\"%s\"", device_name ? device_name : "Unknown");
-    int n = snprintf(response, len, "{\"ok\":true,\"device\":%s}", name_buf);
+    /* La MAC va aqui porque es lo que piden las redes de tienda con lista
+     * blanca, y AT+DEVICE es donde alguien la buscaria. Puede faltar si el
+     * interfaz WiFi todavia no ha levantado. */
+    char mac[18] = "";
+    char chip[17] = "";
+    uint8_t cid[8];
+    ssize_t cid_len;
+
+    (void)wifi_get_mac(mac, sizeof(mac));
+
+    cid_len = hwinfo_get_device_id(cid, sizeof(cid));
+    for (ssize_t i = 0; i < cid_len && i < 8; i++) {
+        snprintf(chip + i * 2, 3, "%02X", cid[i]);
+    }
+
+    int n = snprintf(response, len,
+                     "{\"ok\":true,\"device\":%s,\"mac\":\"%s\",\"chip\":\"%s\"}",
+                     name_buf, mac, chip);
     if (n < 0 || n >= len - 2) {
         return AT_ERR_NOMEM;
     }

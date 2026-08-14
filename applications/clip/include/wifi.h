@@ -158,6 +158,18 @@ bool wifi_sta_is_connected(void);
 uint32_t wifi_sta_offline_minutes(void);
 
 /**
+ * @brief La MAC del interfaz WiFi, como "AA:BB:CC:DD:EE:FF"
+ *
+ * Hace falta para las redes de tienda que filtran por lista blanca: sin este
+ * dato no se puede dar de alta un device antes de llevarlo, y averiguarlo
+ * implicaba conectarlo a otra red y mirar la tabla ARP desde otra maquina.
+ *
+ * @param buf destino, al menos 18 bytes
+ * @retval -ENODEV si el interfaz WiFi no esta disponible todavia
+ */
+int wifi_get_mac(char *buf, size_t len);
+
+/**
  * @brief Get the IP address obtained by DHCP in station mode
  *
  * @return Dotted-quad string, empty if not connected

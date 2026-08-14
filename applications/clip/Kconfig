@@ -567,3 +567,24 @@ config CLIP_NO_NETWORK_POWEROFF_MIN
 	  no haya red. El audio en la tarjeta vale mas que la bateria.
 
 	  0 lo desactiva.
+
+config CLIP_UPLOAD_INTERVAL_MIN
+	int "Minutos entre subidas automaticas"
+	depends on NRF70_STA_MODE
+	default 15
+	range 0 240
+	help
+	  Cada cuanto revisa el device si tiene grabaciones sin subir y las manda.
+
+	  El firmware ya corta la grabacion en trozos de 5 minutos, asi que no hay
+	  que trocear nada: la subida solo recoge lo que ya esta cerrado.
+
+	  15 y no 5 por la radio: subir en cuanto se cierra un trozo obliga a
+	  despertar el WiFi cada 5 minutos toda la jornada, mientras que a 15 se
+	  agrupan tres ficheros por conexion. Con 170 mAh la diferencia se nota.
+
+	  El precio es que una muerte inesperada puede dejar hasta 15 minutos de
+	  audio sin subir en vez de 5. No se pierde: sigue en la tarjeta y sale en
+	  la siguiente pasada.
+
+	  0 lo desactiva y deja la subida solo bajo AT+HTTPUP.
