@@ -170,6 +170,14 @@ uint32_t wifi_sta_offline_minutes(void);
 int wifi_get_mac(char *buf, size_t len);
 
 /**
+ * @brief Potencia de la senal en dBm, 0 si no esta asociado
+ *
+ * Sirve para correlacionar fallos con la colocacion del device en la tienda:
+ * un -80 dBm explica reintentos y subidas lentas sin tener que ir a mirar.
+ */
+int wifi_sta_get_rssi(void);
+
+/**
  * @brief Get the IP address obtained by DHCP in station mode
  *
  * @return Dotted-quad string, empty if not connected

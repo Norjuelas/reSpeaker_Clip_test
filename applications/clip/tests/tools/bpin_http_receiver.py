@@ -208,7 +208,7 @@ def _panel_html():
         return _render(0, now, table)
 
     out = ["<table><tr><th>device</th><th>visto</th><th>uptime</th><th>reinicio</th>"
-           "<th>bater\u00eda</th><th>SD libre</th><th>SD usada</th><th>red</th>"
+           "<th>bater\u00eda</th><th>SD libre</th><th>SD usada</th><th>red</th><th>MAC</th>"
            "<th>estado</th><th>subida</th></tr>"]
 
     for dev, b in rows:
@@ -251,6 +251,8 @@ def _panel_html():
             f'<td class="{sd_cls}">{free} MB</td>'
             f"<td>{b.get('sd_used_mb', 0)} MB</td>"
             f"<td>{b.get('ip') or (b.get('wifi_err') or DASH)}</td>"
+            f'<td class="id">{b.get("mac") or DASH}</td>'
+            f"<td class=\"id\">{b.get('mac') or DASH}</td>"
             f"<td>{b.get('state', '?')}</td>"
             f"<td>{up_txt}</td>"
             f"</tr>")
@@ -300,6 +302,17 @@ ADMIN_HTML = """<!doctype html>
  <pre id="cfgout" hidden></pre>
 </div>
 
+<h1>Logs del device</h1>
+<div class="card">
+ <div class="sub">Lo unico que dice por que se cayo. Se copian de la microSD a
+ una carpeta con fecha, para poder comparar dos arranques.</div>
+ <button onclick="getlogs()">Traer logs de la tarjeta</button>
+ <label style="display:inline;margin-left:1rem;font-size:.8rem;text-transform:none">
+  <input type="checkbox" id="soloerr" style="width:auto" checked> solo errores y avisos</label>
+ <div id="logsout"></div>
+ <pre id="logview" hidden style="max-height:26rem;overflow:auto"></pre>
+</div>
+
 <h1>Firmware</h1>
 <div class="card">
  <div class="sub">El device debe estar <b>en modo recovery</b>. Se intenta
@@ -311,6 +324,36 @@ ADMIN_HTML = """<!doctype html>
 <script>
 const $=i=>document.getElementById(i);
 const show=(el,t)=>{el.hidden=false;el.textContent=t};
+
+async function getlogs(){
+  show($("logsout"),"copiando\u2026");
+  const r=await (await fetch("/api/logs/fetch",{method:"POST",body:"{}"})).json();
+  if(!r.ok){ $("logsout").innerHTML='<span class="none">'+r.error+'</span>'; return; }
+  $("logsout").innerHTML="";
+  listlogs();
+}
+
+async function listlogs(){
+  const r=await (await fetch("/api/logs")).json();
+  $("logsout").innerHTML = (r.descargas||[]).length
+    ? '<table><tr><th>cuando</th><th>fichero</th><th>tama\u00f1o</th><th></th></tr>'
+      + r.descargas.flatMap(d=>d.ficheros.map(f=>
+          `<tr><td>${d.cuando}</td><td>${f.nombre}</td>`
+          +`<td>${(f.bytes/1024).toFixed(0)} KB</td>`
+          +`<td><button onclick="viewlog('${f.ruta}')">ver</button></td></tr>`)).join("")
+      + "</table>"
+    : '<span class="none">Ninguna descarga todav\u00eda.</span>';
+}
+
+async function viewlog(ruta){
+  const only=$("soloerr").checked;
+  const r=await (await fetch("/api/logs/read",{method:"POST",
+    body:JSON.stringify({ruta:ruta,solo_problemas:only})})).json();
+  if(!r.ok){ show($("logview"),r.error); return; }
+  show($("logview"), r.lineas.length
+      ? r.lineas.join("\n")
+      : "(sin errores ni avisos en este log)");
+}
 
 async function load(){
   const d=await (await fetch("/api/device")).json();
@@ -348,6 +391,7 @@ async function flash(ruta){
   setTimeout(load,8000);
 }
 load();
+listlogs();
 </script>
 """
 
@@ -436,6 +480,16 @@ class Handler(BaseHTTPRequestHandler):
                     self._json({"ok": all(p["ok"] for p in pasos), "pasos": pasos})
                 except Exception as e:
                     self._json({"ok": False, "error": f"{type(e).__name__}: {e}"}, 500)
+                return
+
+            if parts == ["api", "logs", "fetch"]:
+                log("copiando logs de la microSD")
+                self._json(panel_admin.fetch_logs())
+                return
+
+            if parts == ["api", "logs", "read"]:
+                self._json(panel_admin.read_log(
+                    req["ruta"], only_problems=req.get("solo_problemas", False)))
                 return
 
             if parts == ["api", "flash"]:
@@ -533,6 +587,10 @@ class Handler(BaseHTTPRequestHandler):
             ports = panel_admin.serial_ports()
             info = panel_admin.device_info(ports[0]) if ports else {}
             self._json({"ports": ports, "info": info})
+            return
+
+        if self.path == "/api/logs":
+            self._json(panel_admin.list_logs() if panel_admin else {"descargas": []})
             return
 
         if self.path == "/api/builds":

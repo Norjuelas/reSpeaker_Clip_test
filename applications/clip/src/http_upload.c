@@ -617,6 +617,8 @@ static void upload_work_fn(struct k_work *work)
 
 		snprintf(name, sizeof(name), "%04u.opus", (unsigned int)idx);
 
+		int64_t t0 = k_uptime_get();
+
 		err = http_upload_file(session_id, name, path, (size_t)st.size);
 		if (err) {
 			LOG_ERR("%s: file %u of %u failed: %d", session_id,
@@ -628,9 +630,24 @@ static void upload_work_fn(struct k_work *work)
 		 * el fichero tiene que volver a intentarse. */
 		upload_registry_mark(session_id, idx);
 
+		{
+			int64_t ms = k_uptime_get() - t0;
+
+			k_mutex_lock(&status_lock, K_FOREVER);
+			status.files_done++;
+			status.bytes_sent += (uint32_t)st.size;
+			status.ok_count++;
+			if (ms > 0) {
+				status.last_kbps = (uint32_t)(((uint64_t)st.size * 1000U) /
+							      ((uint64_t)ms * 1024U));
+			}
+			k_mutex_unlock(&status_lock);
+		}
+	}
+
+	if (err) {
 		k_mutex_lock(&status_lock, K_FOREVER);
-		status.files_done++;
-		status.bytes_sent += (uint32_t)st.size;
+		status.fail_count++;
 		k_mutex_unlock(&status_lock);
 	}
 
@@ -689,6 +706,24 @@ static void periodic_work_fn(struct k_work *work)
 
 	/* De la mas antigua a la mas nueva: si la ventana no da para todas, lo que
 	 * lleva mas tiempo esperando sale primero. */
+	/* Contar TODO lo pendiente antes de subir nada: es el numero que dice si
+	 * el intervalo aguanta el ritmo de grabacion o se va acumulando trabajo. */
+	{
+		uint32_t backlog = 0;
+
+		for (int i = 0; i < found; i++) {
+			for (uint32_t idx = 1; idx <= sessions[i].file_count; idx++) {
+				if (!upload_registry_has(sessions[i].session_id, idx)) {
+					backlog++;
+				}
+			}
+		}
+
+		k_mutex_lock(&status_lock, K_FOREVER);
+		status.pending_files = backlog;
+		k_mutex_unlock(&status_lock);
+	}
+
 	for (int i = found - 1; i >= 0; i--) {
 		bool pending = false;
 

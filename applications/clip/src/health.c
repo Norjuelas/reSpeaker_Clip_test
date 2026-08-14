@@ -20,6 +20,8 @@
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/drivers/hwinfo.h>
+#include <zephyr/sys/sys_heap.h>
+#include <zephyr/sys/mem_stats.h>
 #include <stdio.h>
 #include <string.h>
 #include <errno.h>
@@ -31,6 +33,7 @@
 #include "storage.h"
 #include "wifi.h"
 #include "http_upload.h"
+#include "audio.h"
 
 LOG_MODULE_REGISTER(health, CONFIG_CLIP_LOG_LEVEL);
 
@@ -106,6 +109,9 @@ int health_snapshot_json(char *buf, size_t len)
 	struct clip_context *ctx = clip_get_context();
 	struct http_upload_status up;
 	struct storage_stats st = {0};
+	char mac[18] = "";
+	struct sys_memory_stats hs = {0};
+	extern struct k_heap _system_heap;
 	uint32_t uptime_s = (uint32_t)(k_uptime_get() / 1000);
 	bool have_storage;
 	int n;
@@ -115,6 +121,10 @@ int health_snapshot_json(char *buf, size_t len)
 	}
 
 	have_storage = (storage_get_stats(&st) == 0);
+	(void)wifi_get_mac(mac, sizeof(mac));
+	/* Memoria libre del heap: en una jornada de 8 horas es donde se veria una
+	 * fuga, y una fuga lenta no se nota hasta que el device deja de subir. */
+	(void)sys_heap_runtime_stats_get(&_system_heap.heap, &hs);
 	http_upload_get_status(&up);
 
 	/* One flat object. Deliberately not nested: this gets parsed by a panel,
@@ -126,10 +136,14 @@ int health_snapshot_json(char *buf, size_t len)
 		     "\"sd_mounted\":%s,\"sd_free_mb\":%u,\"sd_total_mb\":%u,"
 		     "\"sd_used_mb\":%u,"
 		     "\"wifi\":%s,\"ip\":\"%s\",\"ssid\":\"%s\","
+		     "\"mac\":\"%s\",\"upload_every_min\":%u,"
 		     "\"wifi_err\":\"%s\","
 		     "\"state\":\"%s\","
 		     "\"upload_state\":\"%s\",\"upload_done\":%u,"
-		     "\"upload_total\":%u,\"upload_err\":%d}",
+		     "\"upload_total\":%u,\"upload_err\":%d,"
+		     "\"rssi\":%d,\"heap_free\":%u,\"up_stack_free\":%u,"
+		     "\"up_kbps\":%u,\"up_ok\":%u,\"up_fail\":%u,"
+		     "\"pending_files\":%u,\"recording\":%s}",
 		     device_id_str(), uptime_s, reset_cause_txt(boot_reset_cause),
 		     ctx->status.battery_percent, ctx->status.battery_mv,
 		     ctx->status.battery_charging ? "true" : "false",
@@ -154,6 +168,16 @@ int health_snapshot_json(char *buf, size_t len)
 		      * misma en los 100 devices y no sirve para encontrar
 		      * ninguno en la red. */
 		     wifi_sta_get_ip(), ctx->config.sta_ssid,
+		     /* La MAC en cada latido, no solo por AT+DEVICE. Las redes de
+		      * tienda filtran por lista blanca, y dar de alta 100 devices
+		      * conectandolos uno a uno por cable es media jornada; con esto
+		      * el panel las tiene todas.
+		      *
+		      * Ojo: hoy la MAC es aleatoria en cada arranque
+		      * (CONFIG_WIFI_RANDOM_MAC_ADDRESS), asi que este campo cambia
+		      * solo. Sirve para verlo, no todavia para dar de alta nada. */
+		     mac,
+		     (unsigned int)CONFIG_CLIP_UPLOAD_INTERVAL_MIN,
 		     /* Por que no hay red, no solo que no la hay. Con 100 devices en
 		      * tiendas, "sin red" a secas es una llamada de soporte; "clave
 		      * incorrecta" o "no-dhcp" se resuelve sin desplazarse. Vacio
@@ -164,7 +188,22 @@ int health_snapshot_json(char *buf, size_t len)
 		     up.state == HTTP_UPLOAD_DONE    ? "done" :
 		     up.state == HTTP_UPLOAD_FAILED  ? "failed" : "idle",
 		     (unsigned int)up.files_done, (unsigned int)up.files_total,
-		     up.last_error);
+		     up.last_error,
+		     /* Todo lo que hace falta para decidir sin ir a mirar el device:
+		      * la senal explica reintentos y subidas lentas; el heap delata
+		      * fugas en jornadas largas; la pila del hilo de subida es donde
+		      * este firmware ya se cayo dos veces; la velocidad y los
+		      * contadores dicen si el intervalo de 15 min aguanta; y
+		      * pending_files es el numero que lo decide — si crece dia tras
+		      * dia, se graba mas rapido de lo que se sube. */
+		     wifi_sta_get_rssi(),
+		     (unsigned int)hs.free_bytes,
+		     (unsigned int)up.stack_free,
+		     (unsigned int)up.last_kbps,
+		     (unsigned int)up.ok_count,
+		     (unsigned int)up.fail_count,
+		     (unsigned int)up.pending_files,
+		     audio_is_recording() ? "true" : "false");
 
 	if (n < 0 || (size_t)n >= len) {
 		return -ENOMEM;
@@ -175,7 +214,11 @@ int health_snapshot_json(char *buf, size_t len)
 
 static void heartbeat_work_fn(struct k_work *work)
 {
-	char json[512];
+	/* 832: cada campo nuevo acerca el truncado, y snprintf trunca en
+	 * silencio — el latido saldria como JSON invalido y el panel lo
+	 * descartaria sin decir por que. health_snapshot_json() devuelve
+	 * -ENOMEM si no cabe, y eso si se registra. */
+	char json[832];
 	int ret;
 
 	ARG_UNUSED(work);

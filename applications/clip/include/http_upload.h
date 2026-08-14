@@ -31,6 +31,17 @@ struct http_upload_status {
 	 * sizes picked by eye, so the number is worth being able to read. 0 means
 	 * it has not been measured (CONFIG_INIT_STACKS off). */
 	size_t stack_free;
+
+	/* Rendimiento, para poder ajustar el intervalo con datos en vez de con
+	 * criterio: velocidad de la ultima subida, cuantas salieron bien y mal
+	 * desde el arranque, y cuantos ficheros quedan por enviar.
+	 *
+	 * pending_files es el que decide si el intervalo aguanta: si crece
+	 * jornada tras jornada, se sube mas despacio de lo que se graba. */
+	uint32_t last_kbps;
+	uint32_t ok_count;
+	uint32_t fail_count;
+	uint32_t pending_files;
 };
 
 /**

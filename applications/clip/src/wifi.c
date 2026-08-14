@@ -987,6 +987,22 @@ int wifi_sta_connect_async(void)
 	return wifi_sta_connect_async_delayed(0);
 }
 
+int wifi_sta_get_rssi(void)
+{
+	struct net_if *iface = net_if_get_first_wifi();
+	struct wifi_iface_status st = {0};
+
+	if (!iface || !sta_associated) {
+		return 0;
+	}
+
+	if (net_mgmt(NET_REQUEST_WIFI_IFACE_STATUS, iface, &st, sizeof(st))) {
+		return 0;
+	}
+
+	return st.rssi;
+}
+
 int wifi_get_mac(char *buf, size_t len)
 {
 	struct net_if *iface = net_if_get_first_wifi();

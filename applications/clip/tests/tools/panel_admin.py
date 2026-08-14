@@ -144,3 +144,79 @@ def flash(binary_rel, port):
         return {"ok": False, "log": log, "error": "nrfutil no termino a tiempo"}
     except FileNotFoundError:
         return {"ok": False, "log": log, "error": "nrfutil no esta en el PATH"}
+
+
+# La tarjeta montada por USB MSC. El nombre por defecto de una FAT sin etiqueta.
+SD_MOUNT = Path("/Volumes/NO NAME")
+
+
+def fetch_logs():
+    """Trae los logs de la microSD del device.
+
+    Es la unica ventana a lo que pasa dentro cuando el device deja de
+    responder: los fallos que no llegan a ningun sitio si nadie mira aqui. Se
+    copian a una carpeta con fecha para no pisar los anteriores — comparar dos
+    arranques es la mitad del diagnostico.
+    """
+    src = SD_MOUNT / "LOG"
+    if not src.is_dir():
+        return {"ok": False,
+                "error": "La tarjeta no esta montada. Conecta el device y "
+                         "espera a que aparezca como disco."}
+
+    dst = REPO / "output" / "logs" / time.strftime("%Y%m%d-%H%M%S")
+    dst.mkdir(parents=True, exist_ok=True)
+
+    copied = []
+    for f in sorted(src.glob("log.*")):
+        target = dst / f.name
+        target.write_bytes(f.read_bytes())
+        copied.append({"nombre": f.name, "bytes": target.stat().st_size})
+
+    if not copied:
+        return {"ok": False, "error": "No hay ficheros de log en la tarjeta"}
+
+    return {"ok": True, "carpeta": str(dst.relative_to(REPO)),
+            "ficheros": copied}
+
+
+def read_log(rel_path, tail_lines=400, only_problems=False):
+    """Devuelve un log en texto, del final hacia atras.
+
+    Del final porque lo que interesa es lo ultimo que hizo el device antes de
+    caerse. Y con filtro opcional, porque el log mezcla arranques normales con
+    los errores y a ojo se pierden.
+    """
+    path = (REPO / rel_path).resolve()
+    if not str(path).startswith(str(REPO)) or not path.is_file():
+        return {"ok": False, "error": "ruta invalida"}
+
+    # Los logs de Zephyr traen NULs de relleno del backend de fichero.
+    raw = path.read_bytes().replace(b"\x00", b"")
+    lines = raw.decode("utf-8", errors="replace").splitlines()
+
+    if only_problems:
+        lines = [l for l in lines
+                 if "<err>" in l or "<wrn>" in l or "fallo" in l.lower()]
+
+    return {"ok": True, "total": len(lines), "lineas": lines[-tail_lines:]}
+
+
+def list_logs():
+    """Las descargas anteriores, la mas reciente primero."""
+    base = REPO / "output" / "logs"
+    if not base.is_dir():
+        return {"descargas": []}
+
+    out = []
+    for d in sorted(base.iterdir(), reverse=True)[:20]:
+        if d.is_dir():
+            out.append({
+                "carpeta": str(d.relative_to(REPO)),
+                "cuando": d.name,
+                "ficheros": [{"ruta": str(f.relative_to(REPO)),
+                              "nombre": f.name,
+                              "bytes": f.stat().st_size}
+                             for f in sorted(d.glob("log.*"))],
+            })
+    return {"descargas": out}
