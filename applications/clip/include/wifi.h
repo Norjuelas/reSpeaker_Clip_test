@@ -148,6 +148,16 @@ int wifi_sta_off(void);
 bool wifi_sta_is_connected(void);
 
 /**
+ * @brief Minutos que lleva sin conseguir conectarse a ninguna red
+ *
+ * 0 si esta conectado, o si todavia no lo ha intentado. Se usa para decidir
+ * cuando apagarse: un device que no encuentra su red gasta la bateria
+ * despertando la radio para reintentar, y con 170 mAh eso la vacia en unas
+ * horas sin haber hecho nada util.
+ */
+uint32_t wifi_sta_offline_minutes(void);
+
+/**
  * @brief Get the IP address obtained by DHCP in station mode
  *
  * @return Dotted-quad string, empty if not connected

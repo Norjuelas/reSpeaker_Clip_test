@@ -544,3 +544,26 @@ config CLIP_UPLOAD_TLS
 	  una misma imagen vale para toda la flota. Sin ese fichero el device
 	  cifra igual pero no verifica con quien habla — protege de quien escucha
 	  la red, no de quien se hace pasar por el servicio.
+
+config CLIP_NO_NETWORK_POWEROFF_MIN
+	int "Minutos sin red antes de apagarse solo"
+	depends on NRF70_STA_MODE
+	default 45
+	range 0 1440
+	help
+	  Si el device lleva este tiempo sin conseguir conectarse a ninguna red, y
+	  no esta grabando, se apaga.
+
+	  El motivo es la bateria. Son 170 mAh, y un device que no encuentra su red
+	  sigue despertando la radio cada dos minutos para reintentar: se vacia
+	  sola sin haber hecho nada util. Paso en el banco — el aparato aparecio
+	  apagado a la manana siguiente porque habia pasado la noche buscando una
+	  red que ya no existia.
+
+	  Apagarse conserva la carga para cuando alguien lo enchufe y lo
+	  reconfigure, que es lo unico que puede arreglarlo.
+
+	  Nunca interrumpe una grabacion: si esta grabando, sigue grabando aunque
+	  no haya red. El audio en la tarjeta vale mas que la bateria.
+
+	  0 lo desactiva.

@@ -326,8 +326,49 @@ static bool clip_sd_busy(void)
     return false;
 }
 
+#if defined(CONFIG_NRF70_STA_MODE) && CONFIG_CLIP_NO_NETWORK_POWEROFF_MIN > 0
+/* Un device que no encuentra su red no se queda quieto: reintenta con backoff
+ * hasta 2 minutos, y cada intento despierta la radio unos 25 segundos. Con una
+ * celda de 170 mAh eso vacia la bateria en unas horas sin haber hecho nada
+ * util. Paso en el banco — el aparato aparecio apagado por la manana despues
+ * de una noche buscando una red que ya no existia.
+ *
+ * Apagarse conserva la carga para cuando alguien lo enchufe y lo reconfigure,
+ * que es lo unico que puede arreglarlo.
+ *
+ * Nunca interrumpe una grabacion: el audio ya escrito en la tarjeta vale mas
+ * que la bateria, y una jornada sin red sigue siendo una jornada grabada. */
+static void check_no_network_poweroff(void)
+{
+    uint32_t offline = wifi_sta_offline_minutes();
+
+    if (offline < CONFIG_CLIP_NO_NETWORK_POWEROFF_MIN) {
+        return;
+    }
+    if (audio_is_recording() || transfer_is_active()) {
+        return;
+    }
+    /* Con cable no tiene sentido: hay corriente de sobra y probablemente
+     * alguien esta delante intentando arreglarlo. */
+    if (usb_cdc_is_enabled()) {
+        return;
+    }
+
+    LOG_WRN("Sin red desde hace %u min y sin grabar: apagando para no gastar "
+            "la bateria", offline);
+    clip_post_event(CLIP_EVENT_POWER_OFF_EXEC);
+}
+#endif
+
 static void sd_idle_poweroff_work_handler(struct k_work *work)
 {
+#if defined(CONFIG_NRF70_STA_MODE) && CONFIG_CLIP_NO_NETWORK_POWEROFF_MIN > 0
+    /* Se engancha aqui en vez de crear otra work queue: este temporizador ya
+     * se re-arma cada intervalo y evalua exactamente el mismo tipo de
+     * condicion — algo lleva un rato ocioso, apagalo. */
+    check_no_network_poweroff();
+#endif
+
     /* storage_idle_poweroff() checks writing_file + the busy callback UNDER
      * the lock, so no TOCTOU with a recording/transfer starting mid-check. */
     (void)storage_idle_poweroff();

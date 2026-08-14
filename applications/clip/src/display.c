@@ -994,9 +994,20 @@ static int draw_string_6x12(uint8_t *buf, const char *str, int x, int y)
  * Pairing Guide Page
  * ============================================================================= */
 
+static void draw_bpin_logo(uint8_t *buf, int spread);
+
+/* Esta pantalla mostraba el nombre BLE junto a "Open App" y un icono de
+ * telefono, invitando a emparejar. Con Bluetooth retirado no hay ninguna app a
+ * la que abrir: instruia a hacer algo imposible. Ahora muestra el logo de
+ * B·Pin, que dice de quien es el aparato sin prometer nada que no exista. */
 static void render_pairing_guide(uint8_t *buf)
 {
 	clear_screen(buf);
+	draw_bpin_logo(buf, 44 /* LOGO_WIDTH / 2: el logo entero */);
+	return;
+
+	/* Lo de abajo queda inalcanzable a proposito. Si vuelve BLE, se recupera
+	 * quitando las dos lineas anteriores. */
 
 	/* Get BLE device name */
 	const char *device_name = ble_get_device_name();

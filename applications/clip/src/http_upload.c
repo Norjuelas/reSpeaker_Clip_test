@@ -456,7 +456,19 @@ int http_post_json(const char *url, const char *body, size_t body_len)
  * 10KB puts the margin near 30%, which matters because TLS goes on top of this
  * same path and a handshake is not free. Re-read stack_free in AT+HTTPUP?
  * after that lands rather than assuming this still holds. */
+#ifdef CONFIG_CLIP_UPLOAD_TLS
+/* 14KB con TLS. El handshake corre por este mismo hilo y pide varios KB por
+ * encima de lo que ya costaba la subida. Medido sin TLS: una grabacion de
+ * 1,17MB dejo 3212 bytes libres de 10240, y antes 1164 de 8192 — el 86%
+ * consumido. Este firmware ya se ha caido dos veces por una pila mal
+ * dimensionada; no se estrena TLS con la tercera. */
+#define UPLOAD_STACK_SIZE 14336
+#else
+/* 10KB sin TLS. Es lo medido, no lo estimado: 7028 bytes de uso maximo
+ * observado. Sigue justo, y por eso el hilo informa de lo que le sobra en
+ * AT+HTTPUP? tras cada trabajo — el dato vale mas que el criterio. */
 #define UPLOAD_STACK_SIZE 10240
+#endif
 #define UPLOAD_WQ_PRIORITY 6
 
 static K_THREAD_STACK_DEFINE(upload_stack, UPLOAD_STACK_SIZE);

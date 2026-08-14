@@ -69,6 +69,9 @@ static char sta_fail_text[32];
 static bool sta_want_connected;
 static uint32_t sta_backoff_ms;
 
+/* Cuando empezo la racha sin red. 0 = hay red, o todavia no se ha intentado. */
+static int64_t sta_offline_since;
+
 /* wifi_sta_on() blocks for up to 35s waiting on association + DHCP. That must
  * not run on the system workqueue — a watchdog guards it, and the display and
  * transfer paths queue work there too. Hence a dedicated queue. */
@@ -808,6 +811,7 @@ int wifi_sta_off(void)
 	 * work item would race us and reconnect what the user just turned off. */
 	sta_want_connected = false;
 	sta_backoff_ms = 0;
+	sta_offline_since = 0;
 	k_work_cancel_delayable(&sta_reconnect_work);
 
 	if (!sta_associated)
@@ -864,6 +868,11 @@ static void sta_schedule_reconnect(void)
 	if (sta_backoff_ms == 0)
 	{
 		sta_backoff_ms = STA_RECONNECT_MIN_MS;
+	}
+
+	if (sta_offline_since == 0)
+	{
+		sta_offline_since = k_uptime_get();
 	}
 
 	/* Up to +50% of the current backoff, so a fleet that lost the same AP does
@@ -976,6 +985,16 @@ int wifi_sta_connect_async_delayed(uint32_t delay_ms)
 int wifi_sta_connect_async(void)
 {
 	return wifi_sta_connect_async_delayed(0);
+}
+
+uint32_t wifi_sta_offline_minutes(void)
+{
+	if (sta_offline_since == 0)
+	{
+		return 0;
+	}
+
+	return (uint32_t)((k_uptime_get() - sta_offline_since) / 60000);
 }
 
 bool wifi_sta_is_connected(void)
