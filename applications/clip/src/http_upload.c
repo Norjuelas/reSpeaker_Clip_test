@@ -41,7 +41,15 @@ LOG_MODULE_REGISTER(http_upload, CONFIG_CLIP_LOG_LEVEL);
 #define RECV_BUF_SIZE   512
 #define SEND_CHUNK      1024
 #define HTTP_TIMEOUT_MS 15000
+#ifdef CONFIG_CLIP_UPLOAD_TLS
+/* 20s con TLS. Los 5s que bastan para un connect TCP cortan el handshake por
+ * la mitad: el saludo son varios viajes de ida y vuelta mas la verificacion de
+ * la cadena, y en este chip la parte de curva eliptica no es instantanea. El
+ * sintoma era ETIMEDOUT, que se lee como problema de red y no lo es. */
+#define CONNECT_TIMEOUT_MS 20000
+#else
 #define CONNECT_TIMEOUT_MS 5000
+#endif
 
 #ifdef CONFIG_CLIP_UPLOAD_TLS
 /* La CA se lee de la tarjeta, no se compila dentro. Asi una misma imagen sirve
