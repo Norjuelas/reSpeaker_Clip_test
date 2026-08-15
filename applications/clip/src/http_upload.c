@@ -293,9 +293,22 @@ static int connect_to_endpoint(const char *host, uint16_t port)
 
 	ret = zsock_connect(sock, (struct sockaddr *)&addr, sizeof(addr));
 	if (ret < 0) {
-		LOG_ERR("connect to %s:%u failed: %d", host, port, -errno);
+		/* Dos convenciones distintas en la misma llamada, y confundirlas
+		 * cuesta caro.
+		 *
+		 * Un socket normal devuelve -1 y deja el motivo en errno. Pero la capa
+		 * TLS (ztls_connect_ctx) devuelve el codigo negativo directamente y no
+		 * toca errno. Leer errno en ese caso da un valor viejo de cualquier
+		 * operacion anterior: aqui salia EHOSTUNREACH, y se perdio una tarde
+		 * buscando un problema de red que no existia mientras el fallo real
+		 * era del handshake.
+		 *
+		 * Si ret no es -1, ret ES el error. */
+		int err = (ret == -1) ? -errno : ret;
+
+		LOG_ERR("connect a %s:%u fallo: %d", host, port, err);
 		zsock_close(sock);
-		return -errno;
+		return err;
 	}
 
 	return sock;
