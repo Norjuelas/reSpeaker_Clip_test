@@ -80,6 +80,7 @@ struct clip_context {
         char sta_psk[65];           /* WiFi STA: WPA2 passphrase or 64-hex PSK (+ NUL) */
         char upload_host[16];       /* Upload service IPv4, dotted quad (+ NUL) */
         uint16_t upload_port;       /* Upload service UDP port */
+        uint8_t audio_key[16];      /* AES-128 key for audio-at-rest (all-zero = not set) */
     } config;
 
     /* Status */

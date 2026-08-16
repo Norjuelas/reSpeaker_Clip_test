@@ -269,6 +269,22 @@ bool config_has_sta_credentials(void);
 int config_set_upload_endpoint(const char *host, uint16_t port);
 
 /**
+ * @brief Store the AES-128 audio-at-rest key (Doc 09)
+ *
+ * Rejects the all-zero key (it is the "not provisioned" marker). Persisted
+ * in LittleFS settings; never readable back over any AT command.
+ *
+ * @param key 16-byte AES-128 key
+ * @return 0 on success, -EINVAL for the all-zero key
+ */
+int config_set_audio_key(const uint8_t key[16]);
+
+/**
+ * @brief Whether an audio-at-rest key has been provisioned
+ */
+bool config_has_audio_key(void);
+
+/**
  * @brief Get the upload service address
  *
  * @return Dotted-quad string, empty if never configured

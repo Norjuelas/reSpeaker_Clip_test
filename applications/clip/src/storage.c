@@ -19,6 +19,13 @@
 #include <stdarg.h>
 
 #include "storage.h"
+#ifdef CONFIG_CLIP_AUDIO_ENCRYPT
+#include "audio_crypto.h"
+
+/* Un fichero de audio abierto a la vez (current_file_ptr es único), así que
+ * un solo contexto de cifrado acompaña al fichero en curso. */
+static struct audio_crypto_ctx file_crypto;
+#endif
 
 LOG_MODULE_REGISTER(storage, CONFIG_CLIP_LOG_LEVEL);
 
@@ -683,6 +690,24 @@ static int flush_write_buffer(void)
         return 0;
     }
 
+#ifdef CONFIG_CLIP_AUDIO_ENCRYPT
+    if (file_crypto.active)
+    {
+        /* Cada flush es un trozo BPE2: cifrado y autenticado por separado,
+         * para que un corte de energía solo cueste el trozo incompleto. */
+        rc = audio_crypto_write(&file_crypto, current_file_ptr,
+                                write_buffer, buffer_pos);
+        if (rc != 0)
+        {
+            LOG_ERR("Encrypted flush failed: %d", rc);
+            sd_full = true;
+            return -EIO;
+        }
+        buffer_pos = 0;
+        return 0;
+    }
+#endif
+
     written = fs_write(current_file_ptr, write_buffer, buffer_pos);
     if (written != buffer_pos)
     {
@@ -751,6 +776,21 @@ int storage_create_file(struct storage_file *file, const char *session_id, uint3
     file->is_open = true;
     current_file_ptr = &file->internal_file;
     buffer_pos = 0;
+
+#ifdef CONFIG_CLIP_AUDIO_ENCRYPT
+    /* Cabecera BPE2 + contexto de cifrado. Falla CERRADO: si hay clave y el
+     * cifrado no arranca, no se graba en claro a escondidas — el operador
+     * proviciono una clave esperando que la tarjeta no sea legible. */
+    rc = audio_crypto_begin(&file_crypto, &file->internal_file);
+    if (rc != 0)
+    {
+        LOG_ERR("Audio crypto begin failed: %d", rc);
+        fs_close(&file->internal_file);
+        file->is_open = false;
+        current_file_ptr = NULL;
+        return rc;
+    }
+#endif
 
     /* Mark this file as being written for transfer coordination */
     storage_set_writing_file(session_id, filename);
@@ -842,6 +882,12 @@ int storage_close_file(struct storage_file *file)
             LOG_ERR("Failed to flush buffer: %d", rc);
         }
     }
+
+#ifdef CONFIG_CLIP_AUDIO_ENCRYPT
+    /* Los trozos BPE2 son autocontenidos: cerrar no escribe nada extra,
+     * solo suelta el contexto. */
+    file_crypto.active = false;
+#endif
 
     /* Sync file to ensure data is written to disk
      * Important for transfer-while-recording: files must be available immediately */
@@ -1526,6 +1572,23 @@ int storage_delete_session(const char *session_id)
         LOG_WRN("Failed to remove session directory: %d", rc);
     }
 
+    return 0;
+}
+
+int storage_delete_all_sessions(void)
+{
+    if (storage_ensure_mounted() != 0)
+    {
+        return -ENODEV;
+    }
+
+    /* La sesion activa la protege el nivel AT (no se llega aqui grabando);
+     * esto vacia el arbol de grabaciones y nada mas — ca.pem, nrf70.bin y
+     * LOG/ quedan intactos, que es la diferencia con formatear. */
+    delete_dir_contents(STORAGE_BASE_PATH);
+    update_free_space();
+
+    LOG_WRN("Todas las grabaciones borradas (AT+DELETE=all)");
     return 0;
 }
 

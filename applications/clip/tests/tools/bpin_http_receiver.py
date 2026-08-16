@@ -66,9 +66,27 @@ except Exception as _e:
     print(f"[aviso] sin conversion a Ogg: {_e}", flush=True)
     convert_to_ogg_opus = None
 
+# Descifrado del audio en reposo (BPE2, Doc 09). Opcional: sin el modulo o
+# sin el paquete `cryptography`, el ciphertext se guarda tal cual.
+try:
+    import importlib.util as _ilu2
+    _spec2 = _ilu2.spec_from_file_location(
+        "bpin_decrypt", Path(__file__).resolve().parent / "bpin_decrypt.py")
+    bpin_decrypt = _ilu2.module_from_spec(_spec2)
+    _spec2.loader.exec_module(bpin_decrypt)
+except Exception as _e:
+    print(f"[aviso] sin descifrado BPE2: {_e}", flush=True)
+    bpin_decrypt = None
+
 
 def log(msg):
     print(f"[{datetime.datetime.now():%H:%M:%S}] {msg}", flush=True)
+
+
+# Claves de audio-en-reposo por chip_id (Doc 09): --keys keys.json con
+# {"62518A2B2063EAE0": "<32 hex>", ...}. Sin clave, el ciphertext se guarda
+# tal cual y se descifra despues con tools/bpin_decrypt.py.
+AUDIO_KEYS = {}
 
 
 def store(device_id, session, filename, data):
@@ -88,6 +106,24 @@ def store(device_id, session, filename, data):
         while path.exists():
             path = target / f"{stem}_{n}{suffix}"
             n += 1
+
+    # Audio cifrado en reposo (BPE2): descifrar aqui, con la clave del device.
+    # Si no hay clave o falla, se guarda el ciphertext tal cual — recuperable
+    # despues con bpin_decrypt.py; perder audio por no poder descifrarlo al
+    # vuelo seria absurdo.
+    if bpin_decrypt is not None and bpin_decrypt.es_bpe2(data):
+        key_hex = AUDIO_KEYS.get(device_id or "")
+        if key_hex:
+            try:
+                plaintext, avisos = bpin_decrypt.descifrar(data, bytes.fromhex(key_hex))
+                for a in avisos:
+                    log(f"{device_id}: {a}")
+                path.with_suffix(".opus.enc").write_bytes(data)
+                data = plaintext
+            except ValueError as e:
+                log(f"{device_id}: descifrado fallido ({e}); se guarda cifrado")
+        else:
+            log(f"{device_id}: audio cifrado y sin clave en --keys; se guarda cifrado")
 
     path.write_bytes(data)
 
@@ -185,8 +221,10 @@ def _xfer_html():
     for t in rows:
         if t["ok"]:
             res = '<span class="ok">llego</span>'
-            if t.get("playable"):
-                res += ' <small>+ogg</small>'
+            if t.get("playable") and t.get("saved"):
+                src = f'/audio/{t["device"]}/{t["session"]}/{t["saved"]}'
+                res += (f' <audio controls preload="none" src="{src}" '
+                        'style="height:22px;vertical-align:middle"></audio>')
         else:
             res = f'<span class="bad">fallo</span> <small>{t.get("error","")}</small>'
         out.append(
@@ -567,6 +605,9 @@ class Handler(BaseHTTPRequestHandler):
                 "device": device_id or "?", "session": session,
                 "file": filename, "bytes": len(data), "ok": True,
                 "playable": path.with_suffix(".ogg").exists(),
+                # El nombre REAL en disco (store() renombra si ya existia):
+                # es lo que el boton de reproducir del panel necesita.
+                "saved": path.with_suffix(".ogg").name,
             })
         log(f"{device_id or '?'}  {session}/{filename}  {len(data)} bytes -> {path}")
         self._reply(200, b"ok\n")
@@ -576,6 +617,28 @@ class Handler(BaseHTTPRequestHandler):
             body = _panel_html().encode()
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
+        if self.path.startswith("/audio/"):
+            # Sirve los .ogg recibidos para el boton de reproducir del panel.
+            # La ruta la construye el navegador con datos que en origen puso
+            # el device: resolver y comprobar que sigue DENTRO de OUT_DIR.
+            rel = self.path[len("/audio/"):]
+            try:
+                target = (OUT_DIR / rel).resolve()
+                ok = (target.suffix == ".ogg" and target.is_file() and
+                      target.is_relative_to(OUT_DIR.resolve()))
+            except (ValueError, OSError):
+                ok = False
+            if not ok:
+                self._reply(404, b"no\n")
+                return
+            body = target.read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", "audio/ogg")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
@@ -637,10 +700,17 @@ def main():
     ap.add_argument("--cert", type=Path,
                     help="certificado del servicio (PEM). Con el, se sirve TLS.")
     ap.add_argument("--key", type=Path, help="clave privada del certificado")
+    ap.add_argument("--keys", type=Path,
+                    help="JSON chip_id -> clave AES-128 hex, para descifrar "
+                         "el audio en reposo (BPE2) al recibirlo")
     args = ap.parse_args()
 
     OUT_DIR = args.out
     OUT_DIR.mkdir(parents=True, exist_ok=True)
+
+    if args.keys:
+        AUDIO_KEYS.update(json.loads(args.keys.read_text()))
+        log(f"claves de audio cargadas: {len(AUDIO_KEYS)} device(s)")
 
     server = ThreadingHTTPServer((args.bind, args.port), Handler)
 

@@ -355,6 +355,16 @@ int storage_list_chunks(const char *session_id, uint32_t *chunks, int max_chunks
 int storage_delete_session(const char *session_id);
 
 /**
+ * @brief Delete ALL recordings (the REC/ tree), and nothing else
+ *
+ * Unlike a format, this preserves ca.pem, nrf70.bin and LOG/. The caller
+ * must ensure no recording or transfer is in progress (AT+DELETE=all does).
+ *
+ * @return 0 on success, -ENODEV if the card cannot be mounted
+ */
+int storage_delete_all_sessions(void);
+
+/**
  * @brief Format SD card
  *
  * @return 0 on success, negative error code on failure

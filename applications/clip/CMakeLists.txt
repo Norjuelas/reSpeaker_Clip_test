@@ -32,6 +32,10 @@ target_sources(app PRIVATE
     src/usb_cdc.c
 )
 
+if(CONFIG_CLIP_AUDIO_ENCRYPT)
+    target_sources(app PRIVATE src/audio_crypto.c)
+endif()
+
 
 # Bluetooth: la implementacion real, o una superficie vacia. Sacar el host BT
 # libera ~15KB de FLASH, que es lo que faltaba para que TLS entrara. Volver

@@ -17,6 +17,9 @@
 
 #include "clip.h"
 #include "config.h"
+#ifdef CONFIG_CLIP_AUDIO_ENCRYPT
+#include "audio_crypto.h"
+#endif
 
 LOG_MODULE_REGISTER(config, CONFIG_CLIP_LOG_LEVEL);
 
@@ -33,6 +36,7 @@ LOG_MODULE_REGISTER(config, CONFIG_CLIP_LOG_LEVEL);
 #define SETTING_STA_SSID        "config/sta_ssid"
 #define SETTING_STA_PSK         "config/sta_psk"
 #define SETTING_UPLOAD_HOST     "config/upload_host"
+#define SETTING_AUDIO_KEY       "config/audio_key"
 #define SETTING_UPLOAD_PORT     "config/upload_port"
 #define SETTING_TIME_UNIX       "time/unix_timestamp"
 
@@ -64,6 +68,7 @@ static const struct config_entry config_table[] = {
     { SETTING_STA_SSID,         offsetof(struct clip_config, sta_ssid),        sizeof(char[33]) },
     { SETTING_STA_PSK,          offsetof(struct clip_config, sta_psk),         sizeof(char[65]) },
     { SETTING_UPLOAD_HOST,      offsetof(struct clip_config, upload_host),     sizeof(char[16]) },
+    { SETTING_AUDIO_KEY,        offsetof(struct clip_config, audio_key),       sizeof(uint8_t[16]) },
     { SETTING_UPLOAD_PORT,      offsetof(struct clip_config, upload_port),     sizeof(uint16_t) },
 };
 
@@ -770,6 +775,41 @@ const char *config_get_sta_psk(void)
 bool config_has_sta_credentials(void)
 {
     return clip_get_context()->config.sta_ssid[0] != '\0';
+}
+
+int config_set_audio_key(const uint8_t key[16])
+{
+    struct clip_context *ctx = clip_get_context();
+    uint8_t acc = 0;
+
+    for (int i = 0; i < 16; i++) {
+        acc |= key[i];
+    }
+    if (acc == 0) {
+        /* Todo-ceros es el marcador de "sin clave": aceptarlo como clave
+         * real haria indistinguible "cifrado con clave debil" de "sin
+         * cifrar". */
+        return -EINVAL;
+    }
+
+    memcpy(ctx->config.audio_key, key, 16);
+
+#ifdef CONFIG_CLIP_AUDIO_ENCRYPT
+    audio_crypto_key_changed();
+#endif
+
+    return settings_save_one(SETTING_AUDIO_KEY, ctx->config.audio_key, 16);
+}
+
+bool config_has_audio_key(void)
+{
+    const uint8_t *key = clip_get_context()->config.audio_key;
+    uint8_t acc = 0;
+
+    for (int i = 0; i < 16; i++) {
+        acc |= key[i];
+    }
+    return acc != 0;
 }
 
 int config_set_upload_endpoint(const char *host, uint16_t port)

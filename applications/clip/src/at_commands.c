@@ -1530,6 +1530,32 @@ static int cmd_delete_handler(struct at_cmd_ctx *ctx, char *response, size_t len
         *end-- = '\0';
     }
 
+    /* AT+DELETE=all — borrar TODAS las grabaciones, y solo las grabaciones.
+     *
+     * No es AT+FORMAT: formatear se lleva tambien ca.pem (la CA de flota) y
+     * nrf70.bin (el parche WiFi de reposicion), y deja el device sin TLS
+     * verificado. Esto vacia el arbol REC/ y el registro de subidas
+     * (UPLOADED.TXT), que sin sesiones solo apuntaria a muertos. */
+    if (strcasecmp(session_id, "all") == 0) {
+        if (audio_is_recording()) {
+            return create_json_response(false, "Cannot delete while recording",
+                                        NULL, response, len);
+        }
+        if (transfer_is_active()) {
+            return create_json_response(false, "Transfer in progress",
+                                        NULL, response, len);
+        }
+
+        int werr = storage_delete_all_sessions();
+        if (werr) {
+            return create_json_response(false, "Wipe failed", NULL, response, len);
+        }
+        upload_registry_reset();
+
+        return create_json_response(true, "All recordings deleted",
+                                    "{\"deleted\":\"all\"}", response, len);
+    }
+
     /* Validate session_id: must be exactly 14 digits */
     if (!is_valid_session_id(session_id)) {
         return create_json_response(false, "Invalid session ID", NULL, response, len);
@@ -1767,6 +1793,58 @@ static int parse_quoted(const char **cursor, char *out, size_t out_size)
     *cursor = p + 1;
 
     return 0;
+}
+
+static int cmd_keycfg_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
+{
+    /*
+     * AT+KEYCFG=<32 hex>  - Provision the AES-128 audio-at-rest key (Doc 09)
+     * AT+KEYCFG?          - Whether a key is set. NEVER returns the key.
+     *
+     * La clave se genera en la provision, se guarda aqui y se registra contra
+     * el chip_id en la BD del servicio. Este comando es de un solo sentido a
+     * proposito: quien tenga el device en la mano no puede leersela.
+     */
+    if (ctx->type == AT_CMD_TYPE_SET || ctx->type == AT_CMD_TYPE_EXEC) {
+        uint8_t key[16];
+        const char *hex = ctx->args;
+        int ret;
+
+        if (!hex || strlen(hex) != 32) {
+            return create_json_response(false, "usage: AT+KEYCFG=<32 hex chars>",
+                                        NULL, response, len);
+        }
+
+        for (int i = 0; i < 16; i++) {
+            char byte_hex[3] = { hex[i * 2], hex[i * 2 + 1], '\0' };
+            char *end;
+            long v = strtol(byte_hex, &end, 16);
+
+            if (*end != '\0') {
+                return create_json_response(false, "Not hex", NULL, response, len);
+            }
+            key[i] = (uint8_t)v;
+        }
+
+        ret = config_set_audio_key(key);
+        memset(key, 0, sizeof(key));
+        if (ret == -EINVAL) {
+            return create_json_response(false, "All-zero key not allowed",
+                                        NULL, response, len);
+        }
+        if (ret) {
+            return create_json_response(false, "Could not persist the key",
+                                        NULL, response, len);
+        }
+
+        return create_json_response(true, "Saved", "{\"set\":true}", response, len);
+    }
+
+    char data[16];
+
+    snprintf(data, sizeof(data), "{\"set\":%s}",
+             config_has_audio_key() ? "true" : "false");
+    return create_json_response(true, NULL, data, response, len);
 }
 
 static int cmd_stacfg_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
@@ -2486,6 +2564,15 @@ int at_commands_register(void)
         .handler = cmd_stacfg_handler,
     };
     err = at_server_register_cmd(&stacfg_cmd);
+    if (err) return err;
+
+    /* KEYCFG - AES-128 audio-at-rest key (write-only) */
+    static const struct at_command keycfg_cmd = {
+        .name = "KEYCFG",
+        .flags = AT_CMD_SET | AT_CMD_QUERY,
+        .handler = cmd_keycfg_handler,
+    };
+    err = at_server_register_cmd(&keycfg_cmd);
     if (err) return err;
 
     /* UPCFG - Address of the upload service */

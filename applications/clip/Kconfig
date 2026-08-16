@@ -529,6 +529,24 @@ config CLIP_USB_MSC
 	  el boton queda muerto diez minutos tras cada reinicio con un "USB Busy"
 	  en pantalla.
 
+config CLIP_AUDIO_ENCRYPT
+	bool "Cifrar el audio en la microSD (AES-128-GCM)"
+	default y
+	help
+	  Cifra cada fichero .opus al escribirlo (formato BPE2: cabecera en
+	  claro + trozos AES-128-GCM autenticados). La tarjeta es extraible:
+	  sin esto, cualquiera con el device en la mano se lleva las
+	  conversaciones. Ver Doc 09.
+
+	  Solo actua cuando hay clave provisionada (AT+KEYCFG=<32 hex>); sin
+	  clave el audio queda en claro y el arranque lo avisa en el log. La
+	  criptografia no cuesta FLASH: PSA con AES-GCM ya esta en la imagen
+	  por el supplicant WPA2.
+
+	  El descifrado es del lado servidor (tools/bpin_decrypt.py, clave por
+	  chip_id en la BD). Con esto activo, los .opus de la tarjeta NO se
+	  reproducen directamente.
+
 config CLIP_UPLOAD_TLS
 	bool "Subir el audio por TLS"
 	depends on NRF70_STA_MODE
