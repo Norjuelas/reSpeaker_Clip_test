@@ -53,29 +53,23 @@ static bool usb_vbus_present;
 #define USB_NO_VBUS_TIMEOUT_MS (10 * 60 * 1000) /* 10 minutes */
 static struct k_work_delayable usb_timeout_work;
 
-/* El VBUS_REMOVED hay que dejarlo reposar antes de creerselo: al encender la
- * radio del nRF7002 el controlador USB reporta un VBUS_REMOVED fantasma con el
- * cable puesto. Apagar el USB ahi mismo dejaba el device sordo — y como
- * VBUS_READY no re-encendia nada, sordo hasta el proximo reinicio. Se observo
- * en cada AT+STA=on y en cada autoconnect de arranque; el sample https_client,
- * que no gestiona VBUS, mantenia el USB vivo con el WiFi activo en esta misma
- * placa. */
-#define USB_VBUS_DEBOUNCE_MS 1000
-static struct k_work_delayable usb_vbus_off_work;
-
+/* Al VBUS_REMOVED no hay que creerle: al encender la radio del nRF7002 el
+ * controlador USB reporta un VBUS_REMOVED con el cable puesto, y el READY que
+ * lo desmentiria no llega nunca (para el controlador el VBUS no volvio a
+ * cambiar). Se probo un rebote de 1s y no basto — el fantasma sobrevive al
+ * rebote. Apagar el USB ahi dejaba el device sordo hasta el reinicio, en cada
+ * AT+STA=on y en cada autoconnect; el sample https_client, que no gestiona
+ * VBUS, mantenia USB y WiFi conviviendo en esta misma placa.
+ *
+ * Asi que el VBUS_REMOVED solo arma el temporizador de 10 minutos que ya
+ * existia para el caso sin cable. Si era un cable de verdad, el USB muere a
+ * los 10 minutos (el objetivo de bateria se conserva); si era el fantasma del
+ * WiFi, el device sigue accesible — que es lo que un device en reparacion
+ * necesita. */
 static void usb_timeout_handler(struct k_work *work)
 {
 	if (usb_active && !usb_vbus_present) {
 		LOG_INF("USB auto-disable: no VBUS for 10min");
-		usb_cdc_disable();
-		ble_notify_event("usb", "off");
-	}
-}
-
-static void usb_vbus_off_handler(struct k_work *work)
-{
-	if (usb_active && !usb_vbus_present) {
-		LOG_INF("USB auto-disable: VBUS removed");
 		usb_cdc_disable();
 		ble_notify_event("usb", "off");
 	}
@@ -171,10 +165,8 @@ static void usb_msg_cb(struct usbd_context *const ctx,
 
 	if (msg->type == USBD_MSG_VBUS_READY) {
 		usb_vbus_present = true;
-		/* VBUS present: cancel auto-disable timeout and any pending
-		 * debounced shutdown (the removal was a glitch). */
+		/* VBUS present: cancel the auto-disable timeout. */
 		k_work_cancel_delayable(&usb_timeout_work);
-		k_work_cancel_delayable(&usb_vbus_off_work);
 		/* Y si un VBUS_REMOVED anterior llego a apagar el USB, volver:
 		 * el cable esta puesto y un device sordo no se puede reparar. */
 		if (!usb_active) {
@@ -182,11 +174,12 @@ static void usb_msg_cb(struct usbd_context *const ctx,
 		}
 	} else if (msg->type == USBD_MSG_VBUS_REMOVED) {
 		usb_vbus_present = false;
-		/* Debounced: si en 1s el VBUS sigue ausente, era un cable de
-		 * verdad; si no, era el fantasma del encendido del WiFi. */
+		/* Solo armar el temporizador de 10 min: ver el comentario en
+		 * usb_timeout_handler — apagar aqui convertia el fantasma del
+		 * encendido del WiFi en un device sordo. */
 		if (usb_active) {
-			k_work_schedule(&usb_vbus_off_work,
-					K_MSEC(USB_VBUS_DEBOUNCE_MS));
+			k_work_schedule(&usb_timeout_work,
+					K_MSEC(USB_NO_VBUS_TIMEOUT_MS));
 		}
 	} else if (msg->type == USBD_MSG_CDC_ACM_CONTROL_LINE_STATE) {
 		uint32_t dtr = 0U;
@@ -251,7 +244,6 @@ int usb_cdc_init(void)
 
 	/* Setup auto-disable work */
 	k_work_init_delayable(&usb_timeout_work, usb_timeout_handler);
-	k_work_init_delayable(&usb_vbus_off_work, usb_vbus_off_handler);
 	k_work_init_delayable(&usb_reenable_work, usb_reenable_handler);
 
 	/* USB starts disabled; use AT+USB=on to enable */
