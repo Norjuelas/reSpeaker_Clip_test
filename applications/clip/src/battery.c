@@ -504,6 +504,17 @@ static void read_and_update_locked(void)
 	 * `displayed_percent` is persisted (seed on boot) so there is no
 	 * cross-reboot lag accumulation. The raw gauge value (percent) is still
 	 * logged as "actual" for calibration. */
+	/* Freno temporal ademas del freno por paso: MAX_STEP era por SONDEO,
+	 * pero los sondeos tambien los disparan los eventos del PMIC, y en una
+	 * carga inestable llegan en rafaga — MAX_STEP varias veces en segundos
+	 * parece un numero aleatorio en el panel. Entre pasos de display deben
+	 * pasar 10s; el freno congela el avance del tracker (diff=0), no solo
+	 * lo visible, para que al soltar no salte lo acumulado. Carga completa
+	 * y el techo por voltaje (abajo) no esperan: son correcciones. */
+	static int64_t last_step_ms;
+	int64_t now_ms = k_uptime_get();
+	bool step_allowed = (now_ms - last_step_ms) >= 10000;
+
 	uint8_t display_percent;
 	if (vbus_connected && charger_complete) {
 		/* Charge complete: force 100% immediately (gauge plateaus ~99%). */
@@ -521,8 +532,14 @@ static void read_and_update_locked(void)
 		} else if (diff < 0) {
 			diff = 0;  /* don't decrease while charging */
 		}
+		if (!step_allowed) {
+			diff = 0;
+		}
 		displayed_percent = (uint8_t)((int)displayed_percent + diff);
 		display_percent = displayed_percent;
+		if (diff != 0) {
+			last_step_ms = now_ms;
+		}
 	} else {
 		/* Discharging/idle: track depletion, downward only, rate-limited.
 		 * An upward gauge correction is held until the next charge. */
@@ -532,8 +549,49 @@ static void read_and_update_locked(void)
 		} else if (diff > 0) {
 			diff = 0;  /* don't increase while discharging */
 		}
+		if (!step_allowed) {
+			diff = 0;
+		}
 		displayed_percent = (uint8_t)((int)displayed_percent + diff);
 		display_percent = displayed_percent;
+		if (diff != 0) {
+			last_step_ms = now_ms;
+		}
+	}
+
+	/* Techo por voltaje en descarga: la red de seguridad que el fuel gauge
+	 * no da. Con una celda degradada el modelo sobreestima — se vio en el
+	 * banco un device diciendo 35% y apagandose al desconectar el cable o al
+	 * grabar. La tension BAJO CARGA es el arbitro final de "cuanta vida
+	 * queda de verdad": si esta en zona de colapso, el numero mostrado no
+	 * puede decir otra cosa. Solo en descarga: cargando, la tension del
+	 * cargador no dice nada de la celda. */
+	{
+		static uint8_t low_v_streak;
+
+		if (!charging && !vbus_connected && voltage < 3.45f) {
+			if (low_v_streak < 255) {
+				low_v_streak++;
+			}
+		} else {
+			low_v_streak = 0;
+		}
+
+		/* Dos lecturas seguidas, no una: una rafaga de TX puede hundir la
+		 * tension un instante en una celda sana, y el techo es pegajoso
+		 * hacia abajo (en descarga el display no sube). Dos lecturas
+		 * consecutivas ya no son una rafaga. */
+		if (low_v_streak >= 2) {
+			uint8_t ceiling = (voltage < 3.20f) ? 1
+					: (voltage < 3.30f) ? 5 : 10;
+
+			if (display_percent > ceiling) {
+				LOG_WRN("SoC %u%% con %d mV en descarga: techo %u%%",
+					display_percent, (int)(voltage * 1000), ceiling);
+				display_percent = ceiling;
+				displayed_percent = ceiling;
+			}
+		}
 	}
 
 	/* Update battery percent (display value) */

@@ -260,7 +260,7 @@ Binary frame protocol with per-file CRC32 verification:
 - `icons.c` - XBM-format display icons
 - `button.c` - Multi-press, long-press support via custom input driver
 - `haptic.c` - Vibration motor feedback via PMIC GPIO
-- `battery.c` - NPM1300 PMIC battery monitoring + nRF Fuel Gauge (model in `battery_model.inc`). Polls every 60 s. Displayed % is the fuel gauge's integer SoC estimate directly (no application-level smoothing, rate limiting, directional clamp, reserve, or full latch). Charge termination 4.25V. `vbatlow-charge-enable` lets the charger recover a deeply discharged/protected cell. No low-battery auto-shutdown (removed); low battery shows a UI warning only.
+- `battery.c` - NPM1300 PMIC battery monitoring + nRF Fuel Gauge (model in `battery_model.inc`). Polls every 60 s + on PMIC events. Displayed % is smoothed: directional clamp (up-only while charging, down-only while discharging), `CLIP_BATTERY_DISPLAY_MAX_STEP` per step, ≥10 s between steps (PMIC-event polls arrive in bursts), 100% latch on charge-complete, and a **discharge voltage ceiling** (two consecutive reads <3.45/3.30/3.20 V cap the display at 10/5/1% — the fuel gauge over-reports on degraded cells; loaded voltage is the arbiter of real remaining life). Charge termination 4.25V. `vbatlow-charge-enable` lets the charger recover a deeply discharged/protected cell. No low-battery auto-shutdown (removed); low battery shows a UI warning only.
 
 ## Known Pitfalls
 
