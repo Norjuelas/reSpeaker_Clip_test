@@ -835,6 +835,16 @@ static enum clip_event_result execute_transition(enum clip_event event,
     case CLIP_EVENT_USB_CONNECTED:
     {
         display_post_event(UI_EVENT_USB_CONNECTED);
+        /* Revivir el USB si un apagado anterior lo dejo fuera. Este evento
+         * viene del PMIC (interrupcion VBUS del NPM1300), que es el unico
+         * que ve el cable SIEMPRE: el controlador USB del nRF5340, una vez
+         * con el stack apagado, ya no entrega VBUS_READY — enchufar el cable
+         * no revivia nada y el device quedaba sordo hasta reiniciarlo. Se
+         * vio en el banco: cable puesto, sin puerto, boton para renacer. */
+        if (!usb_cdc_is_enabled()) {
+            LOG_INF("VBUS del PMIC con USB apagado: re-encendiendo");
+            usb_cdc_enable();
+        }
         return CLIP_EVENT_OK;
     }
 
