@@ -719,6 +719,12 @@ static enum clip_event_result execute_transition(enum clip_event event,
 
     case CLIP_EVENT_MARK:
     {
+        if (!IS_ENABLED(CONFIG_CLIP_BOOKMARKS)) {
+            /* Marcadores apagados por producto: el clic durante la grabacion
+             * no gasta ni SD, ni motor, ni pantalla. OK y silencio. */
+            return CLIP_EVENT_OK;
+        }
+
         if (!audio_is_recording()) {
             return CLIP_EVENT_INVALID;
         }

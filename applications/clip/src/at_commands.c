@@ -990,6 +990,11 @@ static int cmd_resume_handler(struct at_cmd_ctx *ctx, char *response, size_t len
 /* MARK Command Handler - Add bookmark */
 static int cmd_mark_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
 {
+    if (!IS_ENABLED(CONFIG_CLIP_BOOKMARKS)) {
+        return create_json_response(false, "Bookmarks disabled (CLIP_BOOKMARKS)",
+                                    NULL, response, len);
+    }
+
     const char *session_id = audio_get_session_id();
     if (!session_id) {
         return create_json_response(false, "No active session", NULL, response, len);

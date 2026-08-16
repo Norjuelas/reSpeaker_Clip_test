@@ -529,6 +529,21 @@ config CLIP_USB_MSC
 	  el boton queda muerto diez minutos tras cada reinicio con un "USB Busy"
 	  en pantalla.
 
+config CLIP_BOOKMARKS
+	bool "Marcadores durante la grabacion (boton -> marca + vibracion)"
+	default n
+	help
+	  Un clic durante la grabacion guarda un marcador en marks.bin, vibra y
+	  anima la pantalla. Apagado por decision de producto (2026-08-16): no
+	  se usan por ahora y cada pulsacion cuesta una escritura a la SD, el
+	  motor haptico y un refresco de pantalla — bateria y memoria en un
+	  device de 170mAh.
+
+	  Con esto apagado, el clic durante la grabacion no hace nada (ni
+	  vibracion ni animacion) y AT+MARK responde que esta deshabilitado.
+	  La LECTURA de marcadores antiguos (AT+MARKS=<sesion>) sigue
+	  funcionando.
+
 config CLIP_AUDIO_ENCRYPT
 	bool "Cifrar el audio en la microSD (AES-128-GCM)"
 	default y
