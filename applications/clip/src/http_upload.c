@@ -281,8 +281,20 @@ static int connect_to_endpoint(const char *host, uint16_t port)
 		}
 		zsock_setsockopt(sock, SOL_TLS, TLS_PEER_VERIFY, &verify,
 				 sizeof(verify));
-		/* El endpoint es una IP, no un nombre: SNI no aplica y pedirlo hace
-		 * fallar el handshake. Cuando el servicio tenga nombre, aqui va. */
+		/* TLS_HOSTNAME no es (solo) SNI: es el nombre contra el que mbedTLS
+		 * compara el certificado del servidor. Si no se fija, Zephyr pone ""
+		 * a proposito para forzar la verificacion, y "" no coincide con
+		 * ningun certificado: el handshake muere en BADCERT_CN_MISMATCH y
+		 * arriba se ve como connect() = -113 (ECONNABORTED), sin mencion a
+		 * certificados por ninguna parte. El certificado del servicio lleva
+		 * la IP en el subjectAltName, asi que la IP en texto casa bien.
+		 * (Con MBEDTLS_SSL_SERVER_NAME_INDICATION apagado no se emite la
+		 * extension SNI; esto solo alimenta la comparacion X.509.) */
+		if (ca_loaded &&
+		    zsock_setsockopt(sock, SOL_TLS, TLS_HOSTNAME, host,
+				     strlen(host)) < 0) {
+			LOG_ERR("TLS_HOSTNAME: %d", -errno);
+		}
 	}
 #endif
 
