@@ -34,6 +34,7 @@
 #include "storage.h"
 #include "wifi.h"
 #include "upload_registry.h"
+#include "health.h"
 
 LOG_MODULE_REGISTER(http_upload, CONFIG_CLIP_LOG_LEVEL);
 
@@ -725,6 +726,19 @@ static void upload_work_fn(struct k_work *work)
 
 static struct k_work_delayable periodic_work;
 
+/* Latido de salud en el hilo de subida, secuencial con ella. El snapshot
+ * lleva upload_state/files_done/files_total: es lo que el panel necesita para
+ * decir "subiendo" en vivo. Fallar es tolerable — el periodico lo repite. */
+static void post_health_inline(void)
+{
+	char json[960];
+	int n = health_snapshot_json(json, sizeof(json));
+
+	if (n > 0) {
+		(void)http_post_json("/health", json, (size_t)n);
+	}
+}
+
 static void periodic_work_fn(struct k_work *work)
 {
 	struct storage_session_info *sessions;
@@ -773,21 +787,55 @@ static void periodic_work_fn(struct k_work *work)
 		k_mutex_unlock(&status_lock);
 	}
 
-	for (int i = found - 1; i >= 0; i--) {
-		bool pending = false;
+	/* TODAS las sesiones pendientes en esta pasada, no una por ciclo: con
+	 * grabaciones cortas (una sesion cada una) el drenaje a una-por-5-min
+	 * acumulaba cola sin remedio — se vio en el banco: 20 minutos sin subir
+	 * nada nuevo porque cada pasada gastaba su turno en una sesion vieja.
+	 * La radio ya esta despierta y la conexion ya se paga: que la pasada
+	 * termine el trabajo. De la mas antigua a la mas nueva. */
+	{
+		bool any = false;
 
-		for (uint32_t idx = 1; idx <= sessions[i].file_count; idx++) {
-			if (!upload_registry_has(sessions[i].session_id, idx)) {
-				pending = true;
-				break;
+		for (int i = found - 1; i >= 0; i--) {
+			bool pending = false;
+
+			for (uint32_t idx = 1; idx <= sessions[i].file_count; idx++) {
+				if (!upload_registry_has(sessions[i].session_id, idx)) {
+					pending = true;
+					break;
+				}
+			}
+
+			if (!pending) {
+				continue;
+			}
+
+			if (!any) {
+				any = true;
+				/* Latido EN ESTE HILO antes de empezar: el panel ve
+				 * upload_state=running en vivo. En linea y no via
+				 * health_beat_now() a proposito — el latido asincrono
+				 * correria su handshake TLS a la vez que el de la
+				 * subida y los dos pelearian por el monton de mbedTLS. */
+				status_set_state(HTTP_UPLOAD_RUNNING, 0);
+				post_health_inline();
+			}
+
+			LOG_WRN("Subida periodica: %s tiene ficheros sin enviar",
+				sessions[i].session_id);
+			strncpy(pending_session, sessions[i].session_id,
+				sizeof(pending_session) - 1);
+			pending_session[sizeof(pending_session) - 1] = '\0';
+			upload_work_fn(NULL); /* mismo hilo: la cola ya nos serializa */
+
+			if (!wifi_sta_is_connected()) {
+				break; /* la red se fue; no martillear el resto */
 			}
 		}
 
-		if (pending) {
-			LOG_WRN("Subida periodica: %s tiene ficheros sin enviar",
-				sessions[i].session_id);
-			http_upload_session_async(sessions[i].session_id);
-			break;
+		if (any) {
+			/* Y el latido de cierre: done/failed con los contadores. */
+			post_health_inline();
 		}
 	}
 
