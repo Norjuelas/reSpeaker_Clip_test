@@ -648,6 +648,22 @@ static void upload_work_fn(struct k_work *work)
 			continue;
 		}
 
+		if (st.size == 0) {
+			/* Un .opus de 0 bytes es el cadaver de una grabacion que
+			 * murio al nacer (bateria agotada al pulsar grabar). No hay
+			 * nada que subir, el receptor lo rechaza (Content-Length
+			 * fuera de rango), y sin registrarlo el device lo reintentaba
+			 * CADA PASADA para siempre: la radio despertando cada 5
+			 * minutos por un fichero vacio. Se registra como resuelto. */
+			LOG_WRN("%s/%04u.opus vacio: registrado sin subir",
+				session_id, (unsigned int)idx);
+			upload_registry_mark(session_id, idx);
+			k_mutex_lock(&status_lock, K_FOREVER);
+			status.files_done++;
+			k_mutex_unlock(&status_lock);
+			continue;
+		}
+
 		snprintf(name, sizeof(name), "%04u.opus", (unsigned int)idx);
 
 		int64_t t0 = k_uptime_get();
