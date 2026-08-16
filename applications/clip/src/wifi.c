@@ -739,7 +739,13 @@ int wifi_sta_on(void)
 
 		if (!wifi_ready)
 		{
-			ret = k_sem_take(&wifi_ready_sem, K_SECONDS(3));
+			/* 10s y no 3: el PRIMER arranque del RPU tras un reinicio carga
+			 * el parche del nRF70 (87KB) desde la flash externa en trozos de
+			 * 8KB, y con 3s el primer intento moria aqui con ETIMEDOUT — el
+			 * segundo intento siempre funcionaba porque la radio ya estaba
+			 * arriba. Era la mitad del "autoconnect no se dispara": el unico
+			 * intento del arranque caia justo en este timeout. */
+			ret = k_sem_take(&wifi_ready_sem, K_SECONDS(10));
 			if (ret)
 			{
 				LOG_ERR("WiFi ready timeout");
@@ -981,6 +987,15 @@ static void sta_connect_work_handler(struct k_work *work)
 		LOG_WRN("Autoconnect a '%s' fallo: %s (%d)", config_get_sta_ssid(),
 				sta_fail_text[0] ? sta_fail_text : "sin motivo del supplicant",
 				ret);
+
+		/* Y REINTENTAR, no rendirse: este handler era de un solo tiro y la
+		 * maquinaria de reconexion solo se activaba tras una DESconexion —
+		 * un primer intento fallido en el arranque dejaba el device fuera de
+		 * la red para siempre, mudo, hasta un AT+STA=on por cable. Un device
+		 * de tienda tiene que insistir solo; la rampa con jitter ya existe
+		 * (sta_schedule_reconnect) y sta_want_connected quedo puesto por
+		 * wifi_sta_on(). */
+		sta_schedule_reconnect();
 
 		/* Report the reason, not just the fact. -ETIMEDOUT after association
 		 * means DHCP never answered, which is a different problem entirely
