@@ -98,6 +98,52 @@ static K_SEM_DEFINE(ap_disabled_sem, 0, 1);
 static K_SEM_DEFINE(sta_connected_sem, 0, 1);
 static K_SEM_DEFINE(sta_got_ip_sem, 0, 1);
 
+/* MAC estable derivada del chip id, fijada antes de levantar la interfaz.
+ *
+ * El OTP del nRF7002 de estas unidades no tiene MAC grabada, y el respaldo
+ * (WIFI_RANDOM_MAC_ADDRESS) genera una distinta en cada arranque: en el panel
+ * el mismo device aparece con otra MAC tras cada reinicio, y una red de
+ * tienda con lista blanca tendria que dar de alta una MAC nueva cada dia.
+ *
+ * El driver del nRF70 solo va a buscar la MAC (OTP/fija/aleatoria) si la
+ * interfaz NO tiene ya una valida (nrf_wifi_if_start_zep), asi que basta con
+ * fijarla aqui, con la interfaz aun abajo. Derivada del chip id es unica por
+ * device y la misma en cada arranque. El primer octeto 0xB2 marca
+ * locally-administered + unicast (bits U/L=1, I/G=0) — no es un OUI de nadie
+ * y no puede chocar con hardware real.
+ *
+ * Ojo: esta MAC tiene prioridad sobre cualquier otra fuente mientras se fije
+ * antes de levantar la interfaz. El dia que la MAC de fabrica se grabe en el
+ * OTP (tests/otp), hay que RETIRAR esta funcion para que el driver vuelva a
+ * leer el OTP. */
+static void wifi_apply_stable_mac(struct net_if *iface)
+{
+	static uint8_t mac[6];
+	uint8_t chip_id[8];
+	ssize_t len;
+
+	if (net_if_is_admin_up(iface)) {
+		return; /* solo puede fijarse con la interfaz abajo */
+	}
+
+	len = hwinfo_get_device_id(chip_id, sizeof(chip_id));
+	if (len < 6) {
+		LOG_WRN("Sin chip id (%d): la MAC queda aleatoria por arranque",
+			(int)len);
+		return;
+	}
+
+	mac[0] = 0xB2; /* B de B-Pin; U/L=1 (local), I/G=0 (unicast) */
+	memcpy(&mac[1], &chip_id[len - 5], 5);
+
+	if (net_if_set_link_addr(iface, mac, sizeof(mac), NET_LINK_ETHERNET)) {
+		LOG_WRN("No se pudo fijar la MAC estable");
+		return;
+	}
+	LOG_INF("MAC estable %02X:%02X:%02X:%02X:%02X:%02X (del chip id)",
+		mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+}
+
 static void wifi_timeout_handler(struct k_work *work)
 {
 	ARG_UNUSED(work);
@@ -485,6 +531,7 @@ int wifi_on(void)
 	if (!net_if_is_admin_up(iface))
 	{
 		LOG_INF("Interface is down, bringing up");
+		wifi_apply_stable_mac(iface);
 		ret = net_if_up(iface);
 		if (ret)
 		{
@@ -682,6 +729,7 @@ int wifi_sta_on(void)
 
 	if (!net_if_is_admin_up(iface))
 	{
+		wifi_apply_stable_mac(iface);
 		ret = net_if_up(iface);
 		if (ret)
 		{
