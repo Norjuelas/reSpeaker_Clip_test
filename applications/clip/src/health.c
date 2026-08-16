@@ -214,11 +214,14 @@ int health_snapshot_json(char *buf, size_t len)
 
 static void heartbeat_work_fn(struct k_work *work)
 {
-	/* 832: cada campo nuevo acerca el truncado, y snprintf trunca en
+	/* 960: cada campo nuevo acerca el truncado, y snprintf trunca en
 	 * silencio — el latido saldria como JSON invalido y el panel lo
 	 * descartaria sin decir por que. health_snapshot_json() devuelve
-	 * -ENOMEM si no cabe, y eso si se registra. */
-	char json[832];
+	 * -ENOMEM si no cabe, y eso si se registra. El snapshot ya rebaso
+	 * los 512 del buffer de AT+HEALTH? (fallaba con "Could not build
+	 * the snapshot"); se suben los dos a 960, alineados, para que
+	 * quepan o fallen juntos. */
+	char json[960];
 	int ret;
 
 	ARG_UNUSED(work);

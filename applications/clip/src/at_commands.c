@@ -2073,7 +2073,12 @@ static int cmd_health_handler(struct at_cmd_ctx *ctx, char *response, size_t len
      * AT+HEALTH=on|off  - start or stop the periodic beat
      * AT+HEALTH=now     - send one immediately
      */
-    char snapshot[512];
+    /* 960 y no 512: el snapshot crecio (mac, wifi_err, contadores de subida)
+     * y con 512 health_snapshot_json devolvia -ENOMEM — este comando fallaba
+     * con "Could not build the snapshot" y el latido periodico, que usa el
+     * mismo generador, no salia nunca. 960 deja sitio dentro del envoltorio
+     * de create_json_response (CLIP_AT_MAX_RESPONSE_LEN=1024). */
+    char snapshot[960];
     int n;
 
     if (ctx->type == AT_CMD_TYPE_SET && ctx->args && ctx->args[0] != '\0') {
