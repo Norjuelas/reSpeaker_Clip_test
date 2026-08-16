@@ -1545,6 +1545,17 @@ static int cmd_delete_handler(struct at_cmd_ctx *ctx, char *response, size_t len
             return create_json_response(false, "Transfer in progress",
                                         NULL, response, len);
         }
+        /* Con el MSC activo los unlink del firmware fallan EN SILENCIO
+         * (delete_dir_contents ignora errores por fichero) y el comando
+         * respondia 'deleted' sin borrar nada — se vio en el banco con las
+         * 99 sesiones intactas. Con la tarjeta expuesta al ordenador, el
+         * borrado se hace desde el ordenador. */
+        if (IS_ENABLED(CONFIG_CLIP_USB_MSC) && usb_cdc_is_enabled() &&
+            battery_vbus_present()) {
+            return create_json_response(false,
+                                        "USB MSC active: delete from the host or unplug",
+                                        NULL, response, len);
+        }
 
         int werr = storage_delete_all_sessions();
         if (werr) {
