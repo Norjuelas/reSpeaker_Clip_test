@@ -399,6 +399,11 @@ listlogs();
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
+    # Acota el handshake TLS diferido y cualquier read: sin esto, una conexion
+    # muda mantiene su hilo vivo para siempre (StreamRequestHandler.setup
+    # aplica este valor con settimeout).
+    timeout = 20
+
     def log_message(self, fmt, *args):
         pass  # el log propio basta
 
@@ -649,7 +654,14 @@ def main():
         # El device recorta mbedTLS a TLS 1.2: sin esto el servidor ofreceria
         # 1.3 y no habria terreno comun.
         ctx.maximum_version = ssl.TLSVersion.TLSv1_2
-        server.socket = ctx.wrap_socket(server.socket, server_side=True)
+        # do_handshake_on_connect=False, y no es un detalle: con el valor por
+        # defecto el handshake corre DENTRO de accept(), en el hilo principal
+        # y sin timeout. Un cliente que conecta y se calla (un device que se
+        # apaga a mitad de saludo) congela el servidor entero — panel incluido.
+        # Diferido, el handshake ocurre en el primer read del hilo de cada
+        # conexion, acotado por Handler.timeout.
+        server.socket = ctx.wrap_socket(server.socket, server_side=True,
+                                        do_handshake_on_connect=False)
         log(f"TLS activo con {args.cert.name}")
     esquema = "https" if (args.cert and args.key) else "http"
     log(f"Escuchando en {esquema}://{args.bind}:{args.port} -> {OUT_DIR.resolve()}")
