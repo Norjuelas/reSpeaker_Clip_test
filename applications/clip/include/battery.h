@@ -7,6 +7,8 @@
 #ifndef CLIP_BATTERY_H
 #define CLIP_BATTERY_H
 
+#include <stdbool.h>
+
 /**
  * @brief Initialize battery monitoring
  *
@@ -35,5 +37,17 @@ void battery_poll(void);
  * shutdown/reboot (a fresh copy before power-off).
  */
 void battery_save_fg_state(void);
+
+/**
+ * @brief Whether VBUS (USB cable power) is present, per the PMIC
+ *
+ * Cached from the last NPM1300 read; kept fresh by the PMIC's own
+ * VBUS_DETECTED/VBUS_REMOVED interrupts. Use this — not the nRF5340 USB
+ * controller's VBUS messages, which report a phantom removal whenever the
+ * WiFi radio powers on.
+ *
+ * @return true if a USB cable is powering the device
+ */
+bool battery_vbus_present(void);
 
 #endif /* CLIP_BATTERY_H */

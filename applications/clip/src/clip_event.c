@@ -531,32 +531,27 @@ void clip_event_process(void)
         /* Special case: recording blocked while USB MSC active.
          *
          * El motivo es real — USB MSC expone la microSD al ordenador, y grabar
-         * mientras el host puede escribir corrompe la FAT. Pero ojo con cuando
-         * se dispara: CLIP_USB_AT_AT_BOOT enciende USB en cada arranque haya
-         * cable o no, y usb_cdc solo lo apaga tras 10 minutos sin VBUS. Eso
-         * deja una ventana de 10 min despues de cada reinicio en la que el
-         * boton no graba, sin cable de por medio.
+         * mientras el host puede escribir corrompe la FAT. Pero solo aplica si
+         * hay un ordenador al otro lado, y eso lo dice el VBUS del PMIC, no el
+         * estado del stack USB: CLIP_USB_AT_AT_BOOT enciende el stack en cada
+         * arranque haya cable o no, y desde el arreglo del VBUS fantasma
+         * (usb_cdc.c) el stack ademas se queda encendido hasta 10 minutos
+         * despues de quitar el cable. Bloquear por el stack daba "USB Busy"
+         * sin cable — 10 min tras cada arranque y tras cada desconexion —
+         * y asi se aviso en campo, sin explicacion.
          *
-         * Se aviso en campo como "USB Busy" sin explicacion. La solucion de
-         * fondo es separar el canal serie CDC (que es lo que queremos siempre
-         * disponible) del almacenamiento MSC (que es lo que estorba), y
-         * bloquear solo por el segundo. Ver Doc 14. */
+         * battery_vbus_present() viene del NPM1300, que interrumpe en cada
+         * conexion/desconexion real y no sufre el VBUS_REMOVED fantasma del
+         * controlador USB al encender la radio WiFi. Sin VBUS no hay host que
+         * pueda estar escribiendo la microSD, y grabar es seguro. */
         if (IS_ENABLED(CONFIG_CLIP_USB_MSC) && usb_cdc_is_enabled() &&
-            item.event == CLIP_EVENT_START) {
+            battery_vbus_present() && item.event == CLIP_EVENT_START) {
             LOG_WRN("Recording blocked: USB active (MSC could be writing the SD)");
             display_post_event(UI_EVENT_USB_BLOCKED);
             if (item.result) {
                 item.result->result = CLIP_EVENT_INVALID;
             }
             goto notify;
-        }
-
-        /* Un latido cada 5 minutos no sirve para responder "esta grabando
-         * ahora?": el panel puede ir ese retraso por detras, y se vio — el
-         * device grabando y la tabla marcando IDLE. Los cambios de estado son
-         * raros y valen un POST inmediato. */
-        if (item.event == CLIP_EVENT_START || item.event == CLIP_EVENT_STOP) {
-            health_beat_now();
         }
 
         uint8_t next = transition_table[current][item.event];
@@ -580,6 +575,21 @@ void clip_event_process(void)
                          current, new_state);
             }
             atomic_set(&g_state, (atomic_val_t)new_state);
+        }
+
+        /* Un latido cada 5 minutos no sirve para responder "esta grabando
+         * ahora?": el panel puede ir ese retraso por detras, y se vio — el
+         * device grabando y la tabla marcando IDLE. Los cambios de estado son
+         * raros y valen un POST inmediato.
+         *
+         * DESPUES de ejecutar la transicion y publicar g_state, no antes: el
+         * latido corre en su propio hilo y construye el snapshot con el estado
+         * que encuentre. Encolado antes de la transicion, la carrera la ganaba
+         * casi siempre el latido — el panel recibia el POST del STOP diciendo
+         * todavia "RECORDING", que es exactamente lo que este latido inmediato
+         * queria evitar. */
+        if (item.event == CLIP_EVENT_START || item.event == CLIP_EVENT_STOP) {
+            health_beat_now();
         }
 
         if (item.result) {

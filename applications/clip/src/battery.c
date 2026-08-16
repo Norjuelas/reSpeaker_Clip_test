@@ -185,6 +185,18 @@ static bool fg_initialized;
  * shared. */
 static K_MUTEX_DEFINE(battery_mutex);
 
+/* VBUS del PMIC, cacheado en cada lectura. Se mantiene fresco solo: el
+ * NPM1300 interrumpe en VBUS_DETECTED/REMOVED y el callback llama a
+ * read_and_update(). Es LA fuente de verdad sobre el cable — el controlador
+ * USB del nRF5340 reporta un VBUS_REMOVED fantasma al encender la radio
+ * WiFi, asi que sus mensajes no sirven para decidir nada. */
+static bool last_vbus_present;
+
+bool battery_vbus_present(void)
+{
+	return last_vbus_present;
+}
+
 /* 60-second periodic battery level polling */
 static struct k_work_delayable battery_level_work;
 
@@ -303,7 +315,15 @@ static int charge_status_inform(int32_t chg_status)
 static bool poll_vbus_status(void)
 {
 	struct sensor_value val;
-	int ret = sensor_channel_get(charger_dev, SENSOR_CHAN_NPM13XX_CHARGER_VBUS_STATUS, &val);
+	/* El atributo VBUS_PRESENT, no el canal VBUS_STATUS: el canal devuelve
+	 * el registro VBUSIN.STATUS crudo (y cacheado en el ultimo fetch), donde
+	 * el bit 0 es "presente" pero el bit 1 (limite de corriente) y otros
+	 * pueden quedar encendidos con el cable fuera. Compararlo con != 0 daba
+	 * VBUS presente para siempre: el boton de grabar decia "USB Busy" sin
+	 * cable, minutos y reinicios incluidos. El atributo hace una lectura
+	 * I2C fresca y enmascara solo el bit de presencia. */
+	int ret = sensor_attr_get(charger_dev, SENSOR_CHAN_NPM13XX_CHARGER_VBUS_STATUS,
+				  SENSOR_ATTR_NPM13XX_CHARGER_VBUS_PRESENT, &val);
 	if (ret < 0) {
 		return false;
 	}
@@ -357,6 +377,7 @@ static void read_and_update_locked(void)
 
 	/* Get VBUS status */
 	vbus_connected = poll_vbus_status();
+	last_vbus_present = vbus_connected;
 
 	/* ---- High-temperature charge gating (software hysteresis) ----
 	 * The HW hot threshold (45C, thermistor-hot-millidegrees in DTS)
@@ -604,14 +625,22 @@ static void pmic_event_callback(const struct device *dev, struct gpio_callback *
 		return;
 	}
 
+	/* La bandera de VBUS se fija AQUI, no solo en read_and_update(): el
+	 * PMIC acaba de anunciar el cambio y re-leerlo es redundante — y
+	 * ademas fragil, porque read_and_update() retorna temprano sin tocar
+	 * el VBUS si la lectura de sensores falla (cosa que puede pasar justo
+	 * al desconectar). Con la bandera vieja, el boton de grabar seguia
+	 * diciendo "USB Busy" hasta el sondeo de 60s con el cable ya fuera. */
 	if (pins & BIT(NPM13XX_EVENT_VBUS_DETECTED)) {
 		LOG_INF("PMIC event: VBUS detected");
+		last_vbus_present = true;
 		clip_post_event(CLIP_EVENT_USB_CONNECTED);
 		/* Re-read after charger has started (takes ~2-3s) */
 		k_work_schedule(&battery_delayed_update_work, K_SECONDS(3));
 	}
 	if (pins & BIT(NPM13XX_EVENT_VBUS_REMOVED)) {
 		LOG_INF("PMIC event: VBUS removed");
+		last_vbus_present = false;
 	}
 	if (pins & BIT(NPM13XX_EVENT_CHG_COMPLETED)) {
 		LOG_DBG("PMIC: charge complete");
