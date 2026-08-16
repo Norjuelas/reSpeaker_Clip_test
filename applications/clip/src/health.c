@@ -37,7 +37,14 @@
 
 LOG_MODULE_REGISTER(health, CONFIG_CLIP_LOG_LEVEL);
 
-#define HEARTBEAT_STACK_SIZE 4096
+/* 12K y no 4K: http_post_json corre el handshake TLS EN ESTE HILO, y el hilo
+ * de subida —que hace exactamente lo mismo— tiene medidos ~7KB de pico sobre
+ * sus 14KB. Con 4KB el primer latido tras conectar desbordaba la pila y
+ * tumbaba el device entero. Paso desapercibido durante dias porque el bug del
+ * buffer del snapshot (-ENOMEM con 832 bytes) abortaba el latido ANTES de
+ * llegar al TLS: al arreglar aquel, aflora este. Dos bugs anidados, el de
+ * arriba tapando al de abajo. */
+#define HEARTBEAT_STACK_SIZE 12288
 #define HEARTBEAT_PRIORITY   7
 
 static K_THREAD_STACK_DEFINE(heartbeat_stack, HEARTBEAT_STACK_SIZE);
