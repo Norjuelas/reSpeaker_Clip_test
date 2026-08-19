@@ -17,6 +17,12 @@
 
 #include "clip.h"
 #include "config.h"
+#if defined(CONFIG_CLIP_AUDIO_ENCRYPT)
+#include "audio_crypto.h"
+#endif
+#if defined(CONFIG_CLIP_MTLS)
+#include "mtls.h"
+#endif
 #ifdef CONFIG_CLIP_AUDIO_ENCRYPT
 #include "audio_crypto.h"
 #endif
@@ -310,6 +316,67 @@ int config_save(void)
     }
 
     return 0;
+}
+
+int config_wipe_secrets(void)
+{
+    struct clip_context *ctx = clip_get_context();
+    uint8_t zeros[16] = {0};
+    int ret = 0, r;
+
+    /* El orden importa: la clave de audio PRIMERO.
+     *
+     * Es lo unico irrecuperable del device. Todo lo demas (red, endpoint) se
+     * vuelve a configurar; el audio ya grabado, si se pierde la clave, no lo
+     * descifra nadie — y eso es justamente el efecto que se busca cuando un
+     * device se pierde o entra en recuperacion.
+     *
+     * Por eso el borrado es instantaneo aunque la tarjeta este llena: no se
+     * borran los ficheros, se tira la llave. */
+    memcpy(ctx->config.audio_key, zeros, sizeof(zeros));
+    r = settings_save_one(SETTING_AUDIO_KEY, ctx->config.audio_key,
+                          sizeof(ctx->config.audio_key));
+    if (r) {
+        LOG_ERR("no se pudo borrar la clave de audio: %d", r);
+        ret = r;
+    }
+#if defined(CONFIG_CLIP_AUDIO_ENCRYPT)
+    audio_crypto_key_changed();   /* tirar tambien la copia importada en PSA */
+#endif
+
+    /* Credenciales de red: sin ellas el device no vuelve solo a la red de la
+     * tienda, que es lo que se quiere de una unidad perdida. */
+    memset(ctx->config.sta_psk, 0, sizeof(ctx->config.sta_psk));
+    r = settings_save_one(SETTING_STA_PSK, ctx->config.sta_psk,
+                          sizeof(ctx->config.sta_psk));
+    if (r && !ret) {
+        ret = r;
+    }
+    memset(ctx->config.sta_ssid, 0, sizeof(ctx->config.sta_ssid));
+    r = settings_save_one(SETTING_STA_SSID, ctx->config.sta_ssid,
+                          sizeof(ctx->config.sta_ssid));
+    if (r && !ret) {
+        ret = r;
+    }
+
+    /* El endpoint no es secreto, pero un device que ya no sabe a donde subir
+     * tampoco delata la direccion del servicio a quien lo tenga en la mano. */
+    memset(ctx->config.upload_host, 0, sizeof(ctx->config.upload_host));
+    (void)settings_save_one(SETTING_UPLOAD_HOST, ctx->config.upload_host,
+                            sizeof(ctx->config.upload_host));
+
+#if defined(CONFIG_CLIP_MTLS)
+    /* Y la identidad del device: un Clip perdido no debe poder seguir
+     * autenticandose ante el servicio aunque alguien lo reconfigure. El
+     * servicio ademas revoca su certificado por su lado — las dos mitades,
+     * porque cualquiera de ellas puede fallar. */
+    (void)mtls_wipe();
+#endif
+
+    LOG_WRN("SECRETOS DESTRUIDOS: clave de audio, credenciales WiFi, endpoint "
+            "y certificado de cliente. El audio de la tarjeta queda cifrado "
+            "sin llave recuperable");
+    return ret;
 }
 
 int config_factory_reset(void)

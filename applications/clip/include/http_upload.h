@@ -65,6 +65,18 @@ int http_upload_init(void);
 int http_upload_session_async(const char *session_id);
 
 /**
+ * @brief Adelanta la pasada de subida en vez de esperar al intervalo.
+ *
+ * Lo usa la orden remota `upload_now` que llega en la respuesta del latido.
+ * A diferencia de http_upload_session_async(), no necesita saber que sesion
+ * subir: la pasada periodica ya calcula el backlog y lo drena entero.
+ *
+ * @retval 0 o mayor  reprogramada
+ * @retval -ENODEV    la cola de subida todavia no arranco
+ */
+int http_upload_sweep_now(void);
+
+/**
  * @brief Read the state of the current or last upload
  */
 void http_upload_get_status(struct http_upload_status *out);
@@ -104,5 +116,18 @@ int http_upload_file(const char *session_id, const char *filename,
  * @retval 0 if the endpoint answered 2xx
  */
 int http_post_json(const char *url, const char *body, size_t body_len);
+
+/**
+ * @brief Como http_post_json(), pero devolviendo el cuerpo de la respuesta.
+ *
+ * Lo necesita el latido: la cola de ordenes para el device viaja en la
+ * respuesta del POST /health. El device pregunta y se lleva lo que haya —
+ * nada escucha en el device, asi que no hay nada que atacar.
+ *
+ * @param rsp     buffer donde dejar el cuerpo (puede ser NULL).
+ * @param rsp_max su tamano; el cuerpo se trunca si no cabe.
+ */
+int http_post_json_rsp(const char *url, const char *body, size_t body_len,
+		       char *rsp, size_t rsp_max);
 
 #endif /* CLIP_HTTP_UPLOAD_H */

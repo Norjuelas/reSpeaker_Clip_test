@@ -32,6 +32,17 @@ target_sources(app PRIVATE
     src/usb_cdc.c
 )
 
+if(CONFIG_CLIP_MTLS)
+    # Credenciales de cliente del device (Doc 23 Fase 2).
+    target_sources(app PRIVATE src/mtls.c)
+endif()
+
+if(CONFIG_CLIP_SECURITY_BUILTIN_CA)
+    # La CA de flota dentro de la imagen firmada. Se rellena con
+    # tools/gen_ca_builtin.py contra el servicio de produccion.
+    target_sources(app PRIVATE src/ca_builtin.c)
+endif()
+
 if(CONFIG_CLIP_AUDIO_ENCRYPT)
     target_sources(app PRIVATE src/audio_crypto.c)
 endif()

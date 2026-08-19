@@ -642,3 +642,156 @@ config CLIP_UDP_TRANSPORT
 	  Enciendalo para desarrollo si necesita el canal por red, sabiendo lo que
 	  abre.
 
+# =============================================================================
+# Seguridad
+# =============================================================================
+
+menu "Security"
+
+config CLIP_SECURITY_REQUIRE_CA
+	bool "Sin CA valida, no se sube audio (fallar cerrado)"
+	default y
+	depends on CLIP_UPLOAD_TLS
+	help
+	  Sin esto, cuando no hay CA el device cae a TLS_PEER_VERIFY_NONE: cifra
+	  contra cualquiera que responda, incluido un servidor impostor. Es la
+	  puerta del gemelo malvado — basta con borrar /SD:/ca.pem por USB, que es
+	  accesible con el device en la mano, y levantar un punto de acceso con el
+	  SSID de la tienda.
+
+	  Con esto activado la subida falla y el audio se queda cifrado en la
+	  tarjeta hasta que haya un servidor verificable. Perder disponibilidad es
+	  aceptable; entregar conversaciones a un impostor no.
+
+	  Apagarlo solo tiene sentido en el banco, contra un servidor de pruebas
+	  con certificado autofirmado.
+
+config CLIP_SECURITY_BUILTIN_CA
+	bool "CA de flota compilada dentro de la imagen"
+	default y
+	depends on CLIP_UPLOAD_TLS
+	help
+	  La CA se lee de src/ca_builtin.c, que va dentro de la imagen firmada, en
+	  vez de /SD:/ca.pem. Cambiarla exige firmar firmware nuevo, que exige la
+	  clave de firma. Cierra el agujero de la microSD escribible por USB.
+
+	  Con CLIP_SECURITY_CA_FROM_SD tambien activado, la tarjeta sirve de
+	  respaldo cuando la compilada no esta puesta.
+
+config CLIP_SECURITY_CA_FROM_SD
+	bool "Aceptar tambien la CA de /SD:/ca.pem"
+	default y
+	depends on CLIP_UPLOAD_TLS
+	help
+	  Permite rotar la CA en 100 unidades sin reflashear. Comodo y peligroso a
+	  la vez: la tarjeta es escribible por USB.
+
+	  Con CLIP_SECURITY_BUILTIN_CA activado esto es solo respaldo, y conviene
+	  apagarlo en produccion en cuanto la CA compilada este verificada.
+
+config CLIP_MTLS
+	bool "Certificado de cliente por device (mTLS)"
+	default y
+	depends on CLIP_UPLOAD_TLS
+	help
+	  El device se autentica ante el servicio con un certificado firmado por
+	  la CA de flota, en vez de con la cabecera X-Device-Id, que es texto que
+	  cualquiera puede escribir.
+
+	  Cierra la inyeccion de audio y de latidos falsos por parte de quien
+	  alcance el endpoint. Ver Doc 23 Fase 2.
+
+	  Sin credenciales instaladas el device sigue subiendo con TLS de servidor
+	  a secas, salvo que CLIP_MTLS_REQUIRED lo prohiba.
+
+config CLIP_MTLS_REQUIRED
+	bool "Sin certificado de cliente, no se sube"
+	default n
+	depends on CLIP_MTLS
+	help
+	  Fallar cerrado tambien por este lado.
+
+	  Se deja en n hasta que las 100 unidades esten provisionadas: activarlo
+	  antes deja fuera a toda la flota que aun no tenga certificado. Se
+	  enciende a la vez que REQUIRE_MTLS=true en el servicio.
+
+config CLIP_MTLS_SEC_TAG
+	int "sec_tag de las credenciales de cliente"
+	default 43
+	depends on CLIP_MTLS
+	help
+	  Distinto del de la CA (42). Zephyr indexa las credenciales por esta
+	  etiqueta; repetirla haria que el certificado de cliente pisara la CA.
+
+config CLIP_SECURITY_AT_AUDIT
+	bool "Registro de auditoria de los comandos AT"
+	default y
+	help
+	  Deja constancia de que comando entro por el cable, cuando y por que
+	  transporte, con los argumentos REDACTADOS en los comandos que llevan
+	  secretos (AT+KEYCFG, AT+STACFG, AT+WIFICFG).
+
+	  Sin esto, el registro generico de at_server imprime `args` tal cual: con
+	  el nivel de log a INF, la clave de audio y la contrasena del WiFi
+	  acabarian escritas en /SD:/LOG — en la misma tarjeta extraible que el
+	  audio que esa clave protege.
+
+config CLIP_SECURITY_WIPE_ON_DFU
+	bool "Destruir los secretos al entrar en modo recuperacion"
+	default y
+	help
+	  AT+DFU borra la clave de audio y las credenciales WiFi antes de
+	  reiniciar al bootloader.
+
+	  El motivo: mientras la clave de firma de MCUboot sea la de ejemplo,
+	  cualquiera puede instalar firmware propio por recuperacion serie y leer
+	  LittleFS entero. Destruir la clave antes convierte ese ataque en inutil:
+	  el audio de la tarjeta queda como ciphertext sin llave en el mundo.
+
+	  No cubre la entrada al bootloader por boton, que no pasa por el codigo de
+	  la aplicacion. Es una mitigacion, no un cierre; el cierre es la clave de
+	  firma propia.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# APPROTECT — DESACTIVADO Y COMENTADO A PROPOSITO (2026-08-18)
+#
+# No es un olvido ni una tarea pendiente de escribir: esta implementado y se
+# ha retirado del Kconfig para que NO pueda activarse por descuido, ni
+# apareciendo en un menuconfig ni por un `select` de otro simbolo.
+#
+# Por que tanto cuidado: bloquear APPROTECT es un camino de ida. Despues, la
+# unica forma de reprogramar el chip por SWD es un borrado total por CTRL-AP
+# (`nrfjprog --recover`), que necesita sonda de depuracion. Sin J-Link en el
+# equipo, una unidad que quede en mal estado NO se recupera — y hacerlo en
+# lote sin haberlo probado antes arriesga la flota entera.
+#
+# La version de PRODUCCION se ira con esto activo. Para activarlo: descomentar
+# el bloque de abajo, y solo cuando se cumplan las tres condiciones:
+#   1. hay sonda de depuracion disponible,
+#   2. la clave de firma de MCUboot es propia (tools/gen_signing_key.sh),
+#   3. el ciclo de actualizacion por recuperacion serie esta verificado en una
+#      unidad de sacrificio.
+#
+# Contexto completo: guide-to-pentest.md §2bis.
+#
+# config CLIP_SECURITY_APPROTECT
+# 	bool "Bloquear APPROTECT (IRREVERSIBLE)"
+# 	default n
+# 	select NRF_APPROTECT_LOCK
+# 	help
+# 	  Impide leer la FLASH por SWD. Sin esto, una sonda en los puntos de
+# 	  depuracion vuelca la imagen entera, incluida la clave de audio — y el
+# 	  cifrado en reposo deja de proteger nada.
+#
+# 	  LEE ESTO ANTES DE ACTIVARLO:
+#
+# 	  Es un camino de ida. Una vez bloqueado, la unica forma de volver a
+# 	  programar el chip por SWD es un borrado total por CTRL-AP
+# 	  (`nrfjprog --recover`), que necesita una sonda de depuracion. Sin
+# 	  J-Link en el equipo, un device que quede en mal estado NO se recupera.
+#
+# 	  Actívalo cuando se cumplan las tres: (1) hay sonda disponible, (2) la
+# 	  clave de firma es propia, y (3) el flujo de actualizacion por
+# 	  recuperacion serie esta verificado en una unidad de sacrificio.
+
+endmenu

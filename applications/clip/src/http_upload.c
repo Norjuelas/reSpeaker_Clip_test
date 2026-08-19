@@ -60,6 +60,13 @@ LOG_MODULE_REGISTER(http_upload, CONFIG_CLIP_LOG_LEVEL);
  * El contrapunto: la tarjeta es escribible por USB, de modo que quien tenga el
  * device puede cambiar la CA en la que confia. Eso lo cierra el certificado
  * por device del Doc 13, no esto. */
+#if defined(CONFIG_CLIP_SECURITY_BUILTIN_CA)
+#include "ca_builtin.h"
+#endif
+#if defined(CONFIG_CLIP_MTLS)
+#include "mtls.h"
+#endif
+
 #define CA_PATH        "/SD:/ca.pem"
 #define CA_MAX_LEN     2048
 #define CA_SEC_TAG     42
@@ -72,21 +79,46 @@ static uint8_t *ca_buf;
 
 static int load_ca(void)
 {
+#if defined(CONFIG_CLIP_SECURITY_CA_FROM_SD)
 	struct fs_file_t f;
 	uint8_t *pem;
 	ssize_t n;
 	bool is_pem;
+#endif
 	int ret;
 
 	if (ca_loaded) {
 		return 0;
 	}
 
+#if defined(CONFIG_CLIP_SECURITY_BUILTIN_CA)
+	/* La compilada primero. Va dentro de la imagen firmada, asi que
+	 * cambiarla exige firmar firmware nuevo — a diferencia de la de la
+	 * tarjeta, que se sustituye con el device en la mano y un cable. */
+	if (clip_ca_builtin_present()) {
+		ret = tls_credential_add(CA_SEC_TAG, TLS_CREDENTIAL_CA_CERTIFICATE,
+					 clip_ca_builtin_pem, clip_ca_builtin_len);
+		if (ret == 0 || ret == -EEXIST) {
+			ca_loaded = true;
+			LOG_INF("CA de flota: la compilada en la imagen (%u bytes)",
+				(unsigned int)clip_ca_builtin_len);
+			return 0;
+		}
+		LOG_ERR("La CA compilada no se pudo cargar: %d", ret);
+	} else {
+		LOG_WRN("No hay CA compilada: src/ca_builtin.c sigue vacio "
+			"(rellenar con tools/gen_ca_builtin.py)");
+	}
+#endif
+
+#if !defined(CONFIG_CLIP_SECURITY_CA_FROM_SD)
+	LOG_ERR("Sin CA compilada y la lectura desde la tarjeta esta deshabilitada");
+	return -ENOENT;
+#else
 	fs_file_t_init(&f);
 	ret = fs_open(&f, CA_PATH, FS_O_READ);
 	if (ret) {
-		LOG_WRN("Sin CA en %s (%d): se hablara TLS sin validar al servidor",
-			CA_PATH, ret);
+		LOG_WRN("Sin CA en %s (%d)", CA_PATH, ret);
 		return ret;
 	}
 
@@ -143,6 +175,7 @@ static int load_ca(void)
 	LOG_WRN("CA cargada de %s: %u bytes en %s", CA_PATH, (unsigned int)n,
 		is_pem ? "PEM" : "DER");
 	return 0;
+#endif /* CONFIG_CLIP_SECURITY_CA_FROM_SD */
 }
 #endif /* CONFIG_CLIP_UPLOAD_TLS */
 
@@ -152,6 +185,12 @@ struct upload_ctx {
 	uint8_t *chunk;
 	int status;
 	bool done;
+	/* Cuerpo de la respuesta, solo cuando quien llama lo pide. El latido lo
+	 * necesita: la cola de ordenes viaja ahi (Doc 23 §4 — el device
+	 * pregunta, nadie le habla sin que pregunte). */
+	char *rsp;
+	size_t rsp_max;
+	size_t rsp_len;
 };
 
 static char device_id[17];
@@ -228,6 +267,22 @@ static int response_cb(struct http_response *rsp, enum http_final_call final,
 {
 	struct upload_ctx *ctx = user_data;
 
+	/* El cuerpo llega a trozos y hay que ir acumulando: con una respuesta de
+	 * varias ordenes no cabe en un solo fragmento, y quedarse con el ultimo
+	 * daria un JSON cortado que el parser descarta sin decir por que. */
+	if (ctx->rsp && rsp->body_frag_len > 0) {
+		size_t sitio = (ctx->rsp_len < ctx->rsp_max - 1)
+				       ? ctx->rsp_max - 1 - ctx->rsp_len
+				       : 0;
+		size_t n = MIN(sitio, (size_t)rsp->body_frag_len);
+
+		if (n) {
+			memcpy(ctx->rsp + ctx->rsp_len, rsp->body_frag_start, n);
+			ctx->rsp_len += n;
+			ctx->rsp[ctx->rsp_len] = '\0';
+		}
+	}
+
 	if (final == HTTP_DATA_FINAL) {
 		ctx->status = rsp->http_status_code;
 		ctx->done = true;
@@ -261,23 +316,67 @@ static int connect_to_endpoint(const char *host, uint16_t port)
 
 #ifdef CONFIG_CLIP_UPLOAD_TLS
 	{
-		sec_tag_t tags[] = { CA_SEC_TAG };
+		/* Dos etiquetas: la CA con la que se valida al servidor, y las
+		 * credenciales con las que el device se presenta. La segunda solo
+		 * entra si hay certificado instalado — pasar una etiqueta sin
+		 * credenciales hace fallar el handshake entero. */
+		sec_tag_t tags[2] = { CA_SEC_TAG };
+		size_t n_tags = 1;
 		int verify;
 
 		load_ca();
+
+#if defined(CONFIG_CLIP_MTLS)
+		if (mtls_load_credentials() == 0) {
+			tags[n_tags++] = CONFIG_CLIP_MTLS_SEC_TAG;
+		} else {
+#if defined(CONFIG_CLIP_MTLS_REQUIRED)
+			/* Fallar cerrado por el lado de la identidad: sin
+			 * certificado el device no demuestra quien es, y el
+			 * servicio no deberia aceptar su audio. El audio espera
+			 * cifrado en la tarjeta hasta que se provisione. */
+			LOG_ERR("Sin certificado de cliente: no se sube "
+				"(AT+CERT=install para provisionar)");
+			zsock_close(sock);
+			return -EACCES;
+#else
+			LOG_WRN("Sin certificado de cliente: el servicio no puede "
+				"saber que device habla");
+#endif
+		}
+#endif
 
 		/* Sin CA no se puede verificar nada, y fingir que si seria peor que
 		 * no cifrar: daria una sensacion de seguridad que no existe. Se cifra
 		 * igualmente — protege de quien escucha la red — pero queda dicho en
 		 * el log que no se comprueba con quien se habla. */
+#if defined(CONFIG_CLIP_SECURITY_REQUIRE_CA)
+		/* Sin CA no se sube. Cifrar sin verificar da una sensacion de
+		 * seguridad que no existe: contra un punto de acceso gemelo, el
+		 * device entregaria el audio cifrado... al atacante, que es quien
+		 * tendria el otro extremo del tunel.
+		 *
+		 * Fallar aqui NO pierde audio: se queda cifrado en la tarjeta y
+		 * sube cuando haya un servidor verificable. Perder disponibilidad
+		 * es aceptable; entregar conversaciones a un impostor no. */
+		if (!ca_loaded) {
+			LOG_ERR("Sin CA de flota: no se sube. El audio espera cifrado "
+				"en la tarjeta");
+			zsock_close(sock);
+			return -EACCES;
+		}
+		verify = TLS_PEER_VERIFY_REQUIRED;
+#else
 		verify = ca_loaded ? TLS_PEER_VERIFY_REQUIRED : TLS_PEER_VERIFY_NONE;
 		if (!ca_loaded) {
-			LOG_WRN("TLS sin verificar al servidor: cifra, pero no autentica");
+			LOG_WRN("TLS sin verificar al servidor: cifra, pero no autentica. "
+				"Build de banco — CLIP_SECURITY_REQUIRE_CA esta apagado");
 		}
+#endif
 
 		if (ca_loaded &&
 		    zsock_setsockopt(sock, SOL_TLS, TLS_SEC_TAG_LIST, tags,
-				     sizeof(tags)) < 0) {
+				     n_tags * sizeof(sec_tag_t)) < 0) {
 			LOG_ERR("TLS_SEC_TAG_LIST: %d", -errno);
 		}
 		zsock_setsockopt(sock, SOL_TLS, TLS_PEER_VERIFY, &verify,
@@ -344,7 +443,6 @@ int http_upload_file(const char *session_id, const char *filename,
 	struct upload_ctx ctx = {0};
 	struct fs_file_t file;
 	char url[128];
-	char len_hdr[32];
 	char dev_hdr[64];
 	uint8_t *recv_buf = NULL;
 	int sock = -1;
@@ -384,11 +482,16 @@ int http_upload_file(const char *session_id, const char *filename,
 	ctx.remaining = size;
 
 	snprintf(url, sizeof(url), "/upload/%s/%s", session_id, filename);
-	snprintf(len_hdr, sizeof(len_hdr), "Content-Length: %u\r\n",
-		 (unsigned int)size);
 	snprintf(dev_hdr, sizeof(dev_hdr), "X-Device-Id: %s\r\n", get_device_id());
 
-	const char *headers[] = { len_hdr, dev_hdr, NULL };
+	/* Content-Length NO se pone aqui: http_client_req() ya la emite a partir
+	 * de req.payload_len, y ponerla ademas a mano manda la cabecera DOS
+	 * veces. El receptor de pruebas en Python lo toleraba; un servidor serio
+	 * no: nginx responde 400 "duplicate header line" y lo mismo hace uvicorn,
+	 * porque un Content-Length duplicado es un vector de request smuggling.
+	 * Se vio en el primer e2e contra AWS: TLS pasaba y todas las subidas
+	 * morian en 400. */
+	const char *headers[] = { dev_hdr, NULL };
 
 	req.method = HTTP_POST;
 	req.url = url;
@@ -432,14 +535,20 @@ out:
 /* A POST whose body is already in memory. The audio path streams from the SD
  * card because a recording does not fit in RAM; a health snapshot is 400 bytes
  * and does not need any of that machinery. */
-int http_post_json(const char *url, const char *body, size_t body_len)
+int http_post_json_rsp(const char *url, const char *body, size_t body_len,
+		       char *rsp, size_t rsp_max)
 {
 	const char *host = config_get_upload_host();
 	uint16_t port = config_get_upload_port();
 	struct http_request req = {0};
 	struct upload_ctx ctx = {0};
+
+	ctx.rsp = rsp;
+	ctx.rsp_max = rsp_max;
+	if (rsp && rsp_max) {
+		rsp[0] = '\0';
+	}
 	uint8_t *recv_buf;
-	char len_hdr[32];
 	char dev_hdr[64];
 	int sock;
 	int ret;
@@ -465,11 +574,11 @@ int http_post_json(const char *url, const char *body, size_t body_len)
 		return sock;
 	}
 
-	snprintf(len_hdr, sizeof(len_hdr), "Content-Length: %u\r\n",
-		 (unsigned int)body_len);
 	snprintf(dev_hdr, sizeof(dev_hdr), "X-Device-Id: %s\r\n", get_device_id());
 
-	const char *headers[] = { len_hdr, dev_hdr, NULL };
+	/* Sin Content-Length a mano: la pone http_client_req() desde
+	 * req.payload_len. Ver el comentario de http_upload_file(). */
+	const char *headers[] = { dev_hdr, NULL };
 
 	req.method = HTTP_POST;
 	req.url = url;
@@ -494,6 +603,12 @@ int http_post_json(const char *url, const char *body, size_t body_len)
 	k_free(recv_buf);
 
 	return ret;
+}
+
+/* La forma de siempre, para quien no necesita leer la respuesta. */
+int http_post_json(const char *url, const char *body, size_t body_len)
+{
+	return http_post_json_rsp(url, body, body_len, NULL, 0);
 }
 
 /* ------------------------------------------------------------------------
@@ -844,6 +959,19 @@ static void periodic_work_fn(struct k_work *work)
 reschedule:
 	k_work_schedule_for_queue(&upload_wq, &periodic_work,
 				  K_MINUTES(CONFIG_CLIP_UPLOAD_INTERVAL_MIN));
+}
+
+int http_upload_sweep_now(void)
+{
+	if (!upload_wq_started) {
+		return -ENODEV;
+	}
+
+	/* Se adelanta la pasada periodica en vez de subir una sesion concreta:
+	 * es la que sabe cuales quedan pendientes y las drena todas. Un
+	 * k_work_reschedule sobre un trabajo ya encolado solo cambia su plazo,
+	 * asi que llamar a esto dos veces no lanza dos pasadas. */
+	return k_work_reschedule_for_queue(&upload_wq, &periodic_work, K_NO_WAIT);
 }
 
 int http_upload_init(void)

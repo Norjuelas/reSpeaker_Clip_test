@@ -206,6 +206,75 @@ static int create_json_response(bool success, const char *message,
 }
 
 /* Process single AT command */
+
+/* ── Auditoria de comandos AT ─────────────────────────────────────────────
+ *
+ * El canal AT por USB no tiene autenticacion: quien tenga el device y un
+ * cable ejecuta lo que quiera. Mientras eso siga asi (el cierre es el
+ * desafio-respuesta del Doc 23 §7), lo minimo exigible es que quede rastro.
+ *
+ * Y sobre todo: que el rastro NO contenga los secretos. La linea que habia
+ * aqui antes registraba `args` tal cual, asi que AT+KEYCFG=<clave> y
+ * AT+STACFG="ssid","psk" habrian escrito la clave de audio y la contrasena
+ * del WiFi en /SD:/LOG — en la MISMA tarjeta extraible que el audio que esa
+ * clave protege. Hoy no ocurre solo porque el nivel de compilacion es WRN y
+ * el LOG_INF se cae del binario; un CLIP_LOG_LEVEL_INF lo convertiria en una
+ * fuga real sin que nadie lo notase.
+ */
+
+/* Comandos cuyos argumentos NO se registran jamas. */
+static bool at_cmd_is_secret(const char *name)
+{
+	return strcmp(name, "KEYCFG") == 0 ||
+	       strcmp(name, "STACFG") == 0 ||
+	       strcmp(name, "WIFICFG") == 0;
+}
+
+/* Comandos que borran, reconfiguran o abren el device. Se registran a nivel
+ * de aviso para que sobrevivan al filtro por defecto: si alguien formatea la
+ * tarjeta o cambia el endpoint, eso tiene que verse en el log aunque este a
+ * WRN, que es como sale de fabrica. */
+static bool at_cmd_is_dangerous(const char *name)
+{
+	return strcmp(name, "FACTORY") == 0 || strcmp(name, "FORMAT") == 0 ||
+	       strcmp(name, "DELETE") == 0  || strcmp(name, "DFU") == 0 ||
+	       strcmp(name, "UPCFG") == 0   || strcmp(name, "KEYCFG") == 0 ||
+	       strcmp(name, "STACFG") == 0  || strcmp(name, "WIFICFG") == 0 ||
+	       strcmp(name, "POWEROFF") == 0 || strcmp(name, "WIPE") == 0;
+}
+
+static const char *at_transport_name(uint8_t tt)
+{
+	switch (tt) {
+	case TRANSPORT_TYPE_USB: return "usb";
+	case TRANSPORT_TYPE_UDP: return "udp";
+	default:                 return "otro";
+	}
+}
+
+static void at_audit(const char *name, int type, const char *args,
+		     uint8_t transport)
+{
+	const char *via = at_transport_name(transport);
+
+	if (at_cmd_is_secret(name)) {
+		/* Ni los argumentos, ni su longitud exacta: con el formato fijo de
+		 * AT+KEYCFG (32 hex) la longitud no anade nada, y con STACFG
+		 * revelaria el tamano de la contrasena. */
+		LOG_WRN("AT %s type=%d args=<REDACTADO> via=%s", name, type, via);
+		return;
+	}
+
+	if (at_cmd_is_dangerous(name)) {
+		LOG_WRN("AT %s type=%d args='%s' via=%s", name, type,
+			args ? args : "", via);
+		return;
+	}
+
+	LOG_DBG("AT %s type=%d args='%s' via=%s", name, type,
+		args ? args : "", via);
+}
+
 static void process_command(struct at_queue_item *item)
 {
     char cmd_name[32] = {0};
@@ -237,7 +306,11 @@ static void process_command(struct at_queue_item *item)
         return;
     }
 
-    LOG_INF("AT command: %s type=%d args=%s", cmd_name, cmd_type, args);
+#if defined(CONFIG_CLIP_SECURITY_AT_AUDIT)
+    at_audit(cmd_name, cmd_type, args, item->transport_type);
+#else
+    LOG_DBG("AT command: %s type=%d", cmd_name, cmd_type);
+#endif
 
     /* Find command handler */
     struct at_cmd_ctx ctx = {
@@ -286,7 +359,15 @@ static void process_command(struct at_queue_item *item)
             }
 
             /* Ensure null-termination and send response */
-            LOG_INF("AT Response [%s]: %s", cmd_name, at_ctx.response_buffer);
+            if (IS_ENABLED(CONFIG_CLIP_SECURITY_AT_AUDIT) &&
+                at_cmd_is_secret(cmd_name)) {
+                /* La respuesta de un comando con secretos no va al log: hoy
+                 * ninguna los devuelve, pero eso es una propiedad de las
+                 * implementaciones actuales, no del canal. */
+                LOG_DBG("AT Response [%s]: <no registrada>", cmd_name);
+            } else {
+                LOG_DBG("AT Response [%s]: %s", cmd_name, at_ctx.response_buffer);
+            }
             SEND_RESPONSE();
             return;
         }

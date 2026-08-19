@@ -23,6 +23,9 @@
 #include "clip.h"
 #include "clip_event.h"
 #include "config.h"
+#if defined(CONFIG_CLIP_MTLS)
+#include "mtls.h"
+#endif
 #include "battery.h"
 #include "transport_udp.h"
 #include "nrf70_fw_provision.h"
@@ -721,6 +724,21 @@ static int cmd_reboot_handler(struct at_cmd_ctx *ctx, char *response, size_t len
 /* DFU Command Handler - Reboot into MCUboot recovery mode */
 static int cmd_dfu_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
 {
+#if defined(CONFIG_CLIP_SECURITY_WIPE_ON_DFU)
+    /* Los secretos se van ANTES de entrar en recuperacion.
+     *
+     * Mientras la clave de firma de MCUboot sea la de ejemplo publicada,
+     * cualquiera instala firmware propio por recuperacion serie y ese
+     * firmware lee LittleFS entero: clave de audio y contrasena del WiFi.
+     * Destruirlos aqui convierte ese ataque en inutil — lo que queda en la
+     * tarjeta es ciphertext sin llave.
+     *
+     * Lo que NO cubre: entrar al bootloader con el boton al conectar el USB,
+     * que no pasa por este codigo. Es una mitigacion, no un cierre; el cierre
+     * es la clave de firma propia. */
+    (void)config_wipe_secrets();
+#endif
+
     /* Set boot mode to bootloader before rebooting */
     int ret = bootmode_set(BOOT_MODE_TYPE_BOOTLOADER);
     if (ret != 0) {
@@ -735,6 +753,64 @@ static int cmd_dfu_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
     schedule_reboot(500, false);
 
     return ret;
+}
+
+/* CERT Command Handler - credenciales de cliente para mTLS */
+#if defined(CONFIG_CLIP_MTLS)
+static int cmd_cert_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
+{
+    if (ctx->type == AT_CMD_TYPE_SET) {
+        /* AT+CERT=install — lee /SD:/device.crt y /SD:/device.key, los pasa a
+         * la flash interna y los BORRA de la tarjeta.
+         *
+         * Por fichero y no por la linea AT porque un PEM son ~700 bytes y
+         * CLIP_AT_MAX_CMD_LEN son 256: por el canal de comandos no cabe. */
+        if (!ctx->args || strcmp(ctx->args, "install") != 0) {
+            return create_json_response(false, "usage: AT+CERT=install", NULL,
+                                        response, len);
+        }
+
+        int err = mtls_provision_from_sd();
+        if (err) {
+            return create_json_response(false,
+                "No se pudo instalar (¿estan /SD:/device.crt y /SD:/device.key?)",
+                NULL, response, len);
+        }
+        return create_json_response(true,
+            "Credenciales instaladas y borradas de la tarjeta", NULL,
+            response, len);
+    }
+
+    /* AT+CERT? — si hay credenciales, no cuales. */
+    char data[48];
+    snprintf(data, sizeof(data), "{\"client_cert\":%s}",
+             mtls_present() ? "true" : "false");
+    return create_json_response(true, NULL, data, response, len);
+}
+#endif
+
+/* WIPE Command Handler - destruye los secretos, deja el device inerte */
+static int cmd_wipe_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
+{
+    /* Se exige el argumento exacto: es irreversible y no debe poder salir de
+     * un dedo torcido ni de un byte suelto en la linea serie. */
+    if (!ctx->args || strcmp(ctx->args, "confirm") != 0) {
+        return create_json_response(false, "usage: AT+WIPE=confirm", NULL,
+                                    response, len);
+    }
+
+    int err = config_wipe_secrets();
+    if (err) {
+        return create_json_response(false, "Wipe incomplete", NULL, response, len);
+    }
+
+    /* La tarjeta NO se formatea a proposito: el audio se queda ahi, cifrado y
+     * sin llave. Formatear tardaria minutos con una tarjeta llena y podria
+     * interrumpirse; tirar la llave es instantaneo y no se puede dejar a
+     * medias. Si ademas se quiere el espacio, AT+FORMAT. */
+    return create_json_response(true,
+        "Secrets destroyed. Recorded audio is now unrecoverable.",
+        NULL, response, len);
 }
 
 /* PAIR Command Handler - Query or reset BLE pairing */
@@ -2431,6 +2507,26 @@ int at_commands_register(void)
     if (err) return err;
 
     /* PAIR - BLE pairing query/reset */
+#if defined(CONFIG_CLIP_MTLS)
+    /* CERT - Credenciales de cliente (mTLS) */
+    static const struct at_command cert_cmd = {
+        .name = "CERT",
+        .flags = AT_CMD_SET | AT_CMD_QUERY,
+        .handler = cmd_cert_handler,
+    };
+    err = at_server_register_cmd(&cert_cmd);
+    if (err) return err;
+#endif
+
+    /* WIPE - Destruir los secretos del device */
+    static const struct at_command wipe_cmd = {
+        .name = "WIPE",
+        .flags = AT_CMD_SET,
+        .handler = cmd_wipe_handler,
+    };
+    err = at_server_register_cmd(&wipe_cmd);
+    if (err) return err;
+
     static const struct at_command pair_cmd = {
         .name = "PAIR",
         .flags = AT_CMD_SET | AT_CMD_QUERY,

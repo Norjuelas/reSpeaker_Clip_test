@@ -292,6 +292,21 @@ bool config_has_audio_key(void);
 const char *config_get_upload_host(void);
 
 /**
+ * @brief Destruye los secretos del device sin tocar el resto de la config.
+ *
+ * Borra la clave de audio, las credenciales WiFi y el endpoint. El audio ya
+ * grabado en la tarjeta queda como ciphertext sin llave: el borrado es
+ * instantaneo e irreversible aunque la tarjeta este llena, porque no borra
+ * ficheros — tira la llave.
+ *
+ * Se invoca al entrar en recuperacion (CLIP_SECURITY_WIPE_ON_DFU) y desde
+ * AT+WIPE.
+ *
+ * @return 0, o el primer error de guardado.
+ */
+int config_wipe_secrets(void);
+
+/**
  * @brief Get the upload service port
  *
  * @return Port number, 0 if never configured

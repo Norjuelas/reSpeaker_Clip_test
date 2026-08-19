@@ -26,13 +26,19 @@
 #include <string.h>
 #include <errno.h>
 
+#include <zephyr/sys/reboot.h>
+#include <stdlib.h>
+
 #include "health.h"
 #include "clip.h"
-#include "clip_event.h"
 #include "config.h"
+#include "http_upload.h"
+#if defined(CONFIG_CLIP_MTLS)
+#include "mtls.h"
+#endif
+#include "clip_event.h"
 #include "storage.h"
 #include "wifi.h"
-#include "http_upload.h"
 #include "audio.h"
 
 LOG_MODULE_REGISTER(health, CONFIG_CLIP_LOG_LEVEL);
@@ -219,6 +225,114 @@ int health_snapshot_json(char *buf, size_t len)
 	return n;
 }
 
+
+/* ── Ordenes que llegan en la respuesta del latido ────────────────────────
+ *
+ * El device pregunta; nadie le habla sin que pregunte (Doc 23 §4). No hay
+ * puerto escuchando, asi que no hay puerto que atacar, y el canal ya esta
+ * autenticado y cifrado por el mismo TLS que lleva el latido.
+ *
+ * Formato:  {"commands":[{"id":7,"cmd":"stop_recording"}, ...]}
+ *
+ * Se parsea a mano y no con el JSON de Zephyr a proposito: son dos campos y
+ * el parser generico cuesta ~3KB de FLASH en una imagen que va al 97%. Lo que
+ * se paga a cambio es rigor: cualquier cosa que no encaje se ignora en vez de
+ * adivinarse.
+ */
+
+/* Lista blanca. Una orden que no este aqui se registra y se descarta: la
+ * respuesta del servicio es entrada no confiable como cualquier otra, y un
+ * despachador que ejecuta cadenas arbitrarias es una puerta trasera. */
+static void run_command(const char *cmd, int id)
+{
+	struct clip_event_result_info info = {0};
+
+	LOG_WRN("orden #%d del servicio: %s", id, cmd);
+
+	if (strcmp(cmd, "stop_recording") == 0) {
+		/* Por el sistema de eventos y no llamando a audio_*: es el mismo
+		 * camino que usan el boton y AT+STOP, asi que la maquina de estados,
+		 * la pantalla y el haptico se enteran. Llamar al driver por debajo
+		 * dejaria el device grabando segun su propio estado. */
+		(void)clip_post_event_sync(CLIP_EVENT_STOP, &info);
+	} else if (strcmp(cmd, "start_recording") == 0) {
+		(void)clip_post_event_sync(CLIP_EVENT_START, &info);
+	} else if (strcmp(cmd, "upload_now") == 0) {
+		/* Adelanta la pasada, que es la que conoce el backlog completo.
+		 * http_upload_session_async() exige un session_id y devuelve
+		 * -EINVAL con NULL — se comprobo. */
+		(void)http_upload_sweep_now();
+	} else if (strcmp(cmd, "wipe") == 0) {
+		/* La orden de un device perdido. Destruye la clave, no los
+		 * ficheros: instantaneo aunque la tarjeta este llena, e
+		 * irreversible — el audio queda como ciphertext sin llave.
+		 *
+		 * No se reinicia despues: el device sigue latiendo, y que siga
+		 * apareciendo en el panel es util para localizarlo. */
+		(void)config_wipe_secrets();
+#if defined(CONFIG_CLIP_MTLS)
+		(void)mtls_wipe();
+#endif
+		LOG_WRN("device inutilizado por orden remota");
+	} else if (strcmp(cmd, "reboot") == 0) {
+		sys_reboot(SYS_REBOOT_COLD);
+	} else if (strcmp(cmd, "health_now") == 0) {
+		/* Ya estamos dentro del latido: no hay nada que hacer. */
+	} else {
+		LOG_WRN("orden desconocida, se ignora: '%s'", cmd);
+	}
+}
+
+static void handle_commands(const char *body)
+{
+	const char *p = body;
+
+	if (!body || !strstr(body, "\"commands\"")) {
+		return;
+	}
+
+	/* Recorre los objetos {"id":N,"cmd":"X"} sin construir un arbol. */
+	while ((p = strstr(p, "\"cmd\"")) != NULL) {
+		char cmd[32];
+		const char *ini, *fin;
+		int id = 0;
+		const char *idp;
+		size_t n;
+
+		ini = strchr(p + 5, '"');
+		if (!ini) {
+			return;
+		}
+		ini++;
+		fin = strchr(ini, '"');
+		if (!fin) {
+			return;
+		}
+		n = (size_t)(fin - ini);
+		if (n >= sizeof(cmd)) {
+			/* Mas larga que cualquier orden valida: no se trunca para
+			 * compararla, se descarta. Truncar podria convertir una
+			 * cadena inventada en una orden real. */
+			LOG_WRN("orden demasiado larga (%u), se ignora",
+				(unsigned int)n);
+			p = fin;
+			continue;
+		}
+		memcpy(cmd, ini, n);
+		cmd[n] = '\0';
+
+		/* El id es informativo: sirve para el log y para el acuse cuando
+		 * el servicio lo pida. */
+		idp = strstr(p > body + 20 ? p - 20 : body, "\"id\"");
+		if (idp && idp < p) {
+			id = atoi(idp + 5);
+		}
+
+		run_command(cmd, id);
+		p = fin;
+	}
+}
+
 static void heartbeat_work_fn(struct k_work *work)
 {
 	/* 960: cada campo nuevo acerca el truncado, y snprintf trunca en
@@ -250,11 +364,22 @@ static void heartbeat_work_fn(struct k_work *work)
 		goto reschedule;
 	}
 
-	ret = http_post_json("/health", json, (size_t)ret);
-	if (ret) {
-		/* At WRN, not ERR: a missed beat is normal when the device is
-		 * moving between access points. */
-		LOG_WRN("Heartbeat did not land: %d", ret);
+	{
+		/* 256 dan para varias ordenes; el servicio entrega como mucho 8 y
+		 * cada una son ~35 bytes. Si no cabe, se trunca y el parseo
+		 * descarta lo cortado — es preferible a reservar en una pila que
+		 * ya tuvo un desbordamiento aqui mismo. */
+		char rsp[256];
+
+		ret = http_post_json_rsp("/health", json, (size_t)ret,
+					 rsp, sizeof(rsp));
+		if (ret) {
+			/* At WRN, not ERR: a missed beat is normal when the device
+			 * is moving between access points. */
+			LOG_WRN("Heartbeat did not land: %d", ret);
+		} else {
+			handle_commands(rsp);
+		}
 	}
 
 reschedule:
