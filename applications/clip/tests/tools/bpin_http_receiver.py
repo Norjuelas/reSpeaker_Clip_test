@@ -19,6 +19,7 @@ toca disco.
 import argparse
 import datetime
 import json
+import sqlite3
 import sys
 import threading
 from collections import deque
@@ -38,12 +39,111 @@ OUT_DIR = Path("./recordings")
 MAX_BODY = 8 * 1024 * 1024        # un .opus de una sesion larga no pasa de esto
 MAX_JSON = 8 * 1024
 
-# Ultimo latido de cada device, en memoria. No hay base de datos a proposito:
-# esto es el banco de pruebas, y un dict basta para ver 100 devices. Cuando
-# haya servicio de verdad, esto se sustituye por la tabla que registra tambien
-# el certificado de cada device (Doc 13).
+# Ultimo latido de cada device, en memoria. Es lo que pinta el panel y lo que
+# sirve /devices.json: una foto del ahora, barata de leer y de sobreescribir.
+# El historico va aparte, en SQLite (ver mas abajo) — este dict sigue siendo
+# exactamente lo que era.
 DEVICES = {}
 DEVICES_LOCK = threading.Lock()
+
+# ---------------------------------------------------------------------------
+# Historico de latidos
+#
+# Antes esto no existia: el latido llegaba, se sobreescribia DEVICES[dev] y los
+# 30 campos del anterior se perdian. Con un latido cada 5 minutos eso significa
+# que la bateria, el heap, la pila del hilo de subida y los ficheros pendientes
+# se estaban midiendo y tirando.
+#
+# Y son justo los numeros que solo dicen algo en serie: un device que se
+# reinicia por watchdog cada tres horas, pending_files subiendo dia tras dia
+# (se graba mas rapido de lo que se sube), heap_free bajando poco a poco (fuga).
+# Ninguno se ve en una foto.
+#
+# Columnas promovidas + el latido entero en `raw`: el payload ya desbordo su
+# buffer una vez creciendo, asi que un campo nuevo no puede perderse por no
+# tener columna. Las consultas usan las columnas; lo que no se previo, `raw`.
+DB = None
+DB_LOCK = threading.Lock()
+
+# Campos numericos/texto que se promueven a columna. El resto viaja en `raw`.
+# battery_ma esta a proposito antes de existir: el firmware lee la corriente
+# cada 60 s en battery.c y la tira sin publicarla (tarea T2.1.1). Cuando la
+# publique, esto la recoge sin migrar la tabla.
+DB_COLUMNS = [
+    ("uptime_s", "INTEGER"), ("reset", "TEXT"),
+    ("battery_pct", "INTEGER"), ("battery_mv", "INTEGER"),
+    ("battery_ma", "INTEGER"), ("battery_temp_c", "INTEGER"),
+    ("charging", "INTEGER"), ("state", "TEXT"), ("recording", "INTEGER"),
+    ("sd_free_mb", "INTEGER"), ("sd_used_mb", "INTEGER"),
+    ("wifi", "INTEGER"), ("rssi", "INTEGER"), ("ip", "TEXT"),
+    ("wifi_err", "TEXT"), ("heap_free", "INTEGER"),
+    ("up_stack_free", "INTEGER"), ("up_kbps", "INTEGER"),
+    ("up_ok", "INTEGER"), ("up_fail", "INTEGER"),
+    ("pending_files", "INTEGER"), ("upload_state", "TEXT"),
+    ("upload_err", "INTEGER"),
+]
+
+
+def _as_int(v):
+    """JSON true/false llegan como bool; SQLite no los tiene. None se conserva."""
+    if v is None:
+        return None
+    if isinstance(v, bool):
+        return int(v)
+    if isinstance(v, (int, float)):
+        return int(v)
+    return None
+
+
+def db_init(path):
+    """Abre el historico. Si falla, el receptor sigue sin el."""
+    global DB
+    cols = ",\n            ".join(f"{n} {t}" for n, t in DB_COLUMNS)
+    try:
+        # check_same_thread=False: ThreadingHTTPServer atiende cada peticion en
+        # un hilo. Una conexion compartida con lock basta y sobra — 100 devices
+        # a un latido cada 5 min son 0,3 escrituras por segundo.
+        conn = sqlite3.connect(str(path), check_same_thread=False)
+        # WAL para que un lector (un script que grafica) no bloquee al escritor.
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute(f"""
+            CREATE TABLE IF NOT EXISTS health (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            at TEXT NOT NULL,
+            device TEXT NOT NULL,
+            is_test INTEGER NOT NULL DEFAULT 0,
+            {cols},
+            raw TEXT NOT NULL)""")
+        conn.execute("CREATE INDEX IF NOT EXISTS health_dev_at "
+                     "ON health(device, at)")
+        conn.commit()
+        DB = conn
+        n = conn.execute("SELECT COUNT(*) FROM health").fetchone()[0]
+        log(f"historico en {path} ({n} latidos ya guardados)")
+    except Exception as e:
+        log(f"[aviso] sin historico de latidos: {e}")
+        DB = None
+
+
+def db_record_beat(dev, beat):
+    """Guarda un latido. Nunca levanta: perder una fila es mejor que perder
+    el device — el latido tiene que contestarse 200 igual."""
+    if DB is None:
+        return
+    names = ["at", "device", "is_test"] + [n for n, _ in DB_COLUMNS] + ["raw"]
+    vals = [beat.get("_seen"), dev, int(bool(beat.get("_test")))]
+    for n, typ in DB_COLUMNS:
+        v = beat.get(n)
+        vals.append(_as_int(v) if typ == "INTEGER" else v)
+    vals.append(json.dumps(beat, separators=(",", ":")))
+    try:
+        with DB_LOCK:
+            DB.execute(
+                f"INSERT INTO health ({','.join(names)}) "
+                f"VALUES ({','.join('?' * len(names))})", vals)
+            DB.commit()
+    except Exception as e:
+        log(f"[aviso] latido no guardado en el historico: {e}")
 
 # Las ultimas transferencias, para poder ver que viajo y si llego. Un latido
 # cada 5 minutos no cuenta nada de lo que paso en medio.
@@ -568,6 +668,11 @@ class Handler(BaseHTTPRequestHandler):
             beat["_test"] = self.headers.get("X-Device-Id", "") != dev
             with DEVICES_LOCK:
                 DEVICES[dev] = beat
+            # El dict guarda el ahora; la tabla, la serie. Se marcan tambien
+            # los latidos de prueba para poder excluirlos de una grafica: un
+            # dato inventado que no se distingue del medido ya confundio una
+            # vez a dos unidades desplegadas.
+            db_record_beat(dev, beat)
             log(f"latido {dev}  bat {beat.get('battery_pct')}%  "
                 f"sd {beat.get('sd_free_mb')}MB  {beat.get('state')}")
 
@@ -675,6 +780,61 @@ class Handler(BaseHTTPRequestHandler):
             self._reply(200, f"borrados {len(gone)}\n".encode())
             return
 
+        # Sacar la serie para graficarla. Sin esto el historico se acumula y no
+        # sirve de nada: el valor esta en poder comparar dos versiones de
+        # firmware, y para eso hay que poder exportarlo.
+        #   /health.csv                      todo
+        #   /health.csv?device=62518A...     un device
+        #   /health.csv?hours=24             ultimas 24 h
+        #   /health.csv?test=1               incluir latidos de prueba
+        if self.path.split("?")[0] == "/health.csv":
+            if DB is None:
+                self._reply(503, b"historico desactivado (--no-db)\n")
+                return
+            q = parse_qs(urlparse(self.path).query)
+            where, params = [], []
+            if not q.get("test"):
+                where.append("is_test = 0")
+            if q.get("device"):
+                where.append("device = ?")
+                params.append(q["device"][0])
+            if q.get("hours"):
+                try:
+                    since = (datetime.datetime.now() - datetime.timedelta(
+                        hours=float(q["hours"][0]))).isoformat(timespec="seconds")
+                    where.append("at >= ?")
+                    params.append(since)
+                except ValueError:
+                    self._reply(400, b"hours no es un numero\n")
+                    return
+            sql = "SELECT at, device, " + \
+                  ", ".join(n for n, _ in DB_COLUMNS) + " FROM health"
+            if where:
+                sql += " WHERE " + " AND ".join(where)
+            sql += " ORDER BY at"
+            try:
+                with DB_LOCK:
+                    cur = DB.execute(sql, params)
+                    cols = [d[0] for d in cur.description]
+                    rows = cur.fetchall()
+            except Exception as e:
+                log(f"[aviso] export fallido: {e}")
+                self._reply(500, b"export fallido\n")
+                return
+            import csv
+            import io
+            buf = io.StringIO()
+            w = csv.writer(buf)
+            w.writerow(cols)
+            w.writerows(rows)
+            body = buf.getvalue().encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/csv; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
         if self.path == "/devices.json":
             with DEVICES_LOCK:
                 body = json.dumps(DEVICES, indent=2).encode()
@@ -703,10 +863,20 @@ def main():
     ap.add_argument("--keys", type=Path,
                     help="JSON chip_id -> clave AES-128 hex, para descifrar "
                          "el audio en reposo (BPE2) al recibirlo")
+    ap.add_argument("--db", type=Path,
+                    help="fichero SQLite del historico de latidos "
+                         "(por defecto <out>/health.db)")
+    ap.add_argument("--no-db", action="store_true",
+                    help="no guardar historico; solo el ultimo latido en memoria")
     args = ap.parse_args()
 
     OUT_DIR = args.out
     OUT_DIR.mkdir(parents=True, exist_ok=True)
+
+    # Encendido por defecto a proposito. Un historico que hay que acordarse de
+    # pedir no existe el dia que hace falta, y el coste es un fichero.
+    if not args.no_db:
+        db_init(args.db or (OUT_DIR / "health.db"))
 
     if args.keys:
         AUDIO_KEYS.update(json.loads(args.keys.read_text()))
