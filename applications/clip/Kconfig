@@ -569,14 +569,26 @@ config CLIP_UPLOAD_TLS
 	help
 	  Cifra la subida de audio y el latido de salud.
 
-	  Apagado por defecto porque no cabe con Bluetooth: TLS recortado mide
-	  ~38KB y la imagen con BLE no tiene ese hueco. Se enciende junto con
-	  overlay-tls.conf, que quita BLE y recorta mbedTLS al minimo.
+	  El default de Kconfig es n porque no cabe con Bluetooth: TLS recortado
+	  mide ~38KB y la imagen con BLE no tiene ese hueco. Pero prj.conf lo pone
+	  a y, asi que el build por defecto SI lleva TLS — la postura segura es la
+	  que sale sin argumentos extra.
 
-	  La CA se lee de /SD:/ca.pem al primer envio, no se compila dentro: asi
-	  una misma imagen vale para toda la flota. Sin ese fichero el device
-	  cifra igual pero no verifica con quien habla — protege de quien escucha
-	  la red, no de quien se hace pasar por el servicio.
+	  Lo apaga overlay-dev-radio.conf, que es lo que hay que pedir a mano para
+	  volver a tener BLE y modo AP en el banco. Antes ocurria al contrario (un
+	  overlay-tls.conf que habia que pasar para encender TLS) y el resultado
+	  fue que dos builds de produccion salieron SIN TLS; ese fichero ya no
+	  existe.
+
+	  La CA sale de src/ca_builtin.c si esta rellena (CLIP_SECURITY_BUILTIN_CA,
+	  default y) y si no de /SD:/ca.pem (CLIP_SECURITY_CA_FROM_SD, default y).
+	  OJO: hoy ca_builtin.c esta VACIA a proposito — se rellena con
+	  tools/gen_ca_builtin.py contra el servicio real —, asi que en la practica
+	  toda la flota depende de la CA de la tarjeta, que es escribible por USB.
+
+	  Sin ninguna de las dos el device cifra igual pero no verifica con quien
+	  habla: protege de quien escucha la red, no de quien se hace pasar por el
+	  servicio.
 
 config CLIP_NO_NETWORK_POWEROFF_MIN
 	int "Minutos sin red antes de apagarse solo"

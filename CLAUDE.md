@@ -144,7 +144,9 @@ a space one: if space appeared tomorrow, BLE stays out.
 - The UDP AT channel as a control path. `wifi_udp.c`/`transport_udp.c` are compiled out
   (`CLIP_UDP_TRANSPORT` defaults `n`) because the server answered `AT+FACTORY` and `AT+FORMAT` to
   anyone on the network. UDP survives only as a bench file-transfer path.
-- `applications/clip/overlay-tls.conf` — it contains no config at all and is being deleted.
+- `applications/clip/overlay-tls.conf` — **deleted**. It contained no configuration at all, so
+  the "with TLS" and "without TLS" recipes in `SETUP.md` produced identical firmware. TLS is on
+  by default; `overlay-dev-radio.conf` is the one you pass to turn it *off*.
 - `mobile/`, `tests/ble_test.py`, `tests/otp/`, `docs/whitepaper.md` — the first is obsolete, the
   rest do not exist.
 - Putting the nRF7002 firmware patch back into the application image. It was there, it cost 87 KB

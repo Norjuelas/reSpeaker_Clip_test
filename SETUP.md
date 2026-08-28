@@ -28,23 +28,50 @@ python3 -m venv .venv
 
 ## 2. Compilar
 
-Dos imágenes, y **no son intercambiables**:
+**La postura segura es la que sale sin argumentos extra.** No hay que pasar ningún
+overlay para tener TLS: `CONFIG_CLIP_UPLOAD_TLS=y` vive en `prj.conf`, y Bluetooth
+y el modo punto de acceso están apagados ahí mismo.
 
 ```sh
+export ZEPHYR_EXTRA_MODULES=$(pwd)   # variable de entorno, NO de CMake: Kconfig
+                                     # descubre los módulos antes de que CMake exista
 export R=$(pwd)
 
-# Producción con TLS y sin Bluetooth — la que va a tienda
-west build --build-dir build-tls --board clip/nrf5340/cpuapp applications/clip \
-  -- -DSNIPPET_ROOT=$R/applications/clip -DSNIPPET=production \
-     -DEXTRA_CONF_FILE=$R/applications/clip/overlay-tls.conf
-
-# Desarrollo: HTTP en claro, con Bluetooth. Para depurar
-west build --build-dir build-prov --board clip/nrf5340/cpuapp applications/clip \
+# Producción — la que va a tienda. Consola apagada, ~170 µA en reposo
+west build --build-dir build-prod --board clip/nrf5340/cpuapp applications/clip \
   -- -DSNIPPET_ROOT=$R/applications/clip -DSNIPPET=production
+
+# Depuración — misma postura de seguridad, con consola y log a la microSD
+west build --build-dir build-clip --board clip/nrf5340/cpuapp applications/clip
 ```
 
-`ZEPHYR_EXTRA_MODULES` tiene que ser variable de entorno, no de CMake: Kconfig
-descubre los módulos antes de que CMake exista.
+Las dos llevan TLS, mTLS y cifrado en reposo. La única diferencia es la consola:
+para medir corriente hay que usar la de producción, porque la UART de depuración
+se lleva ~570 µA en reposo y tapa todo lo demás.
+
+Usa `--pristine` tras cualquier cambio de Kconfig, devicetree, sysbuild,
+particiones o placa. Y si el directorio de build viene de otra máquina, **bórralo**:
+`--pristine` no limpia las rutas absolutas muertas de `CMakeCache.txt`, y el
+síntoma es el desconcertante `No board named 'clip' found. Did you mean: clip`.
+
+### La imagen de banco, que NO es desplegable
+
+```sh
+# Devuelve Bluetooth y el modo AP, y APAGA TLS. Solo banco de pruebas
+west build --build-dir build-dev --board clip/nrf5340/cpuapp applications/clip \
+  -- -DEXTRA_CONF_FILE=$R/applications/clip/overlay-dev-radio.conf
+```
+
+TLS (~38 KB) y BLE (~15 KB) no caben juntos en el slot de 936 KB. Una imagen con
+radio sube el audio **sin cifrar** y abre dos canales sin autenticar: marca el
+device que la reciba y reflashéalo antes de devolverlo al inventario.
+
+> **Corrección (2026-08-25).** Este apartado prescribía
+> `-DEXTRA_CONF_FILE=…/overlay-tls.conf` para la imagen «con TLS» y omitirlo para
+> la de «desarrollo sin TLS». Ese fichero **no contenía ni una línea de
+> configuración** —sólo un comentario declarándose obsoleto desde el 2026-08-18—,
+> así que las dos órdenes producían firmware idéntico mientras el texto afirmaba
+> que se diferenciaban justo en TLS. El overlay se ha borrado.
 
 ---
 
