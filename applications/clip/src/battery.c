@@ -194,6 +194,10 @@ static bool last_vbus_present;
 /* Sondeos seguidos con VBUS puesto, sin corte termico y con el cargador sin
  * mostrar actividad. Ver el detector de atasco en read_and_update_locked(). */
 static uint8_t charger_idle_polls;
+/* Ultimo valor registrado del registro de error del cargador, para registrar
+ * solo los cambios. 0xFF (imposible como valor inicial real) fuerza una linea
+ * en el primer sondeo, para que el estado de arranque quede escrito. */
+static uint8_t last_chg_error = 0xFF;
 
 bool battery_vbus_present(void)
 {
@@ -387,15 +391,26 @@ static void read_and_update_locked(void)
 		return;
 	}
 
-	/* A WRN para que sobreviva al log de la tarjeta en una imagen de
-	 * produccion. Se registra ANTES de que el rearme de mas abajo escriba
-	 * ERR_CLR: si no, se limpiaria el error y no quedaria constancia de que
-	 * hubo uno -- que es justo lo que hizo falta para diagnosticar por que
-	 * un aparato no cargaba. */
-	if (chg_error != 0) {
-		LOG_WRN("cargador con error enganchado: 0x%02x (status 0x%02x, "
-			"temp %dC) -- se limpia y se rearma",
-			(unsigned int)chg_error, (unsigned int)chg_status, (int)temp);
+	/* Solo cuando CAMBIA, no en cada sondeo.
+	 *
+	 * Visto en el banco: el registro de error se queda enganchado en 0x11 de
+	 * forma permanente y la carga funciona igual, asi que registrarlo en cada
+	 * vuelta son ~1400 lineas identicas al dia sobre una condicion que no
+	 * cambia. El log de la tarjeta es la unica ventana a un aparato que dejo
+	 * de responder; llenarlo de ruido lo inutiliza.
+	 *
+	 * El valor actual se consulta cuando haga falta en AT+BATT? (chg_error).
+	 * Lo que merece una linea es la transicion. */
+	if (chg_error != last_chg_error) {
+		if (chg_error != 0) {
+			LOG_WRN("cargador: error 0x%02x (status 0x%02x, temp %dC)",
+				(unsigned int)chg_error, (unsigned int)chg_status,
+				(int)temp);
+		} else {
+			LOG_INF("cargador: error limpiado (status 0x%02x)",
+				(unsigned int)chg_status);
+		}
+		last_chg_error = (uint8_t)chg_error;
 	}
 
 	/* Get VBUS status */
