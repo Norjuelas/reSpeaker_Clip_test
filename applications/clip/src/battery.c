@@ -191,6 +191,9 @@ static K_MUTEX_DEFINE(battery_mutex);
  * USB del nRF5340 reporta un VBUS_REMOVED fantasma al encender la radio
  * WiFi, asi que sus mensajes no sirven para decidir nada. */
 static bool last_vbus_present;
+/* Sondeos seguidos con VBUS puesto, sin corte termico y con el cargador sin
+ * mostrar actividad. Ver el detector de atasco en read_and_update_locked(). */
+static uint8_t charger_idle_polls;
 
 bool battery_vbus_present(void)
 {
@@ -420,45 +423,64 @@ static void read_and_update_locked(void)
 			thermal_charge_disabled = false;
 		}
 
-		/* Y se REAFIRMA en cada sondeo, no solo en los flancos.
+		/* Se escribe SOLO cuando la decision cambia, mas un detector de
+		 * atasco acotado. Esto fue un error mio y lo pago la celda: la
+		 * primera version reafirmaba el estado en CADA sondeo para curar
+		 * discrepancias con el PMIC, y como el valor distinto de cero hace
+		 * ERR_CLR + EN_SET, reiniciaba el ciclo de carga una vez por minuto.
+		 * La carga no llegaba nunca a terminar: medido en el banco, la celda
+		 * se quedaba en 4267 mV -- por encima de term-microvolt -- al 99%,
+		 * con la corriente bajando y volviendo a subir (62 -> 84 mA) en cada
+		 * reinicio del ciclo, y el estado clavado en CV sin alcanzar COMPLETE.
+		 * Mantener una celda de litio por encima de su tension de corte es
+		 * justo el desgaste que esta campana intenta reducir.
 		 *
-		 * Antes esto solo escribia al cruzar un umbral, comparando
-		 * contra `thermal_charge_disabled` -- una bandera en la RAM del
-		 * nRF5340. El NPM1300 es otro chip alimentado desde VBAT al que
-		 * un reset del nRF5340 no le llega, asi que su registro sobrevive
-		 * al reinicio y la bandera no. En cuanto los dos discrepaban, la
-		 * condicion de flanco no volvia a cumplirse y nadie corregia el
-		 * registro: quedaba mal para siempre.
-		 *
-		 * Escribiendo el estado deseado cada 60 s son dos escrituras I2C
-		 * y la discrepancia se cura sola en un minuto, venga de un
-		 * reinicio, de un error enganchado o de lo que sea. Idempotente
-		 * a proposito: el valor distinto de cero hace ERR_CLR + EN_SET,
-		 * asi que tambien limpia errores que aparezcan en marcha, no solo
-		 * en el arranque.
-		 *
-		 * El error ya se ha registrado a WRN mas arriba, antes de este
-		 * ERR_CLR, para que limpiarlo no borre la prueba de que existio. */
+		 * El detector de atasco conserva lo unico que aquello aportaba. Si
+		 * deberia estar cargando y el cargador no muestra NINGUNA actividad
+		 * durante varios sondeos seguidos, se reafirma una vez. En CV o en
+		 * COMPLETE el registro de estado no es cero, asi que una carga sana
+		 * no se toca. */
 		struct sensor_value cur = {
 			.val1 = thermal_charge_disabled ? 0 : CHARGE_CURRENT_MA,
 			.val2 = 0,
 		};
+		bool decision_changed = (was_disabled != thermal_charge_disabled);
+		bool should_charge = !thermal_charge_disabled;
+		bool charger_idle = should_charge && (chg_status == 0);
 
-		if (sensor_attr_set(charger_dev,
-				    SENSOR_CHAN_GAUGE_DESIRED_CHARGING_CURRENT,
-				    SENSOR_ATTR_CONFIGURATION, &cur) < 0) {
-			LOG_ERR("charger re-assert failed (temp %dC, %s)", (int)temp,
-				thermal_charge_disabled ? "off" : "on");
-		} else if (was_disabled != thermal_charge_disabled) {
-			/* Solo se registra el cambio de decision. Reafirmar el
-			 * mismo estado cada minuto no merece una linea de log. */
-			if (thermal_charge_disabled) {
-				LOG_WRN("charge off: temp %dC>=%dC (hot)",
-					(int)temp, (int)CHARGE_STOP_TEMP_C);
+		if (charger_idle) {
+			charger_idle_polls++;
+		} else {
+			charger_idle_polls = 0;
+		}
+
+		/* Tres sondeos seguidos = tres minutos. Suficiente para no reaccionar
+		 * a un transitorio, y acotado para no machacar el registro. */
+		bool stuck = (charger_idle_polls >= 3);
+
+		if (decision_changed || stuck) {
+			if (sensor_attr_set(charger_dev,
+					    SENSOR_CHAN_GAUGE_DESIRED_CHARGING_CURRENT,
+					    SENSOR_ATTR_CONFIGURATION, &cur) < 0) {
+				LOG_ERR("charger write failed (temp %dC, %s)", (int)temp,
+					thermal_charge_disabled ? "off" : "on");
+			} else if (decision_changed) {
+				if (thermal_charge_disabled) {
+					LOG_WRN("charge off: temp %dC>=%dC (hot)",
+						(int)temp, (int)CHARGE_STOP_TEMP_C);
+				} else {
+					LOG_INF("charge resume: temp %dC<%dC",
+						(int)temp, (int)CHARGE_RESUME_TEMP_C);
+				}
 			} else {
-				LOG_INF("charge resume: temp %dC<%dC",
-					(int)temp, (int)CHARGE_RESUME_TEMP_C);
+				/* A WRN: que el cargador este parado debiendo cargar es
+				 * exactamente lo que costo dias diagnosticar. */
+				LOG_WRN("cargador parado %u sondeos con VBUS puesto "
+					"(status 0x%02x, err 0x%02x) -- se rearma",
+					charger_idle_polls, (unsigned int)chg_status,
+					(unsigned int)chg_error);
 			}
+			charger_idle_polls = 0;
 		}
 	}
 
