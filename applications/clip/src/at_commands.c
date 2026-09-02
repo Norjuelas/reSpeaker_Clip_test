@@ -198,16 +198,18 @@ static int cmd_batt_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
 {
     struct clip_context *c = clip_get_context();
     int n = snprintf(response, len,
-        /* current_ma: IBAT en crudo, negativo = descargando. NO es el consumo
-         * total del device — la corriente del nRF7002 no pasa por el sensor
-         * del PMIC (ver clip.h). Sirve para reposo y grabacion sin radio. */
+        /* current_ua: IBAT en crudo y en MICROamperios, negativo =
+         * descargando. En mA los 170 uA de reposo se redondeaban a 0, que es
+         * justo el numero que interesa. NO es el consumo total del device — la
+         * corriente del nRF7002 no pasa por el sensor del PMIC (ver clip.h).
+         * Sirve para reposo y grabacion sin radio. */
         "{\"ok\":true,\"data\":{\"battery\":%u,\"charging\":%s,\"voltage\":%u,"
-        "\"temp\":%d,\"current_ma\":%d}}",
+        "\"temp\":%d,\"current_ua\":%d}}",
         c->status.battery_percent,
         c->status.battery_charging ? "true" : "false",
         c->status.battery_mv,
         c->status.battery_temp,
-        c->status.battery_ma);
+        c->status.battery_ua);
     if (n < 0 || n >= len - 2) {
         return AT_ERR_NOMEM;
     }

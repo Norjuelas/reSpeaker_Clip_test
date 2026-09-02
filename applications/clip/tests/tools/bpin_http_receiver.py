@@ -66,13 +66,13 @@ DB = None
 DB_LOCK = threading.Lock()
 
 # Campos numericos/texto que se promueven a columna. El resto viaja en `raw`.
-# battery_ma esta a proposito antes de existir: el firmware lee la corriente
-# cada 60 s en battery.c y la tira sin publicarla (tarea T2.1.1). Cuando la
-# publique, esto la recoge sin migrar la tabla.
+# battery_ua en MICROamperios, no en mA: el objetivo de reposo son 170 uA y en
+# miliamperios enteros eso es 0, justo el numero que interesa. El firmware lo
+# publica asi desde T2.1.1.
 DB_COLUMNS = [
     ("uptime_s", "INTEGER"), ("reset", "TEXT"),
     ("battery_pct", "INTEGER"), ("battery_mv", "INTEGER"),
-    ("battery_ma", "INTEGER"), ("battery_temp_c", "INTEGER"),
+    ("battery_ua", "INTEGER"), ("battery_temp_c", "INTEGER"),
     ("charging", "INTEGER"), ("state", "TEXT"), ("recording", "INTEGER"),
     ("sd_free_mb", "INTEGER"), ("sd_used_mb", "INTEGER"),
     ("wifi", "INTEGER"), ("rssi", "INTEGER"), ("ip", "TEXT"),
@@ -114,6 +114,17 @@ def db_init(path):
             is_test INTEGER NOT NULL DEFAULT 0,
             {cols},
             raw TEXT NOT NULL)""")
+        # CREATE TABLE IF NOT EXISTS no toca una tabla que ya existe, asi que
+        # una columna nueva en DB_COLUMNS no aparecia sola en un historico ya
+        # creado y db_record_beat() la descartaba en silencio (no levanta por
+        # diseno). Se anaden las que falten -- ALTER TABLE ADD COLUMN en SQLite
+        # es instantaneo y las filas viejas quedan con NULL, que es la verdad:
+        # ese dato no se midio.
+        have = {r[1] for r in conn.execute("PRAGMA table_info(health)")}
+        for name, typ in DB_COLUMNS:
+            if name not in have:
+                conn.execute(f"ALTER TABLE health ADD COLUMN {name} {typ}")
+                log(f"historico: columna nueva {name}")
         conn.execute("CREATE INDEX IF NOT EXISTS health_dev_at "
                      "ON health(device, at)")
         conn.commit()

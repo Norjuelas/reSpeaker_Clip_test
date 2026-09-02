@@ -89,16 +89,26 @@ struct clip_context {
         bool battery_charging;
         int8_t battery_temp;        /* Battery temperature (°C, NTC) */
         uint16_t battery_mv;        /* Battery voltage (mV) */
-        /* Battery current (mA), NPM1300 IBAT sense. Sensor convention:
-         * negative = discharging, positive = charging.
+        /* Battery current in MICROAMPS, NPM1300 IBAT sense. Sensor
+         * convention: negative = discharging, positive = charging.
+         *
+         * Microamps, not milliamps, and not a style choice: the idle target is
+         * 170 uA, which in int16_t milliamps rounds to 0. The whole point of
+         * this field is the number it could not represent. Anything below
+         * 500 uA read as zero. Recording is in the tens of mA and charging is
+         * ~220 mA, so int32_t is needed for the range as well.
          *
          * NOT the total device draw. The nRF7002 taps VBAT upstream of the
          * PMIC, so the radio's current never crosses the IBAT sense resistor
          * and does not appear here. Accurate for idle and for recording with
          * the radio off; blind to WiFi. For absolute figures with the radio
          * on, measure the 3V3 rail externally. See battery.c
-         * wifi_load_estimate_a(). */
-        int16_t battery_ma;
+         * wifi_load_estimate_a().
+         *
+         * Whether the PMIC's own IBAT ADC resolves 170 uA is a separate
+         * question this field cannot answer. If it reads 0 at idle, the limit
+         * is the sensor and the measurement has to move to a PPK. */
+        int32_t battery_ua;
         uint32_t recording_time;
         uint32_t free_space;
         uint16_t session_count;

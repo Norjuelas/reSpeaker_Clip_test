@@ -655,9 +655,14 @@ static void read_and_update_locked(void)
 	 * reposo — a 170 uA sobre 170 mAh son ~1000 h, y eso no se mide
 	 * descargando, se calcula.
 	 *
+	 * En MICROamperios: el sensor entrega uA (val2 es la parte de micros en
+	 * read_sensors()), asi que se publica en su unidad nativa y no se le
+	 * anade error de redondeo propio. En mA el objetivo de reposo se
+	 * convertia en cero.
+	 *
 	 * Es IBAT en crudo, sin la compensacion de WiFi: se publica lo que mide
 	 * el sensor, no una estimacion. Ojo con lo que NO incluye (ver clip.h). */
-	ctx->status.battery_ma = (int16_t)(current * 1000.0f);
+	ctx->status.battery_ua = (int32_t)(current * 1000000.0f);
 
 	/* Update display with current status */
 	struct display_status ds = {

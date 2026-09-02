@@ -109,8 +109,14 @@ enough to time directly.
 
 ### On-device current
 
-`battery_ma` in the heartbeat and `current_ma` in `AT+BATT?` report the NPM1300 IBAT sense.
-Negative = discharging.
+`battery_ua` in the heartbeat and `current_ua` in `AT+BATT?` report the NPM1300 IBAT sense,
+in **microamps**. Negative = discharging.
+
+**Microamps because milliamps could not express the target.** The field was `int16_t` mA in
+its first version, which rounds 170 µA to 0 — the one number the campaign exists to measure.
+Anything under 500 µA read as zero. This is also the first thing to check on the first
+flash: if idle reads exactly `0` µA now, the limit is no longer our units but the PMIC's own
+IBAT ADC, and idle measurement has to move to the PPK.
 
 **It excludes the radio.** The nRF7002 taps VBAT upstream of the PMIC, so its current never
 crosses the sense resistor. Consequences:
@@ -199,7 +205,8 @@ Before recording a result as real:
 2. FLASH and RAM recorded, and within the slot.
 3. `AT+HEALTH?` returns a **complete** response — a truncated snapshot returns `-ENOMEM` and
    silently stops the heartbeat, which has happened before.
-4. `AT+BATT?` reports a plausible `current_ma` — negative on battery, positive on charger.
-   A constant 0 means the sensor path is not populating.
+4. `AT+BATT?` reports a plausible `current_ua` — negative on battery, positive on charger.
+   A constant 0 means either the sensor path is not populating or the ADC cannot resolve the
+   draw; distinguish by recording (tens of mA), which must never read 0.
 5. One beat reaches the receiver and lands in SQLite.
 6. Measurement taken on the same cell as the baseline it is compared against.
