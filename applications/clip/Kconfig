@@ -83,6 +83,34 @@ config CLIP_LOG_FS_DEFAULT_ON
 	  the production snippet) avoids broadcasting an app-only Kconfig symbol
 	  into the mcuboot sysbuild image, where it is undefined.
 
+config CLIP_LOG_FS_BOOT_WINDOW_S
+	int "Seconds of FS logging after boot before it retires itself (0 = never)"
+	default 0 if LOG_BACKEND_UART
+	default 120
+	help
+	  Only meaningful when CLIP_LOG_FS_DEFAULT_ON is set. The FS log backend
+	  deactivates itself this many seconds after boot, as if AT+LOG=off had
+	  been sent.
+
+	  Why this exists: prj.conf sets CLIP_LOG_FS_DEFAULT_ON=y explicitly, on
+	  purpose, so that nRF70 patch provisioning is visible on the card --
+	  AT+LOG=debug only takes effect once boot is over, so without the boot
+	  default that outcome could not be seen at all. But an explicit
+	  assignment in prj.conf beats the 'default y if LOG_BACKEND_UART' above,
+	  so production got FS logging too, and clip_sd_busy() therefore returned
+	  true from boot to ship mode: the whole SD idle power-off sequence
+	  (unmount, disk deinit, SPI4 suspend, CS park, LDO2 off) never ran in any
+	  build. Both intents fit if the backend is on for boot and then retires.
+
+	  Debug builds default to 0 -- keeping UART logging means you want logs.
+	  An explicit AT+LOG=info|debug cancels the retirement; the window only
+	  ever withdraws the boot default, never a decision someone made.
+
+	  Note the SD gate has two more conditions after this one: the device must
+	  be in IDLE, and USB must have retired itself (10 minutes without VBUS,
+	  see CLIP_USB_AT_AT_BOOT). Turning this window on does not by itself
+	  make the rail drop.
+
 config CLIP_DEFAULT_AUTODEL
 	int "Default auto-delete days (-1 for off)"
 	default -1

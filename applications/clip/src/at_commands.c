@@ -54,6 +54,19 @@ static struct k_work_delayable pair_reset_work;
 static bool reboot_clear_bonds;
 static bool log_fs_active = IS_ENABLED(CONFIG_CLIP_LOG_FS_DEFAULT_ON);
 
+#if CONFIG_CLIP_LOG_FS_BOOT_WINDOW_S > 0
+/* El backend de log a la tarjeta se enciende por defecto para que se vea el
+ * aprovisionamiento del parche del nRF70, que ocurre durante el arranque y no
+ * se puede pedir despues con AT+LOG. El efecto colateral no buscado: mientras
+ * este encendido, clip_sd_busy() devuelve true y storage_idle_poweroff() no
+ * llega a ejecutarse nunca. Se retira solo pasada la ventana de arranque.
+ *
+ * Una peticion explicita (AT+LOG=info|debug) cancela la retirada: la ventana
+ * solo retira el valor por defecto, nunca una decision de alguien. */
+static struct k_work_delayable log_fs_retire_work;
+static bool log_fs_user_requested;
+#endif
+
 static void reboot_work_handler(struct k_work *work)
 {
     /* Stop recording if active before rebooting */
@@ -495,8 +508,33 @@ static int cmd_mode_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
     }
 }
 
+#if CONFIG_CLIP_LOG_FS_BOOT_WINDOW_S > 0
+static void log_fs_retire_handler(struct k_work *work)
+{
+    ARG_UNUSED(work);
+
+    if (log_fs_user_requested || !log_fs_active) {
+        return;
+    }
+
+    /* Se avisa ANTES de desactivar, para que la ultima linea del fichero
+     * explique por que se corta. Un log que termina sin mas parece un cuelgue. */
+    LOG_INF("FS log: ventana de arranque agotada (%ds), se retira para que la "
+            "tarjeta pueda apagarse. AT+LOG=info lo vuelve a encender.",
+            CONFIG_CLIP_LOG_FS_BOOT_WINDOW_S);
+
+    const struct log_backend *fs_be = log_backend_get_by_name("log_backend_fs");
+    if (fs_be) {
+        log_backend_deactivate(fs_be);
+    }
+    log_fs_active = false;
+}
+#endif
+
 /* LOG Command Handler - control the FS (SD card) log backend.
- * AT+LOG=off (default) | info | debug. Default off so the SD can idle-power-off;
+ * AT+LOG=off | info | debug. The boot default comes from
+ * CLIP_LOG_FS_DEFAULT_ON (on, so that boot-time provisioning is visible) and
+ * retires itself after CLIP_LOG_FS_BOOT_WINDOW_S so the SD can idle-power-off;
  * when on, INF (or DBG) level logs persist to /SD:/LOG. */
 static int cmd_log_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
 {
@@ -548,6 +586,11 @@ static int cmd_log_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
             log_filter_set(fs_be, 0, (int16_t)i, level);
         }
         log_fs_active = true;
+#if CONFIG_CLIP_LOG_FS_BOOT_WINDOW_S > 0
+        /* Peticion explicita: la ventana de arranque ya no manda. */
+        log_fs_user_requested = true;
+        k_work_cancel_delayable(&log_fs_retire_work);
+#endif
         clip_storage_activity_notify();
 
         char data[32];
@@ -2411,6 +2454,11 @@ int at_commands_register(void)
 
     k_work_init_delayable(&reboot_work, reboot_work_handler);
     k_work_init_delayable(&pair_reset_work, pair_reset_work_handler);
+#if CONFIG_CLIP_LOG_FS_BOOT_WINDOW_S > 0
+    k_work_init_delayable(&log_fs_retire_work, log_fs_retire_handler);
+    k_work_schedule(&log_fs_retire_work,
+                    K_SECONDS(CONFIG_CLIP_LOG_FS_BOOT_WINDOW_S));
+#endif
 
     /* GSTAT - Get device status */
     static const struct at_command gstat_cmd = {
