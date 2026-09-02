@@ -671,6 +671,12 @@ void audio_recording_thread(void *p1, void *p2, void *p3)
                 dmic_trigger(dmic_dev, DMIC_TRIGGER_STOP);
                 mic_power_off();
 
+                /* El boost se pedia al arrancar y se soltaba solo al parar, asi
+                 * que la pausa corria a 128 MHz con el microfono apagado y nada
+                 * que codificar. Se suelta aqui y se recupera al salir de la
+                 * espera. */
+                clip_cpu_boost_release();
+
                 is_paused = true;
                 LOG_INF("Recording paused at %u sec", (unsigned int)(stats.recording_time_ms / 1000));
 
@@ -678,6 +684,15 @@ void audio_recording_thread(void *p1, void *p2, void *p3)
                 while (is_paused && !stop_requested) {
                     k_sleep(K_MSEC(100));
                 }
+
+                /* Se recupera SIEMPRE al salir de la espera, tanto si se reanuda
+                 * como si se para: audio_stop_recording_internal() suelta una
+                 * vez y solo una. Un release sin su acquire deja el contador en
+                 * -1, y a partir de ahi acquire() ya no vuelve a subir el reloj
+                 * -- atomic_inc devuelve el valor anterior y la comparacion con
+                 * 0 nunca se cumple. El fallo seria una grabacion entera a
+                 * 64 MHz, sin ningun sintoma visible. */
+                clip_cpu_boost_acquire();
 
                 /* Check if stop was requested while paused */
                 if (stop_requested) {
