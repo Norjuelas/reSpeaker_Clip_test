@@ -46,7 +46,12 @@ static const struct device *mic_regulator =
 static const struct gpio_dt_spec pdm_en_gpio = {
 	.port = DEVICE_DT_GET(DT_NODELABEL(gpio1)),
 	.pin = 14,
-	.dt_flags = GPIO_OUTPUT | GPIO_ACTIVE_HIGH,
+	/* Sin GPIO_OUTPUT: es un flag de runtime (BIT(17)) y dt_flags es de 16
+	 * bits, asi que se truncaba a 0 con un aviso de -Woverflow. No cambia
+	 * nada -- la direccion se pasa explicita en gpio_pin_configure_dt() mas
+	 * abajo, y GPIO_ACTIVE_HIGH es la ausencia de GPIO_ACTIVE_LOW, o sea 0,
+	 * exactamente lo que dejaba el truncado. */
+	.dt_flags = GPIO_ACTIVE_HIGH,
 };
 
 /* PCM stream configuration for DMIC */

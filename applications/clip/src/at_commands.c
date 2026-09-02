@@ -30,6 +30,7 @@
 #include "transport_udp.h"
 #include "nrf70_fw_provision.h"
 #include "http_upload.h"
+#include "upload_registry.h"
 #include "health.h"
 #include "app_version.h"
 #include "audio.h"
