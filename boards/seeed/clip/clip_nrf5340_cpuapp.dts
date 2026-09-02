@@ -219,7 +219,33 @@
 			 * mild overcharge. Tradeoff: reduced cycle life. */
 			term-microvolt = <4250000>;
 			term-warm-microvolt = <4100000>;
-			current-microamp = <220000>;
+			/* Corriente de carga bajada de 220 mA a 110 mA.
+			 *
+			 * A 220 mA la celda se calentaba hasta 42 C solo por
+			 * cargar (medido: 32 C -> 42 C en diez minutos, con
+			 * 237 mA reales de carga), y a 45 C el gate termico de
+			 * battery.c corta la carga. Esa es la trampa por la que
+			 * el aparato del banco se quedo sin cargador: disparo
+			 * una vez, y hasta el arreglo de battery_init() no
+			 * volvia a armarse nunca.
+			 *
+			 * El calentamiento va con I^2R, asi que la mitad de
+			 * corriente es la cuarta parte de calor. Cuesta tiempo
+			 * de carga -- del orden de 1,5-2 h en vez de ~45 min --
+			 * que en un aparato que se carga por la noche no es un
+			 * coste real.
+			 *
+			 * Pasos validos: 32 mA a 800 mA de 2 en 2 (el
+			 * LINEAR_RANGE del driver), asi que 110000 es exacto.
+			 *
+			 * OJO con la capacidad de la celda: el arbol se
+			 * contradice. CLAUDE.md dice 170 mAh y battery.c:818
+			 * registra "240mAh"; battery_model.inc no lo dice de
+			 * forma legible. 110 mA queda por debajo de 0,65C con
+			 * la lectura pesimista (170 mAh) y de 0,46C con la
+			 * otra, asi que es seguro sin resolver la duda -- pero
+			 * hay que resolverla antes de afinar mas. */
+			current-microamp = <110000>;
 			dischg-limit-microamp = <1000000>;
 			vbus-limit-microamp = <500000>;
 			thermistor-ohms = <10000>;
@@ -249,6 +275,16 @@
 			 * charging. */
 			dietemp-stop-millidegrees   = <85000>;
 			dietemp-resume-millidegrees = <75000>;
+			/* El driver escribe EN_SET en su init cuando esto esta
+			 * puesto -- y esta puesto, asi que el cargador se
+			 * habilita en cada arranque. Lo que NO hace es escribir
+			 * ERR_CLR, y un error del cargador enganchado bloquea
+			 * la carga aunque EN_SET este escrito. Por eso
+			 * battery_init() escribe ademas el atributo
+			 * DESIRED_CHARGING_CURRENT, que hace ERR_CLR + EN_SET.
+			 * Esta propiedad sola no basta: es exactamente el caso
+			 * que dejo un aparato del banco sin cargar durante
+			 * dias. */
 			charging-enable;
 			/* Allow charging a deeply discharged battery (below VBATLOW),
 			 * e.g. after the protection IC trips at ~2.4V. Without this the
