@@ -37,11 +37,34 @@ struct http_upload_status {
 	 * desde el arranque, y cuantos ficheros quedan por enviar.
 	 *
 	 * pending_files es el que decide si el intervalo aguanta: si crece
-	 * jornada tras jornada, se sube mas despacio de lo que se graba. */
+	 * jornada tras jornada, se sube mas despacio de lo que se graba.
+	 *
+	 * last_kbps es velocidad de TRANSFERENCIA: solo cabeceras, cuerpo y
+	 * respuesta. NO incluye la conexion ni el handshake TLS, que van aparte
+	 * en last_connect_ms. Antes era el fichero entero dividido por el tiempo
+	 * total, handshake incluido, y para un fichero pequeno eso es sobre todo
+	 * handshake -- la cifra se llamaba velocidad y media otra cosa. Con TLS
+	 * el CONNECT_TIMEOUT_MS son 20 s, asi que el sesgo no era pequeno. */
 	uint32_t last_kbps;
 	uint32_t ok_count;
 	uint32_t fail_count;
 	uint32_t pending_files;
+
+	/* Las dos mitades del coste de subir un fichero, separadas porque se
+	 * arreglan de formas distintas.
+	 *
+	 * last_connect_ms: TCP + handshake TLS. Se paga UNA VEZ POR FICHERO --
+	 *   http_upload_file() abre y cierra el socket en cada llamada, asi que
+	 *   una sesion de N ficheros son N handshakes. Si este numero domina, el
+	 *   arreglo es reutilizar la conexion, no tocar el codec ni el chunk.
+	 * last_transfer_ms: cabeceras + cuerpo + respuesta. Si domina este, el
+	 *   arreglo esta en SEND_CHUNK o en el enlace.
+	 * last_session_ms: la pasada entera, de la primera conexion al ultimo
+	 *   fichero. Es el numero que contesta "cuanto tarda en subirse una
+	 *   grabacion", que no se podia contestar antes. */
+	uint32_t last_connect_ms;
+	uint32_t last_transfer_ms;
+	uint32_t last_session_ms;
 };
 
 /**

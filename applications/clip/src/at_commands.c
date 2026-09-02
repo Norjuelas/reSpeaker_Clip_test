@@ -2367,18 +2367,39 @@ static int cmd_httpup_handler(struct at_cmd_ctx *ctx, char *response, size_t len
      */
     char session_id[STORAGE_SESSION_ID_LEN];
     struct http_upload_status st;
-    char data[224];
+    /* 448: con los contadores y los tiempos, los 224 de antes se pasaban y
+     * snprintf trunca en silencio -- saldria un JSON invalido y el cliente lo
+     * descartaria sin decir por que. Caben: create_json_response() envuelve
+     * esto en unos 25 bytes mas y CLIP_AT_MAX_RESPONSE_LEN son 1024. */
+    char data[448];
     int ret;
 
     if (ctx->type == AT_CMD_TYPE_TEST || ctx->type == AT_CMD_TYPE_READ) {
         http_upload_get_status(&st);
-        snprintf(data, sizeof(data),
+        /* Los contadores y las velocidades ya existian en la estructura y no
+         * salian por ningun canal salvo el latido -- que necesita red, que es
+         * justo lo que falta cuando se esta depurando una subida. Y el
+         * desglose conn/xfer es lo que convierte "tarda mucho" en un numero:
+         * si manda conn_ms, el arreglo es reutilizar la conexion (hay un
+         * handshake TLS POR FICHERO); si manda xfer_ms, esta en SEND_CHUNK o
+         * en el enlace. */
+        int n = snprintf(data, sizeof(data),
                  "{\"state\":\"%s\",\"session\":\"%s\",\"files_done\":%u,"
-                 "\"files_total\":%u,\"bytes\":%u,\"error\":%d,\"stack_free\":%u}",
+                 "\"files_total\":%u,\"bytes\":%u,\"error\":%d,\"stack_free\":%u,"
+                 "\"kbps\":%u,\"ok\":%u,\"fail\":%u,\"pending\":%u,"
+                 "\"connect_ms\":%u,\"transfer_ms\":%u,\"session_ms\":%u}",
                  upload_state_txt(st.state), st.session_id,
                  (unsigned int)st.files_done, (unsigned int)st.files_total,
                  (unsigned int)st.bytes_sent, st.last_error,
-                 (unsigned int)st.stack_free);
+                 (unsigned int)st.stack_free,
+                 (unsigned int)st.last_kbps, (unsigned int)st.ok_count,
+                 (unsigned int)st.fail_count, (unsigned int)st.pending_files,
+                 (unsigned int)st.last_connect_ms,
+                 (unsigned int)st.last_transfer_ms,
+                 (unsigned int)st.last_session_ms);
+        if (n < 0 || n >= (int)sizeof(data)) {
+            return AT_ERR_NOMEM;
+        }
         return create_json_response(true, NULL, data, response, len);
     }
 

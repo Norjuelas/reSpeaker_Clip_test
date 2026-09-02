@@ -434,8 +434,11 @@ static int connect_to_endpoint(const char *host, uint16_t port)
 	return sock;
 }
 
-int http_upload_file(const char *session_id, const char *filename,
-		     const char *path, size_t size)
+/* Variante con desglose de tiempos. http_upload_file() es un envoltorio que
+ * la llama con NULL, para no obligar a los llamantes que no miden. */
+static int upload_file_timed(const char *session_id, const char *filename,
+			     const char *path, size_t size,
+			     uint32_t *connect_ms, uint32_t *transfer_ms)
 {
 	const char *host = config_get_upload_host();
 	uint16_t port = config_get_upload_port();
@@ -472,10 +475,20 @@ int http_upload_file(const char *session_id, const char *filename,
 		goto out;
 	}
 
+	/* TCP + handshake TLS. Con un socket IPPROTO_TLS_1_2, zsock_connect()
+	 * hace las dos cosas, asi que este intervalo ES el coste de establecer
+	 * la sesion segura -- y se paga una vez por fichero, porque el socket se
+	 * abre y se cierra en cada llamada. */
+	int64_t t_conn = k_uptime_get();
+
 	sock = connect_to_endpoint(host, port);
 	if (sock < 0) {
 		ret = sock;
 		goto out;
+	}
+
+	if (connect_ms) {
+		*connect_ms = (uint32_t)(k_uptime_get() - t_conn);
 	}
 
 	ctx.file = &file;
@@ -505,7 +518,16 @@ int http_upload_file(const char *session_id, const char *filename,
 	req.recv_buf = recv_buf;
 	req.recv_buf_len = RECV_BUF_SIZE;
 
+	/* Cabeceras + cuerpo + respuesta. Aqui SI se mide velocidad de verdad:
+	 * el handshake ya quedo fuera. */
+	int64_t t_xfer = k_uptime_get();
+
 	ret = http_client_req(sock, &req, HTTP_TIMEOUT_MS, &ctx);
+
+	if (transfer_ms) {
+		*transfer_ms = (uint32_t)(k_uptime_get() - t_xfer);
+	}
+
 	if (ret < 0) {
 		LOG_ERR("http_client_req failed: %d", ret);
 		goto out;
@@ -517,8 +539,12 @@ int http_upload_file(const char *session_id, const char *filename,
 		goto out;
 	}
 
-	LOG_WRN("uploaded %s (%u bytes) -> HTTP %d", filename,
-		(unsigned int)size, ctx.status);
+	/* A WRN para que el desglose llegue al log de la tarjeta en produccion:
+	 * sin red no hay latido, y entonces esta linea es lo unico que queda. */
+	LOG_WRN("uploaded %s (%u bytes) -> HTTP %d [conn %u ms + xfer %u ms]",
+		filename, (unsigned int)size, ctx.status,
+		(unsigned int)(connect_ms ? *connect_ms : 0),
+		(unsigned int)(transfer_ms ? *transfer_ms : 0));
 	ret = 0;
 
 out:
@@ -530,6 +556,12 @@ out:
 	fs_close(&file);
 
 	return ret;
+}
+
+int http_upload_file(const char *session_id, const char *filename,
+		     const char *path, size_t size)
+{
+	return upload_file_timed(session_id, filename, path, size, NULL, NULL);
 }
 
 /* A POST whose body is already in memory. The audio path streams from the SD
@@ -732,6 +764,12 @@ static void upload_work_fn(struct k_work *work)
 	status.last_error = 0;
 	k_mutex_unlock(&status_lock);
 
+	/* La pasada entera, de la primera conexion al ultimo fichero. Es el
+	 * numero que contesta "cuanto tarda en subirse una grabacion", que hasta
+	 * ahora no se podia contestar: solo existia el tiempo por fichero, y
+	 * mezclado con el handshake. */
+	int64_t t_session = k_uptime_get();
+
 	file_count = count_session_files(session_id);
 	if (file_count == 0) {
 		LOG_ERR("%s: unknown session, or it has no files", session_id);
@@ -782,9 +820,11 @@ static void upload_work_fn(struct k_work *work)
 
 		snprintf(name, sizeof(name), "%04u.opus", (unsigned int)idx);
 
-		int64_t t0 = k_uptime_get();
+		uint32_t conn_ms = 0;
+		uint32_t xfer_ms = 0;
 
-		err = http_upload_file(session_id, name, path, (size_t)st.size);
+		err = upload_file_timed(session_id, name, path, (size_t)st.size,
+					&conn_ms, &xfer_ms);
 		if (err) {
 			LOG_ERR("%s: file %u of %u failed: %d", session_id,
 				(unsigned int)idx, (unsigned int)file_count, err);
@@ -796,18 +836,39 @@ static void upload_work_fn(struct k_work *work)
 		upload_registry_mark(session_id, idx);
 
 		{
-			int64_t ms = k_uptime_get() - t0;
-
 			k_mutex_lock(&status_lock, K_FOREVER);
 			status.files_done++;
 			status.bytes_sent += (uint32_t)st.size;
 			status.ok_count++;
-			if (ms > 0) {
+			status.last_connect_ms = conn_ms;
+			status.last_transfer_ms = xfer_ms;
+			/* Sobre xfer_ms, no sobre el total: con el handshake dentro
+			 * esto no era una velocidad. Ver http_upload.h. */
+			if (xfer_ms > 0) {
 				status.last_kbps = (uint32_t)(((uint64_t)st.size * 1000U) /
-							      ((uint64_t)ms * 1024U));
+							      ((uint64_t)xfer_ms * 1024U));
 			}
 			k_mutex_unlock(&status_lock);
 		}
+	}
+
+	{
+		uint32_t session_ms = (uint32_t)(k_uptime_get() - t_session);
+
+		k_mutex_lock(&status_lock, K_FOREVER);
+		status.last_session_ms = session_ms;
+		k_mutex_unlock(&status_lock);
+
+		/* A WRN, y con los ficheros, para poder dividir: es la linea que
+		 * contesta "un audio de dos minutos tardaba mucho" con un numero
+		 * en vez de con una impresion. */
+		LOG_WRN("sesion %s: %u de %u ficheros, %u bytes, %u ms"
+			" (ultimo fichero: conn %u ms + xfer %u ms)",
+			session_id, (unsigned int)status.files_done,
+			(unsigned int)file_count, (unsigned int)status.bytes_sent,
+			(unsigned int)session_ms,
+			(unsigned int)status.last_connect_ms,
+			(unsigned int)status.last_transfer_ms);
 	}
 
 	if (err) {
