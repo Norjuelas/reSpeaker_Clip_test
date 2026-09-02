@@ -32,6 +32,13 @@ python3 -m venv .venv
 overlay para tener TLS: `CONFIG_CLIP_UPLOAD_TLS=y` vive en `prj.conf`, y Bluetooth
 y el modo punto de acceso están apagados ahí mismo.
 
+**La ruta del repo no puede llevar metacaracteres de shell** — ni `&`, ni espacios, ni
+`(` `)` `;` en ningún directorio padre. CMake escribe las rutas sin comillas en las reglas
+de ninja y `/bin/sh` las vuelve a partir. Con el repo en `.../mic&pose/code/...` el build
+moría en `keygen.py` con código 127 y el mensaje útil quedaba escondido: `/bin/sh: 1:
+pose/code/...: not found`. Un enlace simbólico **no** lo arregla — CMake resuelve algunos
+objetivos a la ruta real y falla más tarde, en `app_version.h`. Hay que renombrar.
+
 ```sh
 export ZEPHYR_EXTRA_MODULES=$(pwd)   # variable de entorno, NO de CMake: Kconfig
                                      # descubre los módulos antes de que CMake exista
