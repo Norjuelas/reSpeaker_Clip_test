@@ -766,6 +766,57 @@ int battery_init(void)
 		return -ENODEV;
 	}
 
+	/* Limpiar el error del cargador y rearmarlo en cada arranque.
+	 *
+	 * Lo que importa aqui es ERR_CLR, no EN_SET. El driver ya escribe EN_SET
+	 * en su propio init porque la placa declara `charging-enable` en el DTS,
+	 * asi que el cargador se habilita en todos los arranques. Lo que ninguna
+	 * ruta hacia era limpiar el error: el NPM1300 engancha los errores del
+	 * cargador, y con uno enganchado la carga no arranca aunque EN_SET este
+	 * escrito. El driver trata este atributo como un interruptor -- val1 == 0
+	 * escribe EN_CLR, cualquier otro valor escribe ERR_CLR + EN_SET -- y la
+	 * magnitud se ignora, la corriente real sale de current-microamp del
+	 * DTS. CHARGE_CURRENT_MA es un centinela, no una cantidad.
+	 *
+	 * El aparato del banco llevaba dias sin cargar con VBUS detectado y
+	 * charging=false, cayendo 3891 -> 3696 mV en media hora y apagandose
+	 * solo dos veces, a lo largo de varios reinicios. Reinicios que
+	 * escribian EN_SET cada uno y no arreglaban nada. Anadir esta escritura
+	 * -- la unica diferencia funcional es ERR_CLR -- lo puso a cargar a
+	 * 237 mA de inmediato.
+	 *
+	 * Que engancho el error no esta probado, pero el log de la tarjeta
+	 * apunta al episodio termico: una linea "charge off: temp 45C>=45C
+	 * (hot)" y ninguna "charge resume". El gate termico decide por flancos
+	 * sobre `thermal_charge_disabled`, una bandera en la RAM del nRF5340 que
+	 * se borra en cada reinicio mientras el estado del PMIC no, asi que
+	 * tampoco habria vuelto a armarse por si mismo. Son dos fallos
+	 * distintos en el mismo camino.
+	 *
+	 * No se comprueba la temperatura aqui a proposito. El umbral caliente
+	 * del JEITA (thermistor-hot-millidegrees = 45C en el DTS) inhibe la
+	 * carga en hardware sin intervencion del MCU, y el gate de software
+	 * vuelve a disparar en el primer sondeo si de verdad hace falta. Dejar
+	 * el registro en un estado conocido en el arranque es mas seguro que
+	 * heredar el que quedase de la vida anterior.
+	 *
+	 * Pendiente: SENSOR_CHAN_NPM13XX_CHARGER_ERROR existe y no se lee en
+	 * ningun sitio. Exponerlo en AT+BATT? habria contestado esto en un
+	 * minuto en vez de por eliminacion. */
+	{
+		struct sensor_value chg = { .val1 = CHARGE_CURRENT_MA, .val2 = 0 };
+
+		ret = sensor_attr_set(charger_dev,
+				      SENSOR_CHAN_GAUGE_DESIRED_CHARGING_CURRENT,
+				      SENSOR_ATTR_CONFIGURATION, &chg);
+		if (ret < 0) {
+			LOG_ERR("charger re-enable failed: %d", ret);
+		} else {
+			LOG_INF("charger enabled at boot (%d mA from DTS)",
+				CHARGE_CURRENT_MA);
+		}
+	}
+
 	/* settings_load_subtree("config") in config_init() does not load this
 	 * subtree. Do this before creating the fuel gauge so state is genuinely
 	 * resumed instead of silently discarded on every reboot. */
