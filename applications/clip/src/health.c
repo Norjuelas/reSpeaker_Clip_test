@@ -145,7 +145,7 @@ int health_snapshot_json(char *buf, size_t len)
 	n = snprintf(buf, len,
 		     "{\"device\":\"%s\",\"uptime_s\":%u,\"reset\":\"%s\","
 		     "\"battery_pct\":%u,\"battery_mv\":%u,\"charging\":%s,"
-		     "\"battery_temp_c\":%d,"
+		     "\"battery_temp_c\":%d,\"battery_ma\":%d,"
 		     "\"sd_mounted\":%s,\"sd_free_mb\":%u,\"sd_total_mb\":%u,"
 		     "\"sd_used_mb\":%u,"
 		     "\"wifi\":%s,\"ip\":\"%s\",\"ssid\":\"%s\","
@@ -161,6 +161,10 @@ int health_snapshot_json(char *buf, size_t len)
 		     ctx->status.battery_percent, ctx->status.battery_mv,
 		     ctx->status.battery_charging ? "true" : "false",
 		     ctx->status.battery_temp,
+		     /* IBAT en crudo, negativo = descargando. No es el consumo
+		      * total: el nRF7002 cuelga de VBAT por delante del PMIC y su
+		      * corriente no pasa por el sensor. Ver clip.h. */
+		     ctx->status.battery_ma,
 		     have_storage && st.is_mounted ? "true" : "false",
 		     have_storage ? st.free_space_mb : 0,
 		     have_storage ? st.total_mb : 0,

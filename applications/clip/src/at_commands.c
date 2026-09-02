@@ -184,11 +184,16 @@ static int cmd_batt_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
 {
     struct clip_context *c = clip_get_context();
     int n = snprintf(response, len,
-        "{\"ok\":true,\"data\":{\"battery\":%u,\"charging\":%s,\"voltage\":%u,\"temp\":%d}}",
+        /* current_ma: IBAT en crudo, negativo = descargando. NO es el consumo
+         * total del device — la corriente del nRF7002 no pasa por el sensor
+         * del PMIC (ver clip.h). Sirve para reposo y grabacion sin radio. */
+        "{\"ok\":true,\"data\":{\"battery\":%u,\"charging\":%s,\"voltage\":%u,"
+        "\"temp\":%d,\"current_ma\":%d}}",
         c->status.battery_percent,
         c->status.battery_charging ? "true" : "false",
         c->status.battery_mv,
-        c->status.battery_temp);
+        c->status.battery_temp,
+        c->status.battery_ma);
     if (n < 0 || n >= len - 2) {
         return AT_ERR_NOMEM;
     }

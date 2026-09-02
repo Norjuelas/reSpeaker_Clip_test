@@ -650,6 +650,14 @@ static void read_and_update_locked(void)
 	/* Expose voltage + temp for AT+GSTAT / AT+BATT (refreshed every poll). */
 	ctx->status.battery_mv = (uint16_t)(voltage * 1000.0f);
 	ctx->status.battery_temp = (int8_t)temp;
+	/* Se leia cada 60 s y se tiraba: `current` moria al final de la funcion.
+	 * Sin corriente no hay forma practica de saber cuanto dura la bateria en
+	 * reposo — a 170 uA sobre 170 mAh son ~1000 h, y eso no se mide
+	 * descargando, se calcula.
+	 *
+	 * Es IBAT en crudo, sin la compensacion de WiFi: se publica lo que mide
+	 * el sensor, no una estimacion. Ojo con lo que NO incluye (ver clip.h). */
+	ctx->status.battery_ma = (int16_t)(current * 1000.0f);
 
 	/* Update display with current status */
 	struct display_status ds = {

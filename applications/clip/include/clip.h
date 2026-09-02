@@ -89,6 +89,16 @@ struct clip_context {
         bool battery_charging;
         int8_t battery_temp;        /* Battery temperature (°C, NTC) */
         uint16_t battery_mv;        /* Battery voltage (mV) */
+        /* Battery current (mA), NPM1300 IBAT sense. Sensor convention:
+         * negative = discharging, positive = charging.
+         *
+         * NOT the total device draw. The nRF7002 taps VBAT upstream of the
+         * PMIC, so the radio's current never crosses the IBAT sense resistor
+         * and does not appear here. Accurate for idle and for recording with
+         * the radio off; blind to WiFi. For absolute figures with the radio
+         * on, measure the 3V3 rail externally. See battery.c
+         * wifi_load_estimate_a(). */
+        int16_t battery_ma;
         uint32_t recording_time;
         uint32_t free_space;
         uint16_t session_count;
