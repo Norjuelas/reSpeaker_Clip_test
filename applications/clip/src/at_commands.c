@@ -203,13 +203,22 @@ static int cmd_batt_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
          * justo el numero que interesa. NO es el consumo total del device — la
          * corriente del nRF7002 no pasa por el sensor del PMIC (ver clip.h).
          * Sirve para reposo y grabacion sin radio. */
+        /* vbus/chg_status/chg_error: registros crudos del PMIC. Con esto un
+         * aparato que "no carga" se diagnostica por cable: vbus=false es un
+         * problema de deteccion, chg_error!=0 es un error enganchado que
+         * bloquea la carga, y vbus=true con error 0 y status 0 apunta al
+         * gate termico. Ver clip.h. */
         "{\"ok\":true,\"data\":{\"battery\":%u,\"charging\":%s,\"voltage\":%u,"
-        "\"temp\":%d,\"current_ua\":%d}}",
+        "\"temp\":%d,\"current_ua\":%d,\"vbus\":%s,\"chg_status\":%u,"
+        "\"chg_error\":%u}}",
         c->status.battery_percent,
         c->status.battery_charging ? "true" : "false",
         c->status.battery_mv,
         c->status.battery_temp,
-        c->status.battery_ua);
+        c->status.battery_ua,
+        c->status.vbus_present ? "true" : "false",
+        (unsigned int)c->status.chg_status,
+        (unsigned int)c->status.chg_error);
     if (n < 0 || n >= len - 2) {
         return AT_ERR_NOMEM;
     }

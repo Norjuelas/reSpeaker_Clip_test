@@ -266,7 +266,8 @@ void battery_save_fg_state(void)
 	k_mutex_unlock(&battery_mutex);
 }
 
-static int read_sensors(float *voltage, float *current, float *temp, int32_t *chg_status)
+static int read_sensors(float *voltage, float *current, float *temp, int32_t *chg_status,
+			int32_t *chg_error)
 {
 	struct sensor_value val;
 	int ret;
@@ -288,6 +289,13 @@ static int read_sensors(float *voltage, float *current, float *temp, int32_t *ch
 
 	sensor_channel_get(charger_dev, SENSOR_CHAN_NPM13XX_CHARGER_STATUS, &val);
 	*chg_status = val.val1;
+
+	/* El registro de error enganchado. No se leia en ningun sitio, y es el
+	 * que decide si la carga puede arrancar: distinto de cero la bloquea
+	 * aunque EN_SET este escrito. Un aparato "que no carga" se explicaba
+	 * solo con este numero. */
+	sensor_channel_get(charger_dev, SENSOR_CHAN_NPM13XX_CHARGER_ERROR, &val);
+	*chg_error = val.val1;
 
 	return 0;
 }
@@ -364,15 +372,27 @@ static void read_and_update_locked(void)
 	bool charger_connected;
 	bool vbus_connected;
 	bool is_trickle, is_cc, is_cv, charger_complete;
+	int32_t chg_error = 0;
 
 	if (!device_is_ready(charger_dev)) {
 		return;
 	}
 
 	/* Read sensors */
-	ret = read_sensors(&voltage, &current, &temp, &chg_status);
+	ret = read_sensors(&voltage, &current, &temp, &chg_status, &chg_error);
 	if (ret < 0) {
 		return;
+	}
+
+	/* A WRN para que sobreviva al log de la tarjeta en una imagen de
+	 * produccion. Se registra ANTES de que el rearme de mas abajo escriba
+	 * ERR_CLR: si no, se limpiaria el error y no quedaria constancia de que
+	 * hubo uno -- que es justo lo que hizo falta para diagnosticar por que
+	 * un aparato no cargaba. */
+	if (chg_error != 0) {
+		LOG_WRN("cargador con error enganchado: 0x%02x (status 0x%02x, "
+			"temp %dC) -- se limpia y se rearma",
+			(unsigned int)chg_error, (unsigned int)chg_status, (int)temp);
 	}
 
 	/* Get VBUS status */
@@ -388,25 +408,54 @@ static void read_and_update_locked(void)
 	 * toggle the charger enable while unplugged. The HW threshold remains
 	 * as a safety net if this poll is late. */
 	if (vbus_connected) {
-		struct sensor_value cur = {0};
-		if (temp >= CHARGE_STOP_TEMP_C && !thermal_charge_disabled) {
-			cur.val1 = 0;  /* GAUGE_DESIRED_CHARGING_CURRENT=0 -> CHGR_EN_CLR */
-			if (sensor_attr_set(charger_dev,
-					    SENSOR_CHAN_GAUGE_DESIRED_CHARGING_CURRENT,
-					    SENSOR_ATTR_CONFIGURATION, &cur) == 0) {
-				thermal_charge_disabled = true;
+		/* La decision se toma sin mirar lo que se escribio antes: solo la
+		 * temperatura y la banda de histeresis. Dentro de la banda
+		 * (40-45C) se conserva la ultima decision, que es lo que la
+		 * histeresis significa. */
+		bool was_disabled = thermal_charge_disabled;
+
+		if (temp >= CHARGE_STOP_TEMP_C) {
+			thermal_charge_disabled = true;
+		} else if (temp < CHARGE_RESUME_TEMP_C) {
+			thermal_charge_disabled = false;
+		}
+
+		/* Y se REAFIRMA en cada sondeo, no solo en los flancos.
+		 *
+		 * Antes esto solo escribia al cruzar un umbral, comparando
+		 * contra `thermal_charge_disabled` -- una bandera en la RAM del
+		 * nRF5340. El NPM1300 es otro chip alimentado desde VBAT al que
+		 * un reset del nRF5340 no le llega, asi que su registro sobrevive
+		 * al reinicio y la bandera no. En cuanto los dos discrepaban, la
+		 * condicion de flanco no volvia a cumplirse y nadie corregia el
+		 * registro: quedaba mal para siempre.
+		 *
+		 * Escribiendo el estado deseado cada 60 s son dos escrituras I2C
+		 * y la discrepancia se cura sola en un minuto, venga de un
+		 * reinicio, de un error enganchado o de lo que sea. Idempotente
+		 * a proposito: el valor distinto de cero hace ERR_CLR + EN_SET,
+		 * asi que tambien limpia errores que aparezcan en marcha, no solo
+		 * en el arranque.
+		 *
+		 * El error ya se ha registrado a WRN mas arriba, antes de este
+		 * ERR_CLR, para que limpiarlo no borre la prueba de que existio. */
+		struct sensor_value cur = {
+			.val1 = thermal_charge_disabled ? 0 : CHARGE_CURRENT_MA,
+			.val2 = 0,
+		};
+
+		if (sensor_attr_set(charger_dev,
+				    SENSOR_CHAN_GAUGE_DESIRED_CHARGING_CURRENT,
+				    SENSOR_ATTR_CONFIGURATION, &cur) < 0) {
+			LOG_ERR("charger re-assert failed (temp %dC, %s)", (int)temp,
+				thermal_charge_disabled ? "off" : "on");
+		} else if (was_disabled != thermal_charge_disabled) {
+			/* Solo se registra el cambio de decision. Reafirmar el
+			 * mismo estado cada minuto no merece una linea de log. */
+			if (thermal_charge_disabled) {
 				LOG_WRN("charge off: temp %dC>=%dC (hot)",
 					(int)temp, (int)CHARGE_STOP_TEMP_C);
 			} else {
-				LOG_ERR("Charge disable failed (temp %dC)", (int)temp);
-			}
-		} else if (temp < CHARGE_RESUME_TEMP_C && thermal_charge_disabled) {
-			/* non-zero -> ERR_CLR + EN_SET; chip uses DTS current (220mA) */
-			cur.val1 = CHARGE_CURRENT_MA;
-			if (sensor_attr_set(charger_dev,
-					    SENSOR_CHAN_GAUGE_DESIRED_CHARGING_CURRENT,
-					    SENSOR_ATTR_CONFIGURATION, &cur) == 0) {
-				thermal_charge_disabled = false;
 				LOG_INF("charge resume: temp %dC<%dC",
 					(int)temp, (int)CHARGE_RESUME_TEMP_C);
 			}
@@ -664,6 +713,12 @@ static void read_and_update_locked(void)
 	 * el sensor, no una estimacion. Ojo con lo que NO incluye (ver clip.h). */
 	ctx->status.battery_ua = (int32_t)(current * 1000000.0f);
 
+	/* Registros crudos del cargador, para poder diagnosticar "no carga" por
+	 * cable en vez de por eliminacion. Ver clip.h. */
+	ctx->status.chg_status = (uint8_t)chg_status;
+	ctx->status.chg_error = (uint8_t)chg_error;
+	ctx->status.vbus_present = vbus_connected;
+
 	/* Update display with current status */
 	struct display_status ds = {
 		.battery_percent = last_percent,
@@ -756,6 +811,7 @@ int battery_init(void)
 	float max_charge_current;
 	float term_charge_current;
 	int32_t chg_status;
+	int32_t init_chg_error = 0;
 	struct sensor_value value;
 
 	pmic_dev = DEVICE_DT_GET(DT_NODELABEL(npm1300));
@@ -800,9 +856,10 @@ int battery_init(void)
 	 * el registro en un estado conocido en el arranque es mas seguro que
 	 * heredar el que quedase de la vida anterior.
 	 *
-	 * Pendiente: SENSOR_CHAN_NPM13XX_CHARGER_ERROR existe y no se lee en
-	 * ningun sitio. Exponerlo en AT+BATT? habria contestado esto en un
-	 * minuto en vez de por eliminacion. */
+	 * Reparto con el sondeo de 60 s: aquel reafirma el estado en cada vuelta
+	 * y cura cualquier discrepancia, pero la primera vuelta no llega hasta
+	 * un minuto despues del arranque. Esta escritura cubre ese minuto, que
+	 * es cuando alguien enchufa el cable y mira si carga. */
 	{
 		struct sensor_value chg = { .val1 = CHARGE_CURRENT_MA, .val2 = 0 };
 
@@ -825,15 +882,16 @@ int battery_init(void)
 	LOG_INF("Battery: 240mAh, fuel gauge %s", nrf_fuel_gauge_version);
 
 	/* Read initial sensor values */
-	ret = read_sensors(&init_params.v0, &init_params.i0, &init_params.t0, &chg_status);
+	ret = read_sensors(&init_params.v0, &init_params.i0, &init_params.t0, &chg_status,
+			   &init_chg_error);
 	if (ret < 0) {
 		LOG_WRN("fg init: sensor read %d", ret);
 		/* Continue with basic battery monitoring */
 	} else {
 		/* Print initial readings (sensor convention: I negative = discharging) */
-		LOG_INF("init: V=%.3f I=%.3f T=%.1f chg=0x%02x",
+		LOG_INF("init: V=%.3f I=%.3f T=%.1f chg=0x%02x err=0x%02x",
 			init_params.v0, init_params.i0, init_params.t0,
-			(unsigned int)chg_status);
+			(unsigned int)chg_status, (unsigned int)init_chg_error);
 
 		/* Zephyr sensor API: negative = discharging; nrf_fuel_gauge expects
 		 * negative = charging -- negate i0 so the fuel gauge starts correct. */

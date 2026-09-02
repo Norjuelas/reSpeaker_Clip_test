@@ -109,6 +109,24 @@ struct clip_context {
          * question this field cannot answer. If it reads 0 at idle, the limit
          * is the sensor and the measurement has to move to a PPK. */
         int32_t battery_ua;
+        /* Registros crudos del cargador del NPM1300, tal cual, sin decodificar.
+         *
+         * chg_status: CHGR.STATUS. Los bits que usa battery.c son
+         *   BIT(1) COMPLETE, BIT(2) TRICKLE, BIT(3) CC, BIT(4) CV.
+         * chg_error:  CHGR.ERR enganchado. Distinto de cero bloquea la carga
+         *   aunque EN_SET este escrito, y solo lo limpia ERR_CLR.
+         *
+         * Se publican en crudo a proposito: la decodificacion completa esta en
+         * el datasheet del PMIC, no en este arbol, e inventar nombres para los
+         * bits seria peor que dar el numero. Con esto un aparato que "no carga"
+         * se diagnostica por cable en un minuto -- que es lo que costo un rato
+         * largo por eliminacion cuando no se publicaba nada de esto.
+         *
+         * vbus_present: presencia de VBUS segun el PMIC, no segun el USB del
+         * nRF5340. Son cosas distintas y la que decide si se carga es esta. */
+        uint8_t chg_status;
+        uint8_t chg_error;
+        bool vbus_present;
         uint32_t recording_time;
         uint32_t free_space;
         uint16_t session_count;
