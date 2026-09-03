@@ -11,6 +11,7 @@
 #include <zephyr/drivers/uart.h>
 
 #include "usb_cdc.h"
+#include "battery.h"
 #include "storage.h"
 #include "audio.h"
 #include "at_server.h"
@@ -68,14 +69,39 @@ static struct k_work_delayable usb_timeout_work;
  * necesita. */
 static void usb_timeout_handler(struct k_work *work)
 {
-	if (usb_active && !usb_vbus_present) {
-		/* A WRN: a partir de aqui el aparato deja de responder por cable y
-		 * no hay forma de saber por que si esta linea no se escribe. */
-		LOG_WRN("USB auto-disable: %d min sin VBUS, se apaga el USB",
-			USB_NO_VBUS_TIMEOUT_MS / 60000);
-		usb_cdc_disable();
-		ble_notify_event("usb", "off");
+	if (!usb_active || usb_vbus_present) {
+		return;
 	}
+
+	/* Segunda opinion al PMIC antes de quedarse sordo.
+	 *
+	 * `usb_vbus_present` viene de los mensajes del controlador USB, y esos
+	 * mensajes no siempre llegan: medido en el banco, un arranque entero sin
+	 * un solo USBD_MSG_VBUS_READY con el cable puesto todo el tiempo. Como
+	 * usb_cdc_enable() arma este temporizador cuando la bandera esta a false
+	 * -- y al arrancar lo esta, es su valor inicial -- nadie lo cancelaba y a
+	 * los 10 minutos EXACTOS el aparato se quitaba del bus con el cable
+	 * puesto y siguiendo vivo. Parecia aleatorio solo porque cada reflasheo
+	 * reinicia el aparato y con el la cuenta atras.
+	 *
+	 * battery_vbus_present() lee VBUS del NPM1300 por I2C en el momento. Es
+	 * la misma fuente que clip_event.c ya usa en vez del stack USB para
+	 * decidir si se puede grabar, y por el mismo motivo: el PMIC interrumpe
+	 * en cada conexion real y no se pierde eventos. Si el PMIC dice que hay
+	 * cable, no se apaga nada. */
+	if (battery_vbus_present()) {
+		LOG_WRN("USB auto-disable cancelado: el controlador no vio VBUS pero "
+			"el PMIC dice que si hay cable");
+		usb_vbus_present = true;   /* alinear la bandera con la realidad */
+		return;
+	}
+
+	/* A WRN: a partir de aqui el aparato deja de responder por cable y
+	 * no hay forma de saber por que si esta linea no se escribe. */
+	LOG_WRN("USB auto-disable: %d min sin VBUS, se apaga el USB",
+		USB_NO_VBUS_TIMEOUT_MS / 60000);
+	usb_cdc_disable();
+	ble_notify_event("usb", "off");
 }
 
 /* En work y no en el callback de mensajes USB: usbd_enable() desde el hilo
@@ -302,8 +328,13 @@ int usb_cdc_enable(void)
 
 	ble_notify_event("usb", "on");
 
-	/* Start auto-disable timeout if no VBUS */
-	if (!usb_vbus_present) {
+	/* Solo se arma si NADIE ve VBUS: ni el controlador USB ni el PMIC.
+	 *
+	 * Antes se armaba mirando unicamente `usb_vbus_present`, que al arrancar
+	 * vale false por ser su valor inicial, asi que la cuenta atras de 10
+	 * minutos empezaba en TODOS los arranques y solo la cancelaba un mensaje
+	 * VBUS_READY que a veces no llega. El PMIC si lo sabe: se le pregunta. */
+	if (!usb_vbus_present && !battery_vbus_present()) {
 		k_work_schedule(&usb_timeout_work, K_MSEC(USB_NO_VBUS_TIMEOUT_MS));
 	}
 
