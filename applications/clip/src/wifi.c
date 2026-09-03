@@ -686,6 +686,118 @@ int wifi_off(void)
  * the store loses the link at the same instant. Retrying on a fixed schedule
  * makes them stampede the AP together, over and over. Spreading each retry over
  * a random window desynchronises the fleet. */
+#if defined(CONFIG_CLIP_WIFI_ON_DEMAND)
+/* Prestamo de la radio con cuenta de referencias.
+ *
+ * El problema que resuelve: wifi_sta_off() tenia un unico llamante en todo el
+ * arbol (AT+STA=off), asi que una vez asociada la radio no se apagaba jamas.
+ * Un aparato que graba de vez en cuando estaba asociado 24 h al dia sobre una
+ * celda de 170 mAh, y eso es casi con seguridad el mayor consumidor del
+ * aparato.
+ *
+ * Ahora la radio la sube quien la necesita y la suelta al terminar. Se protege
+ * con un mutex porque los prestatarios viven en hilos distintos: la grabacion
+ * la pide desde el despachador de eventos y la subida desde su propia cola. */
+static K_MUTEX_DEFINE(wifi_lease_mutex);
+static int wifi_leases;
+static void wifi_lease_expire_handler(struct k_work *work);
+static K_WORK_DELAYABLE_DEFINE(wifi_lease_expire_work, wifi_lease_expire_handler);
+
+static void wifi_lease_expire_handler(struct k_work *work)
+{
+	ARG_UNUSED(work);
+
+	k_mutex_lock(&wifi_lease_mutex, K_FOREVER);
+	/* Se recomprueba bajo el mutex: alguien puede haber pedido la radio
+	 * durante el margen, y en ese caso apagarla seria justo lo contrario de
+	 * lo que se pretende. */
+	if (wifi_leases > 0) {
+		k_mutex_unlock(&wifi_lease_mutex);
+		LOG_DBG("margen de radio vencido pero hay %d prestamos: se queda arriba",
+			wifi_leases);
+		return;
+	}
+	k_mutex_unlock(&wifi_lease_mutex);
+
+	LOG_WRN("radio: sin prestamos, se apaga");
+	wifi_sta_off();
+}
+
+int wifi_acquire(const char *who)
+{
+	int n;
+
+	if (!config_has_sta_credentials()) {
+		return -ENOENT;
+	}
+
+	k_mutex_lock(&wifi_lease_mutex, K_FOREVER);
+	n = ++wifi_leases;
+	k_mutex_unlock(&wifi_lease_mutex);
+
+	/* Se cancela SIEMPRE, no solo en el primer prestamo: puede haber un
+	 * apagado en vuelo desde el ultimo release y hay que abortarlo. */
+	k_work_cancel_delayable(&wifi_lease_expire_work);
+
+	if (n == 1) {
+		LOG_WRN("radio: prestamo de '%s', se enciende", who ? who : "?");
+		/* Asincrono a proposito: wifi_sta_on() bloquea hasta 35 s
+		 * esperando asociacion y DHCP, y aqui llama el despachador de
+		 * eventos, que no puede pararse tanto sin perder pulsaciones. */
+		int err = wifi_sta_connect_async_delayed(0);
+
+		if (err && err != -EALREADY) {
+			LOG_WRN("radio: no se pudo programar la conexion: %d", err);
+		}
+	} else {
+		LOG_DBG("radio: prestamo de '%s' (%d vivos)", who ? who : "?", n);
+	}
+
+	return 0;
+}
+
+void wifi_release(const char *who)
+{
+	int n;
+
+	k_mutex_lock(&wifi_lease_mutex, K_FOREVER);
+	if (wifi_leases == 0) {
+		k_mutex_unlock(&wifi_lease_mutex);
+		/* Un release sin su acquire es un fallo de programacion: dejaria la
+		 * cuenta en negativo y la radio no se apagaria nunca mas. Se avisa
+		 * en vez de restar. */
+		LOG_ERR("radio: release de '%s' sin prestamo — se ignora",
+			who ? who : "?");
+		return;
+	}
+	n = --wifi_leases;
+	k_mutex_unlock(&wifi_lease_mutex);
+
+	if (n == 0) {
+		LOG_WRN("radio: '%s' suelta el ultimo prestamo, se apaga en %ds",
+			who ? who : "?", CONFIG_CLIP_WIFI_IDLE_GRACE_S);
+		k_work_schedule(&wifi_lease_expire_work,
+				K_SECONDS(CONFIG_CLIP_WIFI_IDLE_GRACE_S));
+	} else {
+		LOG_DBG("radio: '%s' suelta (%d vivos)", who ? who : "?", n);
+	}
+}
+
+int wifi_lease_count(void)
+{
+	int n;
+
+	k_mutex_lock(&wifi_lease_mutex, K_FOREVER);
+	n = wifi_leases;
+	k_mutex_unlock(&wifi_lease_mutex);
+	return n;
+}
+#else  /* !CONFIG_CLIP_WIFI_ON_DEMAND */
+int wifi_acquire(const char *who) { ARG_UNUSED(who); return 0; }
+void wifi_release(const char *who) { ARG_UNUSED(who); }
+int wifi_lease_count(void) { return 0; }
+#endif /* CONFIG_CLIP_WIFI_ON_DEMAND */
+
 #define STA_RECONNECT_MIN_MS   5000
 #define STA_RECONNECT_MAX_MS   120000
 

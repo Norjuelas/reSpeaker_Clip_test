@@ -141,6 +141,37 @@ int wifi_sta_connect_async_delayed(uint32_t delay_ms);
 int wifi_sta_off(void);
 
 /**
+ * @brief Pedir prestada la radio, subiendola si hace falta.
+ *
+ * Cuenta de referencias: el primer prestamo asocia, los siguientes solo suman.
+ * Cada acquire tiene que emparejarse con su wifi_release(), o la radio se queda
+ * arriba para siempre — que es exactamente el estado del que venimos.
+ *
+ * No bloquea: la asociacion corre en la cola de trabajo de la STA. Hay que
+ * esperar a wifi_sta_is_connected() antes de mandar nada.
+ *
+ * @param who  etiqueta corta para el log ("rec", "upload"). No se copia:
+ *             tiene que ser un literal o algo que viva mas que el prestamo.
+ * @retval 0 en prestamo concedido (la radio puede tardar en estar lista)
+ * @retval -ENOENT sin credenciales guardadas
+ */
+int wifi_acquire(const char *who);
+
+/**
+ * @brief Devolver la radio. Al llegar la cuenta a cero se apaga tras
+ *        CLIP_WIFI_IDLE_GRACE_S.
+ *
+ * El margen existe para no derribar y reconstruir el enlace si otro prestatario
+ * lo pide justo despues: asociar cuesta ~19 s mas DHCP.
+ */
+void wifi_release(const char *who);
+
+/**
+ * @brief Prestamos vivos ahora mismo. Para AT+STA? y depuracion.
+ */
+int wifi_lease_count(void);
+
+/**
  * @brief Whether we are associated *and* hold a DHCP lease
  *
  * @return true if the station link is usable

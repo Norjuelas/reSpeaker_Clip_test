@@ -919,13 +919,43 @@ static void periodic_work_fn(struct k_work *work)
 {
 	struct storage_session_info *sessions;
 	int found;
+	bool leased = false;
 
 	ARG_UNUSED(work);
 
-	if (!wifi_sta_is_connected() ||
-	    config_get_upload_host()[0] == '\0' || config_get_upload_port() == 0) {
+	/* Sin endpoint no hay nada que hacer, y no se gasta radio en averiguarlo. */
+	if (config_get_upload_host()[0] == '\0' || config_get_upload_port() == 0) {
 		goto reschedule;
 	}
+
+	/* La ventana periodica de radio.
+	 *
+	 * Se pide prestada SIEMPRE, incluso si ya hay enlace porque se esta
+	 * grabando: la cuenta de referencias es lo que impide que la grabacion
+	 * suelte la radio a mitad de una subida. Con CLIP_WIFI_ON_DEMAND apagado
+	 * wifi_acquire()/wifi_release() no hacen nada y esto se comporta como
+	 * antes.
+	 *
+	 * Este es ademas el "un despertar, los dos trabajos": la ventana manda el
+	 * latido Y drena el atraso, para no pagar dos asociaciones. */
+	leased = (wifi_acquire("upload") == 0);
+
+	/* Asociar cuesta ~19 s mas DHCP, medido. 45 s deja margen sin dejar el
+	 * hilo de subida colgado si la red no aparece. */
+	for (int i = 0; i < 45 && !wifi_sta_is_connected(); i++) {
+		k_sleep(K_SECONDS(1));
+	}
+
+	if (!wifi_sta_is_connected()) {
+		LOG_WRN("ventana de subida: sin enlace tras esperar, se deja para la siguiente");
+		goto release;
+	}
+
+	/* El latido sale SIEMPRE que se abre la ventana, haya o no ficheros que
+	 * subir. Si solo saliera cuando hay atraso, un aparato en reposo estaria
+	 * invisible en el panel — que es justo cuando interesa saber que sigue
+	 * vivo y con cuanta bateria. */
+	post_health_inline();
 
 	/* Nunca por encima de una subida en curso ni de una grabacion: el hilo es
 	 * uno solo y la tarjeta esta ocupada. */
@@ -988,13 +1018,10 @@ static void periodic_work_fn(struct k_work *work)
 
 			if (!any) {
 				any = true;
-				/* Latido EN ESTE HILO antes de empezar: el panel ve
-				 * upload_state=running en vivo. En linea y no via
-				 * health_beat_now() a proposito — el latido asincrono
-				 * correria su handshake TLS a la vez que el de la
-				 * subida y los dos pelearian por el monton de mbedTLS. */
+				/* El latido de apertura ya salio al abrir la ventana;
+				 * aqui solo se publica el estado para que el panel vea
+				 * upload_state=running en el latido de cierre. */
 				status_set_state(HTTP_UPLOAD_RUNNING, 0);
-				post_health_inline();
 			}
 
 			LOG_WRN("Subida periodica: %s tiene ficheros sin enviar",
@@ -1016,6 +1043,14 @@ static void periodic_work_fn(struct k_work *work)
 	}
 
 	k_free(sessions);
+
+release:
+	/* Se suelta aqui pase lo que pase. Un release que se salte una rama deja
+	 * la cuenta arriba para siempre y la radio no vuelve a apagarse — el
+	 * fallo exacto del que venimos. */
+	if (leased) {
+		wifi_release("upload");
+	}
 
 reschedule:
 	k_work_schedule_for_queue(&upload_wq, &periodic_work,

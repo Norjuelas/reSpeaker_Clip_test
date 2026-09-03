@@ -456,13 +456,49 @@ config CLIP_DEBUG_STATS
 	help
 	  Print thread stack usage and heap stats every 10 seconds.
 
+config CLIP_WIFI_ON_DEMAND
+	bool "Radio solo cuando hace falta (grabando o en la ventana periodica)"
+	depends on NRF70_STA_MODE
+	default y
+	help
+	  Sin esto la radio se asocia al arrancar y NO se apaga nunca:
+	  wifi_sta_off() tiene un unico llamante en todo el arbol, el manejador
+	  de AT+STA=off. O sea que un aparato que graba de vez en cuando esta
+	  asociado 24 horas al dia sobre una celda de 170 mAh.
+
+	  Con esto, la radio se pide por prestamo con cuenta de referencias:
+	  la sube quien la necesita y la suelta al terminar, y cuando la cuenta
+	  llega a cero se apaga tras CLIP_WIFI_IDLE_GRACE_S. Los prestatarios
+	  son la grabacion (de START a STOP) y la pasada periodica de subida.
+
+	  Consecuencia que hay que tener presente: en reposo el aparato esta
+	  invisible entre ventanas. La ventana periodica es lo que conserva la
+	  visibilidad de flota y el drenaje del backlog; no se puede poner a 0
+	  y esperar que las grabaciones lleguen solas.
+
+config CLIP_WIFI_IDLE_GRACE_S
+	int "Segundos que la radio sigue arriba tras soltarse el ultimo prestamo"
+	depends on CLIP_WIFI_ON_DEMAND
+	default 45
+	range 0 600
+	help
+	  Margen para que una subida en curso termine y para no derribar y
+	  reconstruir el enlace si otro prestatario lo pide justo despues.
+	  Asociar cuesta ~19 s mas DHCP, asi que apagar demasiado pronto sale
+	  caro.
+
 config CLIP_STA_AUTOCONNECT
 	bool "Join the stored WiFi network at boot"
 	depends on NRF70_STA_MODE
+	default n if CLIP_WIFI_ON_DEMAND
 	default y
 	help
 	  When station credentials are stored (AT+STACFG), try to join that
 	  network during startup instead of waiting for AT+STA=on.
+
+	  Con CLIP_WIFI_ON_DEMAND esto pasa a 'n': la radio la levanta quien la
+	  necesita, no el arranque. Encender las dos cosas deja la radio arriba
+	  desde el arranque y anula el ahorro.
 
 	  Keeps WiFi reachable when BLE is unavailable — a broken bond would
 	  otherwise make the network unreachable, since AT+STA=on only arrives

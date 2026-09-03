@@ -646,6 +646,16 @@ static enum clip_event_result execute_transition(enum clip_event event,
             display_post_error("Rec Fail");
             return CLIP_EVENT_ERROR;
         }
+        /* La radio se pide AQUI y se suelta en STOP. Grabando es cuando el
+         * aparato tiene algo que decir y algo que mandar, asi que es la
+         * ventana natural para tener enlace: el barrido de subida drena el
+         * atraso mientras se graba, y el latido sale por el mismo enlace.
+         *
+         * No bloquea: wifi_acquire() programa la asociacion en la cola de la
+         * STA. Grabar NO espera a la red — el audio a la tarjeta vale mas que
+         * el enlace, y una jornada sin red sigue siendo una jornada grabada. */
+        wifi_acquire("rec");
+
         display_post_event(UI_EVENT_REC_START);
         display_set_recording(true, c->config.mode == MODE_ENHANCED);
         ble_notify_state_change("RECORDING", audio_get_session_id(), -1);
@@ -671,6 +681,11 @@ static enum clip_event_result execute_transition(enum clip_event event,
             LOG_ERR("audio_stop_recording failed: %d", err);
             return CLIP_EVENT_ERROR;
         }
+        /* Se suelta el prestamo pedido en START. La radio no cae aqui: el
+         * margen de CLIP_WIFI_IDLE_GRACE_S da tiempo a que termine una subida
+         * en curso y evita derribar el enlace si se vuelve a grabar enseguida. */
+        wifi_release("rec");
+
         haptic_play_pattern(HAPTIC_DOUBLE);  /* stop = 2 buzzes (button or AT) */
         display_post_event(UI_EVENT_REC_STOP);
         display_set_recording(false, false);
