@@ -69,7 +69,10 @@ static struct k_work_delayable usb_timeout_work;
 static void usb_timeout_handler(struct k_work *work)
 {
 	if (usb_active && !usb_vbus_present) {
-		LOG_INF("USB auto-disable: no VBUS for 10min");
+		/* A WRN: a partir de aqui el aparato deja de responder por cable y
+		 * no hay forma de saber por que si esta linea no se escribe. */
+		LOG_WRN("USB auto-disable: %d min sin VBUS, se apaga el USB",
+			USB_NO_VBUS_TIMEOUT_MS / 60000);
 		usb_cdc_disable();
 		ble_notify_event("usb", "off");
 	}
@@ -164,6 +167,14 @@ static void usb_msg_cb(struct usbd_context *const ctx,
 	clip_usb_dfu_check(msg);
 
 	if (msg->type == USBD_MSG_VBUS_READY) {
+		/* A WRN, no INF. Con CLIP_LOG_LEVEL=WRN los INF de este fichero
+		 * estan compilados FUERA, asi que las transiciones de VBUS eran
+		 * invisibles en produccion y ningun AT+LOG=info las recupera: no
+		 * estan en el binario. Y son justo las que explican que un aparato
+		 * se vuelva sordo -- un VBUS_REMOVED fantasma arma el temporizador
+		 * de 10 minutos que apaga el USB con el cable puesto. Se depuro a
+		 * ciegas mas de una vez por esto. */
+		LOG_WRN("USB: VBUS presente");
 		usb_vbus_present = true;
 		/* VBUS present: cancel the auto-disable timeout. */
 		k_work_cancel_delayable(&usb_timeout_work);
@@ -173,6 +184,14 @@ static void usb_msg_cb(struct usbd_context *const ctx,
 			k_work_schedule(&usb_reenable_work, K_MSEC(100));
 		}
 	} else if (msg->type == USBD_MSG_VBUS_REMOVED) {
+		/* A WRN por lo mismo: este evento es el que arranca la cuenta
+		 * atras para quedarse sordo, y llega tambien cuando NO se ha
+		 * tocado el cable (fantasma al encender la radio). Con la radio
+		 * bajo demanda la radio se enciende cada pocos minutos en vez de
+		 * una vez por arranque, asi que la ocasion de que aparezca el
+		 * fantasma se multiplica. Hay que poder contarlos. */
+		LOG_WRN("USB: VBUS retirado (temporizador de apagado a %d min)",
+			USB_NO_VBUS_TIMEOUT_MS / 60000);
 		usb_vbus_present = false;
 		/* Solo armar el temporizador de 10 min: ver el comentario en
 		 * usb_timeout_handler — apagar aqui convertia el fantasma del
