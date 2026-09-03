@@ -739,8 +739,21 @@ int wifi_acquire(const char *who)
 	 * apagado en vuelo desde el ultimo release y hay que abortarlo. */
 	k_work_cancel_delayable(&wifi_lease_expire_work);
 
+	/* TODOS los prestamos a WRN, con la cuenta, no solo el 0->1.
+	 *
+	 * La primera version solo registraba la transicion 0->1 y dejaba los
+	 * prestamos concurrentes en LOG_DBG, que esta compilado fuera en
+	 * produccion. Verificando en hardware eso salio caro: con la grabacion
+	 * sujetando la radio, TODAS las ventanas periodicas se volvian invisibles,
+	 * y el prestamo de la grabacion solo se pudo demostrar por la AUSENCIA de
+	 * la linea de suelta de la ventana anterior. Deducir de un hueco en el log
+	 * no es una verificacion.
+	 *
+	 * Con la cuenta en cada linea el solapamiento se lee directo, que es justo
+	 * lo que hay que poder ver: quien la tiene y cuantos van. */
 	if (n == 1) {
-		LOG_WRN("radio: prestamo de '%s', se enciende", who ? who : "?");
+		LOG_WRN("radio: '%s' pide prestamo (cuenta 0->1), se enciende",
+			who ? who : "?");
 		/* Asincrono a proposito: wifi_sta_on() bloquea hasta 35 s
 		 * esperando asociacion y DHCP, y aqui llama el despachador de
 		 * eventos, que no puede pararse tanto sin perder pulsaciones. */
@@ -750,7 +763,8 @@ int wifi_acquire(const char *who)
 			LOG_WRN("radio: no se pudo programar la conexion: %d", err);
 		}
 	} else {
-		LOG_DBG("radio: prestamo de '%s' (%d vivos)", who ? who : "?", n);
+		LOG_WRN("radio: '%s' pide prestamo (cuenta %d->%d), ya encendida",
+			who ? who : "?", n - 1, n);
 	}
 
 	return 0;
@@ -774,12 +788,13 @@ void wifi_release(const char *who)
 	k_mutex_unlock(&wifi_lease_mutex);
 
 	if (n == 0) {
-		LOG_WRN("radio: '%s' suelta el ultimo prestamo, se apaga en %ds",
+		LOG_WRN("radio: '%s' suelta (cuenta 1->0), se apaga en %ds",
 			who ? who : "?", CONFIG_CLIP_WIFI_IDLE_GRACE_S);
 		k_work_schedule(&wifi_lease_expire_work,
 				K_SECONDS(CONFIG_CLIP_WIFI_IDLE_GRACE_S));
 	} else {
-		LOG_DBG("radio: '%s' suelta (%d vivos)", who ? who : "?", n);
+		LOG_WRN("radio: '%s' suelta (cuenta %d->%d), sigue encendida",
+			who ? who : "?", n + 1, n);
 	}
 }
 
