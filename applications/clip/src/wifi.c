@@ -807,10 +807,54 @@ int wifi_lease_count(void)
 	k_mutex_unlock(&wifi_lease_mutex);
 	return n;
 }
+
+/* Prestamo de la conexion manual (AT+STA=on/off).
+ *
+ * Sin esto, AT+STA=on levantaba el enlace SIN prestamo, con la cuenta a 0. La
+ * siguiente ventana periodica pedia (0->1) y soltaba (1->0), y esa suelta
+ * programa el apagado por vencimiento: 45 s despues wifi_sta_off() tiraba el
+ * enlace que alguien acababa de pedir a mano. Con ventanas cada ~6 minutos, una
+ * conexion manual no duraba. Regresion introducida al hacer la radio bajo
+ * demanda, y de las silenciosas: el enlace simplemente desaparecia. */
+static bool manual_hold;
+
+int wifi_manual_hold(bool on)
+{
+	if (on) {
+		if (manual_hold) {
+			return 0;
+		}
+		manual_hold = true;
+		return wifi_acquire("manual");
+	}
+
+	if (!manual_hold) {
+		/* Nadie habia pedido a mano: apagar sin mas, como antes. */
+		return wifi_sta_off();
+	}
+
+	manual_hold = false;
+	wifi_release("manual");
+
+	if (wifi_lease_count() > 0) {
+		/* Otro prestatario la sigue necesitando -- una subida en curso, por
+		 * ejemplo. Se respeta la peticion de apagar (lo pidio una persona),
+		 * pero se deja constancia de que se corta algo. */
+		LOG_WRN("AT+STA=off con %d prestamo(s) vivos: se apaga de todas formas",
+			wifi_lease_count());
+	} else {
+		/* Nadie mas la quiere y el usuario pidio apagar AHORA: no se espera
+		 * el margen de gracia. */
+		k_work_cancel_delayable(&wifi_lease_expire_work);
+	}
+
+	return wifi_sta_off();
+}
 #else  /* !CONFIG_CLIP_WIFI_ON_DEMAND */
 int wifi_acquire(const char *who) { ARG_UNUSED(who); return 0; }
 void wifi_release(const char *who) { ARG_UNUSED(who); }
 int wifi_lease_count(void) { return 0; }
+int wifi_manual_hold(bool on) { return on ? 0 : wifi_sta_off(); }
 #endif /* CONFIG_CLIP_WIFI_ON_DEMAND */
 
 #define STA_RECONNECT_MIN_MS   5000

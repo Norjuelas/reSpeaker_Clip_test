@@ -2100,6 +2100,11 @@ static int cmd_sta_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
         if (strcmp(arg, "on") == 0 || strcmp(arg, "1") == 0) {
             /* Association plus DHCP can take half a minute, far too long to
              * hold the AT channel. Kick it off and report via the sta event. */
+            /* Sujeta la radio con un prestamo antes de conectar: sin el, la
+             * siguiente ventana periodica la apaga al soltar la suya y el
+             * enlace pedido a mano desaparece a los 45 s. */
+            (void)wifi_manual_hold(true);
+
             int ret = wifi_sta_connect_async();
 
             if (ret == -ENOENT) {
@@ -2124,7 +2129,8 @@ static int cmd_sta_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
                                         response, len);
 
         } else if (strcmp(arg, "off") == 0 || strcmp(arg, "0") == 0) {
-            if (wifi_sta_off()) {
+            /* Suelta el prestamo manual y apaga sin esperar el margen. */
+            if (wifi_manual_hold(false)) {
                 return create_json_response(false, "Failed to disconnect", NULL, response, len);
             }
             return create_json_response(true, NULL, "{\"state\":\"off\"}", response, len);

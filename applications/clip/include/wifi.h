@@ -172,6 +172,19 @@ void wifi_release(const char *who);
 int wifi_lease_count(void);
 
 /**
+ * @brief Sujetar o soltar la radio para una conexion pedida a mano.
+ *
+ * AT+STA=on tiene que sujetarla con un prestamo, o la siguiente ventana
+ * periodica la apaga por debajo al soltar la suya: el enlace desaparecia 45 s
+ * despues de la ventana, sin explicacion.
+ *
+ * Con on=false suelta el prestamo y apaga sin esperar el margen -- lo pidio una
+ * persona. Si quedan otros prestatarios se apaga igual, pero se avisa por el
+ * log de que se esta cortando algo.
+ */
+int wifi_manual_hold(bool on);
+
+/**
  * @brief Whether we are associated *and* hold a DHCP lease
  *
  * @return true if the station link is usable
