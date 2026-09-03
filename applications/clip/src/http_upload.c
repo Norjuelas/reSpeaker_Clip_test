@@ -962,13 +962,18 @@ static void periodic_work_fn(struct k_work *work)
 	k_mutex_lock(&status_lock, K_FOREVER);
 	if (status.state == HTTP_UPLOAD_RUNNING) {
 		k_mutex_unlock(&status_lock);
-		goto reschedule;
+		/* A `release`, NO a `reschedule`: saltarse el release con un prestamo
+		 * vivo deja la cuenta arriba para siempre y la radio no vuelve a
+		 * apagarse nunca — el fallo exacto que este mecanismo viene a
+		 * arreglar. Cualquier salida por debajo del acquire tiene que pasar
+		 * por aqui. */
+		goto release;
 	}
 	k_mutex_unlock(&status_lock);
 
 	sessions = k_malloc(sizeof(*sessions) * CONFIG_CLIP_STORAGE_MAX_SESSIONS);
 	if (!sessions) {
-		goto reschedule;
+		goto release;   /* mismo motivo: no dejar el prestamo colgado */
 	}
 
 	found = storage_list_sessions(sessions, CONFIG_CLIP_STORAGE_MAX_SESSIONS);

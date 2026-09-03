@@ -2134,16 +2134,26 @@ static int cmd_sta_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
                                         NULL, response, len);
         }
     } else {
-        char data[128];
+        char data[192];
 
+        /* `leases` es la cuenta de prestamos de la radio (CLIP_WIFI_ON_DEMAND).
+         * Se publica porque sin ella el estado del mecanismo solo se puede
+         * inferir de si hay enlace o no, y las dos cosas se confunden: radio
+         * arriba sin prestamos es el margen de gracia corriendo, y radio abajo
+         * con prestamos es una asociacion que no arranca. Un valor que no baja
+         * a 0 en reposo es la fuga de prestamo, que deja la radio encendida
+         * para siempre. */
         if (wifi_sta_is_connected()) {
-            snprintf(data, sizeof(data), "{\"state\":\"connected\",\"ssid\":\"%s\",\"ip\":\"%s\"}",
-                     config_get_sta_ssid(), wifi_sta_get_ip());
+            snprintf(data, sizeof(data),
+                     "{\"state\":\"connected\",\"ssid\":\"%s\",\"ip\":\"%s\","
+                     "\"leases\":%d}",
+                     config_get_sta_ssid(), wifi_sta_get_ip(), wifi_lease_count());
         } else {
             snprintf(data, sizeof(data),
-                     "{\"state\":\"off\",\"ssid\":\"%s\",\"reg\":\"%s\",\"last_error\":\"%s\"}",
+                     "{\"state\":\"off\",\"ssid\":\"%s\",\"reg\":\"%s\","
+                     "\"last_error\":\"%s\",\"leases\":%d}",
                      config_get_sta_ssid(), config_get_wifi_reg_domain(),
-                     wifi_sta_get_fail_reason());
+                     wifi_sta_get_fail_reason(), wifi_lease_count());
         }
         return create_json_response(true, NULL, data, response, len);
     }
