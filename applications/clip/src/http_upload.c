@@ -33,6 +33,7 @@
 #include "config.h"
 #include "storage.h"
 #include "wifi.h"
+#include "audio.h"
 #include "upload_registry.h"
 #include "health.h"
 
@@ -803,12 +804,37 @@ static void upload_work_fn(struct k_work *work)
 		}
 
 		if (st.size == 0) {
-			/* Un .opus de 0 bytes es el cadaver de una grabacion que
-			 * murio al nacer (bateria agotada al pulsar grabar). No hay
-			 * nada que subir, el receptor lo rechaza (Content-Length
-			 * fuera de rango), y sin registrarlo el device lo reintentaba
-			 * CADA PASADA para siempre: la radio despertando cada 5
-			 * minutos por un fichero vacio. Se registra como resuelto. */
+			/* Un fichero de 0 bytes puede ser dos cosas MUY distintas, y
+			 * confundirlas cuesta audio.
+			 *
+			 * (a) El cadaver de una grabacion que murio al nacer. No hay
+			 *     nada que subir y hay que darlo por resuelto, o el device
+			 *     lo reintenta cada pasada para siempre.
+			 * (b) El trozo que se esta escribiendo AHORA MISMO. En FAT el
+			 *     tamano no se actualiza hasta que el fichero se cierra,
+			 *     asi que un trozo en curso tambien mide 0.
+			 *
+			 * Tratar (b) como (a) es perdida de audio silenciosa e
+			 * irreversible: se marca como subido sin enviarlo y no se
+			 * reintenta jamas. Ocurrio de verdad, y por eso esta este
+			 * guardia: en una prueba con barrido cada 4 minutos sobre una
+			 * grabacion de ~12, los barridos de los minutos 2 y 10 pillaron
+			 * los trozos 0001 y 0002 a medio escribir y los enterraron.
+			 * 2,3 MB de audio real marcados como enviados. En el historico
+			 * hay al menos otra sesion con 1,4 MB perdidos igual.
+			 *
+			 * La distincion: si esta sesion es la que se esta grabando, un
+			 * 0 no significa "vacio", significa "todavia no". Se salta SIN
+			 * marcar, y el barrido de fin de grabacion la recoge cuando de
+			 * verdad este cerrada. */
+			if (audio_is_recording() &&
+			    strcmp(session_id, audio_get_session_id()) == 0) {
+				LOG_WRN("%s/%04u.opus mide 0 pero la sesion se esta "
+					"grabando: se deja para luego, NO se marca",
+					session_id, (unsigned int)idx);
+				continue;
+			}
+
 			LOG_WRN("%s/%04u.opus vacio: registrado sin subir",
 				session_id, (unsigned int)idx);
 			upload_registry_mark(session_id, idx);
