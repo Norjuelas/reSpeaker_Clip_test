@@ -1058,6 +1058,20 @@ release:
 	}
 
 reschedule:
+	/* `schedule` y NO `reschedule`, y la diferencia importa: k_work_schedule
+	 * no hace nada si el trabajo ya esta pendiente, mientras que
+	 * k_work_reschedule sustituye el plazo siempre.
+	 *
+	 * De eso depende el barrido de fin de grabacion. Si se para de grabar
+	 * mientras una pasada esta en curso, http_upload_sweep_after() deja un
+	 * plazo de 10 s (con reschedule, que se impone), y al terminar esta
+	 * pasada esta linea NO lo pisa — devuelve 0 y no toca nada. El ultimo
+	 * trozo sale en cuanto la cola queda libre, en vez de esperar el
+	 * intervalo entero.
+	 *
+	 * Cambiar esto a k_work_reschedule romperia ese caso en silencio: el
+	 * trozo final se iria a CLIP_UPLOAD_INTERVAL_MIN, justo en la situacion
+	 * en que mas molesta (una grabacion larga que solapa una pasada). */
 	k_work_schedule_for_queue(&upload_wq, &periodic_work,
 				  K_MINUTES(CONFIG_CLIP_UPLOAD_INTERVAL_MIN));
 }
