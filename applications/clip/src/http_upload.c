@@ -42,7 +42,39 @@ LOG_MODULE_REGISTER(http_upload, CONFIG_CLIP_LOG_LEVEL);
 /* Enough for the response headers; the body we get back is a short status. */
 #define RECV_BUF_SIZE   512
 #define SEND_CHUNK      1024
-#define HTTP_TIMEOUT_MS 15000
+/* Plazo de la peticion HTTP. Fijo ya no sirve, y ese era el fallo.
+ *
+ * Estaba en 15.000 ms planos, y un trozo de grabacion son ~1,2 MB (5 minutos a
+ * 32 kbps). A los ~90 KB/s medidos contra el receptor local eso son 13-14,5 s:
+ * las subidas que salian bien pasaban el plazo por menos de medio segundo.
+ * Medido:
+ *
+ *   uploaded 1.194.319 B -> 14.547 ms   (453 ms de margen)
+ *   uploaded 1.076.385 B -> 13.860 ms   (1.140 ms de margen)
+ *
+ * Cualquier fichero un poco mas grande, o cualquier bajon de caudal, se pasaba
+ * y devolvia -116 (ETIMEDOUT). Los dos que fallaron miden 1.135.524 y
+ * 1.186.452 bytes: mas grandes que el que paso raspando. No era la radio ni el
+ * driver, era el reloj.
+ *
+ * Y fallar aqui sale caro dos veces: se pierde la subida Y se reintenta en el
+ * siguiente barrido, gastando otra ventana de radio. Un plazo generoso solo
+ * cuesta tardar mas en rendirse ante una transferencia de verdad muerta.
+ *
+ * Escala con el tamano: base fija para el ida y vuelta, mas tiempo
+ * proporcional a un caudal pesimista. 15 KB/s es ~1/6 de lo medido — margen de
+ * sobra para un enlace malo — con un techo para no colgar el hilo de subida. */
+#define HTTP_TIMEOUT_BASE_MS   10000
+#define HTTP_TIMEOUT_MIN_KBPS  15
+#define HTTP_TIMEOUT_CAP_MS    180000
+
+static int32_t http_timeout_for(size_t size)
+{
+	uint32_t ms = HTTP_TIMEOUT_BASE_MS +
+		      (uint32_t)((size / 1024U) * 1000U / HTTP_TIMEOUT_MIN_KBPS);
+
+	return (int32_t)MIN(ms, (uint32_t)HTTP_TIMEOUT_CAP_MS);
+}
 #ifdef CONFIG_CLIP_UPLOAD_TLS
 /* 20s con TLS. Los 5s que bastan para un connect TCP cortan el handshake por
  * la mitad: el saludo son varios viajes de ida y vuelta mas la verificacion de
@@ -523,7 +555,7 @@ static int upload_file_timed(const char *session_id, const char *filename,
 	 * el handshake ya quedo fuera. */
 	int64_t t_xfer = k_uptime_get();
 
-	ret = http_client_req(sock, &req, HTTP_TIMEOUT_MS, &ctx);
+	ret = http_client_req(sock, &req, http_timeout_for(size), &ctx);
 
 	if (transfer_ms) {
 		*transfer_ms = (uint32_t)(k_uptime_get() - t_xfer);
@@ -625,7 +657,9 @@ int http_post_json_rsp(const char *url, const char *body, size_t body_len,
 	req.recv_buf = recv_buf;
 	req.recv_buf_len = RECV_BUF_SIZE;
 
-	ret = http_client_req(sock, &req, HTTP_TIMEOUT_MS, &ctx);
+	/* El latido son ~700 bytes, asi que aqui manda la base: ~10 s, de sobra
+	 * para handshake mas ida y vuelta. */
+	ret = http_client_req(sock, &req, http_timeout_for(body_len), &ctx);
 	if (ret >= 0 && (!ctx.done || ctx.status < 200 || ctx.status > 299)) {
 		ret = -EIO;
 	} else if (ret >= 0) {
