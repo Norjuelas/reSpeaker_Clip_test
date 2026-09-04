@@ -64,6 +64,11 @@ LOG_MODULE_REGISTER(http_upload, CONFIG_CLIP_LOG_LEVEL);
  * Escala con el tamano: base fija para el ida y vuelta, mas tiempo
  * proporcional a un caudal pesimista. 15 KB/s es ~1/6 de lo medido — margen de
  * sobra para un enlace malo — con un techo para no colgar el hilo de subida. */
+/* Fallos seguidos antes de dejar la sesion para la siguiente pasada. Bajo a
+ * proposito: si tres seguidos fallan con la red en pie, el problema no es el
+ * fichero. Los no intentados quedan sin marcar y se reintentan enteros. */
+#define UPLOAD_MAX_FAIL_STREAK 3
+
 #define HTTP_TIMEOUT_BASE_MS   10000
 #define HTTP_TIMEOUT_MIN_KBPS  15
 #define HTTP_TIMEOUT_CAP_MS    180000
@@ -785,6 +790,10 @@ static void upload_work_fn(struct k_work *work)
 	char session_id[STORAGE_SESSION_ID_LEN];
 	uint32_t file_count;
 	int err = 0;
+	/* `err` guarda el ULTIMO fallo; estos dos cuentan la sesion entera, que es
+	 * lo que hace falta desde que un fallo ya no aborta el bucle. */
+	int failed_files = 0;
+	int fail_streak = 0;
 
 	ARG_UNUSED(work);
 
@@ -888,8 +897,37 @@ static void upload_work_fn(struct k_work *work)
 		if (err) {
 			LOG_ERR("%s: file %u of %u failed: %d", session_id,
 				(unsigned int)idx, (unsigned int)file_count, err);
-			break;
+			failed_files++;
+			fail_streak++;
+
+			/* Antes esto abortaba la sesion entera al primer fallo, y un
+			 * solo fichero problematico bloqueaba todos los siguientes —
+			 * incluidos los que habrian salido bien. Se vio con
+			 * "0 of 3 files sent (stopped on error)": el fichero 1 se
+			 * pasaba de plazo y 2 y 3 no se intentaban siquiera.
+			 *
+			 * Pero seguir a ciegas tampoco vale: si lo que se cayo es la
+			 * red, insistir con 22 ficheros mas solo gasta radio. Se
+			 * distinguen los dos casos. */
+			if (!wifi_sta_is_connected()) {
+				LOG_WRN("%s: sin red, el resto queda para la siguiente "
+					"pasada", session_id);
+				break;
+			}
+
+			/* Y un tope de fallos seguidos, para no recorrer una sesion
+			 * entera contra un endpoint que rechaza todo. Los que queden
+			 * siguen sin marcar, asi que se reintentan enteros luego. */
+			if (fail_streak >= UPLOAD_MAX_FAIL_STREAK) {
+				LOG_WRN("%s: %d fallos seguidos, se abandona la sesion",
+					session_id, fail_streak);
+				break;
+			}
+
+			continue;   /* el siguiente puede salir perfectamente */
 		}
+
+		fail_streak = 0;
 
 		/* Anotar solo tras un 2xx confirmado: si el endpoint no lo acepto,
 		 * el fichero tiene que volver a intentarse. */
@@ -931,18 +969,31 @@ static void upload_work_fn(struct k_work *work)
 			(unsigned int)status.last_transfer_ms);
 	}
 
-	if (err) {
+	if (failed_files > 0) {
 		k_mutex_lock(&status_lock, K_FOREVER);
-		status.fail_count++;
+		/* Un fallo por FICHERO, no uno por sesion: con el bucle continuando
+		 * una sesion puede acumular varios, y ese es el numero que dice si
+		 * el enlace aguanta el ritmo. */
+		status.fail_count += (uint32_t)failed_files;
 		k_mutex_unlock(&status_lock);
 	}
 
-	status_set_state(err ? HTTP_UPLOAD_FAILED : HTTP_UPLOAD_DONE, err);
+	/* FAILED solo si algo quedo sin subir. Que un fichero fallara y los
+	 * demas salieran ya no marca la sesion entera como fallida: los que
+	 * fallaron siguen sin anotar en el registro y vuelven en la siguiente
+	 * pasada. */
+	status_set_state(failed_files > 0 ? HTTP_UPLOAD_FAILED : HTTP_UPLOAD_DONE,
+			 failed_files > 0 ? err : 0);
 	record_stack_headroom();
 
-	LOG_WRN("%s: %u of %u files sent%s", session_id,
-		(unsigned int)status.files_done, (unsigned int)file_count,
-		err ? " (stopped on error)" : "");
+	if (failed_files > 0) {
+		LOG_WRN("%s: %u de %u ficheros enviados, %d fallaron y se reintentan",
+			session_id, (unsigned int)status.files_done,
+			(unsigned int)file_count, failed_files);
+	} else {
+		LOG_WRN("%s: %u of %u files sent", session_id,
+			(unsigned int)status.files_done, (unsigned int)file_count);
+	}
 }
 
 /* ------------------------------------------------------------------------
