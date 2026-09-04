@@ -100,6 +100,17 @@ int http_upload_session_async(const char *session_id);
 int http_upload_sweep_now(void);
 
 /**
+ * @brief Como http_upload_sweep_now(), pero con espera.
+ *
+ * La usa el barrido de fin de grabacion: al parar hay que dejar que el hilo de
+ * audio acabe de cerrar el ultimo fichero antes de subirlo, o se enviaria
+ * truncado y quedaria marcado como hecho. Ver CLIP_UPLOAD_ON_STOP_DELAY_S.
+ *
+ * MUEVE el plazo del barrido periodico; no anade uno paralelo.
+ */
+int http_upload_sweep_after(uint32_t delay_ms);
+
+/**
  * @brief Read the state of the current or last upload
  */
 void http_upload_get_status(struct http_upload_status *out);

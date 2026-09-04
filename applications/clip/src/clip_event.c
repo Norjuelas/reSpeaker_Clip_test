@@ -32,6 +32,7 @@
 #include "battery.h"
 #include "ble.h"
 #include "wifi.h"
+#include "http_upload.h"
 #include "storage.h"
 #include "transfer.h"
 #include "usb_cdc.h"
@@ -685,6 +686,30 @@ static enum clip_event_result execute_transition(enum clip_event event,
          * margen de CLIP_WIFI_IDLE_GRACE_S da tiempo a que termine una subida
          * en curso y evita derribar el enlace si se vuelve a grabar enseguida. */
         wifi_release("rec");
+
+#if defined(CONFIG_CLIP_UPLOAD_ON_STOP)
+        /* Y se adelanta el barrido, en vez de dejar la grabacion esperando al
+         * intervalo. Es el aprovechamiento del margen de arriba: la radio
+         * todavia esta encendida, asi que este barrido NO paga la asociacion —
+         * la parte cara — solo handshake y transferencia.
+         *
+         * Con retraso a proposito: el hilo de audio puede seguir cerrando el
+         * ultimo fichero (la rama de -ETIMEDOUT de mas abajo dice que la parada
+         * termina de forma asincrona). Subirlo antes de que cierre mandaria un
+         * trozo truncado que upload_registry_mark() daria por bueno, y no se
+         * reintentaria nunca. Ver CLIP_UPLOAD_ON_STOP_DELAY_S. */
+        {
+            int uerr = http_upload_sweep_after(
+                CONFIG_CLIP_UPLOAD_ON_STOP_DELAY_S * 1000U);
+
+            if (uerr < 0) {
+                LOG_WRN("No se pudo adelantar la subida tras parar: %d", uerr);
+            } else {
+                LOG_WRN("Subida adelantada: barrido en %ds, con la radio aun "
+                        "encendida", CONFIG_CLIP_UPLOAD_ON_STOP_DELAY_S);
+            }
+        }
+#endif
 
         haptic_play_pattern(HAPTIC_DOUBLE);  /* stop = 2 buzzes (button or AT) */
         display_post_event(UI_EVENT_REC_STOP);

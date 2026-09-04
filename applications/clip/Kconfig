@@ -715,6 +715,46 @@ config CLIP_UPLOAD_INTERVAL_MIN
 
 	  0 lo desactiva y deja la subida solo bajo AT+HTTPUP.
 
+config CLIP_UPLOAD_ON_STOP
+	bool "Subir en cuanto termina una grabacion, sin esperar el intervalo"
+	depends on NRF70_STA_MODE
+	default y
+	help
+	  Sin esto, una grabacion que termina espera al siguiente barrido
+	  periodico: hasta CLIP_UPLOAD_INTERVAL_MIN mas lo que dure la ventana,
+	  o sea hasta ~16 minutos con el intervalo en 15. El audio ya esta
+	  completo en la tarjeta todo ese rato, esperando a un temporizador.
+
+	  Y sale casi gratis, que es lo que lo hace la opcion buena en vez de un
+	  intercambio: al parar la grabacion la radio TODAVIA ESTA ENCENDIDA — la
+	  sujeto el prestamo de 'rec' y aun corre el margen de
+	  CLIP_WIFI_IDLE_GRACE_S antes de apagarse. Asi que este barrido no paga
+	  la asociacion, que es la parte cara (10,3 s medidos, mas DHCP, mas
+	  recargar 87 KB de parche del nRF70). Solo paga handshake (~340 ms
+	  medidos) y transferencia.
+
+	  Resultado con el intervalo en 15: la latencia tras grabar pasa de una
+	  media de ~8 minutos a unos 15 segundos, SIN aumentar los encendidos de
+	  radio en reposo.
+
+config CLIP_UPLOAD_ON_STOP_DELAY_S
+	int "Segundos de espera antes de ese barrido"
+	depends on CLIP_UPLOAD_ON_STOP
+	default 10
+	range 1 120
+	help
+	  NO es un margen de cortesia: es correccion. Al parar, el hilo de audio
+	  puede seguir vaciando y cerrando el ultimo fichero — la ruta de
+	  -ETIMEDOUT de CLIP_EVENT_STOP dice explicitamente que la parada "esta
+	  comprometida y termina de forma asincrona". Barrer antes de que
+	  storage_close_session() acabe subiria un trozo TRUNCADO, y como
+	  upload_registry_mark() lo anota como hecho al recibir un 2xx, ese
+	  trozo no se reintentaria nunca. Seria perdida de audio silenciosa, no
+	  un error visible.
+
+	  10 s cierran ese hueco con holgura y caben de sobra dentro del margen
+	  de 45 s de la radio, asi que el barrido sigue encontrandola encendida.
+
 config CLIP_UDP_TRANSPORT
 	bool "Transporte UDP: canal AT por red y descarga de audio"
 	default n

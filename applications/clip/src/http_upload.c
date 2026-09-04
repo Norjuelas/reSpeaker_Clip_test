@@ -1062,7 +1062,7 @@ reschedule:
 				  K_MINUTES(CONFIG_CLIP_UPLOAD_INTERVAL_MIN));
 }
 
-int http_upload_sweep_now(void)
+int http_upload_sweep_after(uint32_t delay_ms)
 {
 	if (!upload_wq_started) {
 		return -ENODEV;
@@ -1071,8 +1071,20 @@ int http_upload_sweep_now(void)
 	/* Se adelanta la pasada periodica en vez de subir una sesion concreta:
 	 * es la que sabe cuales quedan pendientes y las drena todas. Un
 	 * k_work_reschedule sobre un trabajo ya encolado solo cambia su plazo,
-	 * asi que llamar a esto dos veces no lanza dos pasadas. */
-	return k_work_reschedule_for_queue(&upload_wq, &periodic_work, K_NO_WAIT);
+	 * asi que llamar a esto dos veces no lanza dos pasadas.
+	 *
+	 * Ojo al efecto sobre la cadencia: esto MUEVE el plazo del barrido
+	 * periodico, no anade uno aparte. Tras ejecutarse, el propio barrido se
+	 * reprograma a CLIP_UPLOAD_INTERVAL_MIN, asi que la cadencia no se pierde
+	 * — se desplaza. Es el comportamiento que ya tenia http_upload_sweep_now()
+	 * y del que depende la orden remota `upload_now`. */
+	return k_work_reschedule_for_queue(&upload_wq, &periodic_work,
+					   K_MSEC(delay_ms));
+}
+
+int http_upload_sweep_now(void)
+{
+	return http_upload_sweep_after(0);
 }
 
 int http_upload_init(void)
