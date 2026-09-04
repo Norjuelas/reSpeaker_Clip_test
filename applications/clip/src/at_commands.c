@@ -2258,9 +2258,25 @@ static int cmd_upload_handler(struct at_cmd_ctx *ctx, char *response, size_t len
     strncpy(session_id, ctx->args, sizeof(session_id) - 1);
     session_id[sizeof(session_id) - 1] = '\0';
 
+    /* OJO: esta orden manda por UDP, no por HTTPS. Es de cuando el canal de
+     * transferencia era UDP; en las imagenes que se entregan el transporte UDP
+     * esta compilado fuera (udp_stub), asi que transport_udp_set_peer() falla
+     * siempre y devolvia "Bad upload endpoint" — un mensaje que manda a mirar
+     * AT+UPCFG, que no tiene nada que ver. El endpoint estaba perfectamente.
+     *
+     * La subida por HTTPS es AT+HTTPUP=<sesion>. Se dice, en vez de dejar al
+     * que lo use adivinando. */
+    if (!IS_ENABLED(CONFIG_CLIP_UDP_TRANSPORT)) {
+        return create_json_response(false,
+                                    "AT+UPLOAD es la ruta UDP y no esta compilada; "
+                                    "usa AT+HTTPUP=<sesion>",
+                                    NULL, response, len);
+    }
+
     ret = transport_udp_set_peer(config_get_upload_host(), config_get_upload_port());
     if (ret) {
-        return create_json_response(false, "Bad upload endpoint", NULL, response, len);
+        return create_json_response(false, "Bad upload endpoint (ruta UDP)",
+                                    NULL, response, len);
     }
 
     tp = transport_get(TRANSPORT_TYPE_UDP);
