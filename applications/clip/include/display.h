@@ -83,7 +83,12 @@ struct display_status {
 	uint8_t battery_percent;       /**< Battery percentage (0-100) */
 	bool battery_charging;         /**< Battery charging status */
 	bool ble_connected;            /**< BLE connected */
-	bool wifi_running;             /**< WiFi AP running */
+	/** Hay enlace WiFi. Se llamaba "AP running" y se alimentaba de
+	 *  wifi_ap_is_running(), que con el modo AP compilado fuera devuelve
+	 *  false para siempre: el icono de WiFi del OLED no aparecia nunca,
+	 *  estuviera el device conectado o no. Ahora es el enlace de estacion,
+	 *  que es el unico que existe en las imagenes que se entregan. */
+	bool wifi_running;
 	bool wifi_ap_has_client;       /**< A client is associated to our AP */
 	uint32_t free_space_mb;        /**< Free storage space in MB */
 	bool transferring;             /**< File transfer in progress */

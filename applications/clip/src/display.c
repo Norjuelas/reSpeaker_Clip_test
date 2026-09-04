@@ -1637,7 +1637,20 @@ int display_update_status(const struct display_status *status)
 	memcpy(&g_status, status, sizeof(g_status));
 
 	/* Update WiFi and storage info */
-	g_status.wifi_running = wifi_ap_is_running();
+	/* El enlace de ESTACION, no el modo AP.
+	 *
+	 * Esto leia wifi_ap_is_running(), que devuelve `ap_running` — y el modo
+	 * AP esta compilado fuera (NRF70_AP_MODE ausente de la build), asi que
+	 * era false permanentemente. El icono ICON_WIFI_CONNECTED de mas arriba
+	 * estaba dibujado, la rama existia, y no se encendia jamas: el aparato
+	 * podia estar asociado y subiendo sin dar ninguna senal en pantalla.
+	 *
+	 * Es un resto de la migracion de AP a estacion, la misma forma que
+	 * ble_is_bonded() devolviendo false para siempre. Con esto, pulsar
+	 * grabar enciende el icono en cuanto la radio asocia (~10 s medidos), y
+	 * es la confirmacion mas rapida que hay: no necesita ni servidor ni
+	 * cable. */
+	g_status.wifi_running = wifi_sta_is_connected();
 	g_status.wifi_ap_has_client = wifi_ap_has_client();
 	struct clip_context *ctx = clip_get_context();
 	g_status.free_space_mb = ctx->status.free_space / 1024;

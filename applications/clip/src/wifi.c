@@ -22,6 +22,7 @@
 #include "wifi_udp.h"
 #include "transport_udp.h"
 #include "config.h"
+#include "health.h"
 #include "config.h"
 #include "clip_event.h"
 #include "ble.h"
@@ -361,6 +362,22 @@ static void ipv4_event_handler(struct net_mgmt_event_callback *cb,
 		LOG_WRN("STA got IP %s", sta_ip);
 		ble_notify_event("sta", sta_ip);
 		k_sem_give(&sta_got_ip_sem);
+
+		/* Latido en cuanto hay red, no solo al pulsar grabar.
+		 *
+		 * clip_event.c ya manda uno inmediato en START y en STOP, pero en
+		 * START la radio acaba de empezar a subir: wifi_acquire() es
+		 * asincrono y la asociacion tarda ~10 s (medido). Ese latido se
+		 * encontraba sin enlace y se saltaba la vuelta, asi que el primer
+		 * aviso real al panel no llegaba hasta el siguiente barrido.
+		 *
+		 * Aqui es el momento exacto en que el enlace pasa a ser usable, asi
+		 * que el latido sale con red garantizada. El panel ve el device a
+		 * los pocos segundos de empezar a grabar en vez de a los minutos.
+		 *
+		 * health_beat_now() reprograma su propio trabajo, asi que esto no
+		 * duplica latidos: adelanta el que tocaba. */
+		health_beat_now();
 		break;
 	}
 }
