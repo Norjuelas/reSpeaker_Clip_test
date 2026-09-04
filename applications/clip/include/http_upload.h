@@ -80,6 +80,10 @@ struct http_upload_status {
 	 * mientras el device la usa. Sin esto no hay forma de ver el error real. */
 	int last_conn_ret;
 	int last_conn_errno;
+	/* Punto exacto del ultimo fallo, y heap libre en ese instante:
+	 * 1=k_malloc de buffers  2=connect/TLS  3=http_client_req  4=no 2xx */
+	int last_fail_stage;
+	uint32_t last_fail_heap;
 };
 
 /**

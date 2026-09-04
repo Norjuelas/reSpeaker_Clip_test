@@ -34,6 +34,8 @@
 #include "storage.h"
 #include "wifi.h"
 #include "audio.h"
+#include <zephyr/sys/sys_heap.h>
+#include <zephyr/sys/mem_stats.h>
 #include "upload_registry.h"
 #include "health.h"
 
@@ -334,6 +336,26 @@ static int response_cb(struct http_response *rsp, enum http_final_call final,
  * red inexistente. */
 static int g_last_conn_ret;
 static int g_last_conn_errno;
+/* En que punto fallo la ultima subida, y cuanto heap habia en ese instante.
+ *
+ * upload_file_timed() puede devolver -ENOMEM desde el k_malloc de los buffers
+ * y tambien recibirlo de http_client_req(): el mismo numero, dos causas muy
+ * distintas, y con el log de la tarjeta ilegible en marcha no habia forma de
+ * separarlas. Se acabo persiguiendo un problema de heap con 57 KB libres.
+ *   1 = k_malloc de los buffers   2 = connect/TLS
+ *   3 = http_client_req           4 = el servicio rechazo (no 2xx)  */
+static int g_fail_stage;
+static uint32_t g_fail_heap;
+
+static void note_fail(int stage)
+{
+	extern struct k_heap _system_heap;
+	struct sys_memory_stats hs = { 0 };
+
+	(void)sys_heap_runtime_stats_get(&_system_heap.heap, &hs);
+	g_fail_stage = stage;
+	g_fail_heap = (uint32_t)hs.free_bytes;
+}
 
 static int connect_to_endpoint(const char *host, uint16_t port)
 {
@@ -531,6 +553,7 @@ static int upload_file_timed(const char *session_id, const char *filename,
 	ctx.chunk = k_malloc(SEND_CHUNK);
 	recv_buf = k_malloc(RECV_BUF_SIZE);
 	if (!ctx.chunk || !recv_buf) {
+		note_fail(1);
 		LOG_ERR("No heap for the upload buffers");
 		ret = -ENOMEM;
 		goto out;
@@ -544,6 +567,7 @@ static int upload_file_timed(const char *session_id, const char *filename,
 
 	sock = connect_to_endpoint(host, port);
 	if (sock < 0) {
+		note_fail(2);
 		ret = sock;
 		goto out;
 	}
@@ -590,11 +614,13 @@ static int upload_file_timed(const char *session_id, const char *filename,
 	}
 
 	if (ret < 0) {
+		note_fail(3);
 		LOG_ERR("http_client_req failed: %d", ret);
 		goto out;
 	}
 
 	if (!ctx.done || ctx.status < 200 || ctx.status > 299) {
+		note_fail(4);
 		LOG_ERR("%s rejected: HTTP %d", filename, ctx.status);
 		ret = -EIO;
 		goto out;
@@ -1305,4 +1331,6 @@ void http_upload_get_status(struct http_upload_status *out)
 	 * la estructura en este fichero y no puede tocarla. */
 	out->last_conn_ret = g_last_conn_ret;
 	out->last_conn_errno = g_last_conn_errno;
+	out->last_fail_stage = g_fail_stage;
+	out->last_fail_heap = g_fail_heap;
 }

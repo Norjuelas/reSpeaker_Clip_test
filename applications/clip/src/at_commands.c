@@ -2406,7 +2406,8 @@ static int cmd_httpup_handler(struct at_cmd_ctx *ctx, char *response, size_t len
                  "\"kbps\":%u,\"ok\":%u,\"fail\":%u,\"pending\":%u,"
                  "\"connect_ms\":%u,\"transfer_ms\":%u,\"session_ms\":%u,"
                  "\"beat_err\":%d,\"beat_age_s\":%d,"
-                 "\"conn_ret\":%d,\"conn_errno\":%d}",
+                 "\"conn_ret\":%d,\"conn_errno\":%d,"
+                 "\"fail_stage\":%d,\"fail_heap\":%u}",
                  upload_state_txt(st.state), st.session_id,
                  (unsigned int)st.files_done, (unsigned int)st.files_total,
                  (unsigned int)st.bytes_sent, st.last_error,
@@ -2424,7 +2425,8 @@ static int cmd_httpup_handler(struct at_cmd_ctx *ctx, char *response, size_t len
                  /* Los dos numeros del ultimo connect fallido, separados:
                   * ret == -1 significa "mira errno"; cualquier otro ret ES el
                   * error y errno no vale nada. */
-                 st.last_conn_ret, st.last_conn_errno);
+                 st.last_conn_ret, st.last_conn_errno,
+                 st.last_fail_stage, (unsigned int)st.last_fail_heap);
         if (n < 0 || n >= (int)sizeof(data)) {
             return AT_ERR_NOMEM;
         }
