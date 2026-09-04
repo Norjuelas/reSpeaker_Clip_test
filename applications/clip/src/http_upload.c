@@ -329,6 +329,12 @@ static int response_cb(struct http_response *rsp, enum http_final_call final,
 	return 0;
 }
 
+/* Ultimo fallo de conexion, los dos numeros por separado. Ver el comentario en
+ * http_upload.h: mezclar ret y errno es lo que mando a perseguir un problema de
+ * red inexistente. */
+static int g_last_conn_ret;
+static int g_last_conn_errno;
+
 static int connect_to_endpoint(const char *host, uint16_t port)
 {
 	struct sockaddr_in addr = {0};
@@ -449,8 +455,25 @@ static int connect_to_endpoint(const char *host, uint16_t port)
 		zsock_setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 	}
 
+	/* errno a cero ANTES de llamar, y luego se registran los dos valores por
+	 * separado.
+	 *
+	 * El comentario de abajo ya avisaba de que errno puede venir de una
+	 * operacion anterior, pero seguiamos reportando un unico numero — y ese
+	 * numero (-113, EHOSTUNREACH) mando a buscar un problema de red que no
+	 * existe: el stack IPv4 de Zephyr no devuelve EHOSTUNREACH en ninguna
+	 * parte (comprobado, grep en subsys/net), asi que si aparece es basura
+	 * heredada. Sin ver ret y errno por separado no hay forma de saber cual
+	 * de los dos vale. */
+	errno = 0;
 	ret = zsock_connect(sock, (struct sockaddr *)&addr, sizeof(addr));
 	if (ret < 0) {
+		/* Enteros sueltos y no `status`: esta funcion vive por encima de la
+		 * declaracion de la estructura y su mutex. Se copian al leer el
+		 * estado. Escritura de un int, sin carrera que importe. */
+		g_last_conn_ret = ret;
+		g_last_conn_errno = errno;
+		LOG_ERR("connect crudo: ret=%d errno=%d", ret, errno);
 		/* Dos convenciones distintas en la misma llamada, y confundirlas
 		 * cuesta caro.
 		 *
@@ -1277,4 +1300,9 @@ void http_upload_get_status(struct http_upload_status *out)
 	k_mutex_lock(&status_lock, K_FOREVER);
 	*out = status;
 	k_mutex_unlock(&status_lock);
+
+	/* Se copian al leer, no al fallar: connect_to_endpoint esta por encima de
+	 * la estructura en este fichero y no puede tocarla. */
+	out->last_conn_ret = g_last_conn_ret;
+	out->last_conn_errno = g_last_conn_errno;
 }

@@ -2152,8 +2152,9 @@ static int cmd_sta_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
         if (wifi_sta_is_connected()) {
             snprintf(data, sizeof(data),
                      "{\"state\":\"connected\",\"ssid\":\"%s\",\"ip\":\"%s\","
-                     "\"leases\":%d}",
-                     config_get_sta_ssid(), wifi_sta_get_ip(), wifi_lease_count());
+                     "\"gw\":\"%s\",\"leases\":%d}",
+                     config_get_sta_ssid(), wifi_sta_get_ip(),
+                     wifi_sta_get_gw(), wifi_lease_count());
         } else {
             snprintf(data, sizeof(data),
                      "{\"state\":\"off\",\"ssid\":\"%s\",\"reg\":\"%s\","
@@ -2403,7 +2404,9 @@ static int cmd_httpup_handler(struct at_cmd_ctx *ctx, char *response, size_t len
                  "{\"state\":\"%s\",\"session\":\"%s\",\"files_done\":%u,"
                  "\"files_total\":%u,\"bytes\":%u,\"error\":%d,\"stack_free\":%u,"
                  "\"kbps\":%u,\"ok\":%u,\"fail\":%u,\"pending\":%u,"
-                 "\"connect_ms\":%u,\"transfer_ms\":%u,\"session_ms\":%u}",
+                 "\"connect_ms\":%u,\"transfer_ms\":%u,\"session_ms\":%u,"
+                 "\"beat_err\":%d,\"beat_age_s\":%d,"
+                 "\"conn_ret\":%d,\"conn_errno\":%d}",
                  upload_state_txt(st.state), st.session_id,
                  (unsigned int)st.files_done, (unsigned int)st.files_total,
                  (unsigned int)st.bytes_sent, st.last_error,
@@ -2412,7 +2415,16 @@ static int cmd_httpup_handler(struct at_cmd_ctx *ctx, char *response, size_t len
                  (unsigned int)st.fail_count, (unsigned int)st.pending_files,
                  (unsigned int)st.last_connect_ms,
                  (unsigned int)st.last_transfer_ms,
-                 (unsigned int)st.last_session_ms);
+                 (unsigned int)st.last_session_ms,
+                 /* beat_err: 0 = el ultimo latido llego al servicio.
+                  * beat_age_s: segundos desde el ultimo que llego, -1 si
+                  * ninguno. Juntos contestan "¿esta hablando con el servicio?"
+                  * por cable, sin depender del panel ni del log de la tarjeta. */
+                 health_last_beat_err(), (int)health_last_beat_age_s(),
+                 /* Los dos numeros del ultimo connect fallido, separados:
+                  * ret == -1 significa "mira errno"; cualquier otro ret ES el
+                  * error y errno no vale nada. */
+                 st.last_conn_ret, st.last_conn_errno);
         if (n < 0 || n >= (int)sizeof(data)) {
             return AT_ERR_NOMEM;
         }

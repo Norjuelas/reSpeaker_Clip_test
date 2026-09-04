@@ -65,6 +65,21 @@ struct http_upload_status {
 	uint32_t last_connect_ms;
 	uint32_t last_transfer_ms;
 	uint32_t last_session_ms;
+
+	/* El ultimo fallo de conexion, con los DOS numeros separados.
+	 *
+	 * zsock_connect mezcla dos convenciones: un socket normal devuelve -1 y
+	 * deja el motivo en errno; la capa TLS devuelve el codigo directamente y
+	 * no toca errno, en cuyo caso errno es basura de una operacion anterior.
+	 * Reportar un solo numero mandaba a perseguir el equivocado — un -113
+	 * (EHOSTUNREACH) que el stack IPv4 de Zephyr no genera en ninguna parte.
+	 *
+	 * Y hay que publicarlos, no solo registrarlos: en una imagen de
+	 * produccion LOG_BACKEND_UART esta apagado, asi que el unico destino del
+	 * log es la tarjeta — que desde el ordenador se lee como una foto vieja
+	 * mientras el device la usa. Sin esto no hay forma de ver el error real. */
+	int last_conn_ret;
+	int last_conn_errno;
 };
 
 /**

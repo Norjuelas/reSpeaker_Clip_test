@@ -593,7 +593,11 @@ int wifi_on(void)
 		struct net_if_addr *ifaddr;
 		net_addr_pton(AF_INET, CONFIG_NET_CONFIG_MY_IPV4_ADDR, &addr);
 		net_addr_pton(AF_INET, CONFIG_NET_CONFIG_MY_IPV4_NETMASK, &netmask);
-		net_addr_pton(AF_INET, CONFIG_NET_CONFIG_MY_IPV4_GW, &gw);
+		/* En modo AP el propio Clip es la puerta de enlace, asi que su
+		 * direccion. Antes venia de MY_IPV4_GW, que ahora esta vacia a
+		 * proposito para que net_config no fije una ruta por defecto falsa
+		 * al arrancar en modo estacion (ver prj.conf). */
+		net_addr_pton(AF_INET, CONFIG_NET_CONFIG_MY_IPV4_ADDR, &gw);
 		ifaddr = net_if_ipv4_addr_add(iface, &addr, NET_ADDR_MANUAL, 0);
 		if (!ifaddr && !net_if_ipv4_addr_lookup(&addr, &iface))
 		{
@@ -1016,6 +1020,36 @@ int wifi_sta_on(void)
 		{
 			LOG_WRN("Released the AP static address before DHCP");
 		}
+
+		/* Y la PUERTA DE ENLACE, que es la mitad que faltaba.
+		 *
+		 * Zephyr aplica CONFIG_NET_CONFIG_MY_IPV4_GW al arrancar por su
+		 * cuenta (net_config con AUTO_INIT, subsys/net/lib/config/init.c),
+		 * y ese valor es 192.168.4.1 — la direccion que el Clip tenia
+		 * cuando era punto de acceso. Un resto del modo AP, que ya no se
+		 * compila.
+		 *
+		 * Se quitaba la direccion estatica y se dejaba la ruta por defecto
+		 * apuntando a 192.168.4.1, que en la red de un cliente no existe.
+		 * Consecuencia: el device solo podia hablar con su PROPIA subred.
+		 * Todo lo de fuera daba -113 EHOSTUNREACH.
+		 *
+		 * Eso explica por que las subidas parecian funcionar: el receptor
+		 * de pruebas siempre estuvo en la misma /24. Contra el servicio de
+		 * EC2 hay 58 intentos en el log de la tarjeta y CERO exitos, con la
+		 * radio asociada y RSSI de -43. El AP reparte 192.168.0.1 sin
+		 * problema — lo comprobe en el portatil, misma red — pero el device
+		 * nunca lo usaba.
+		 *
+		 * Poniendola a cero, la unica cosa que fija la ruta por defecto es
+		 * la opcion router del DHCP, que es como debe ser en modo estacion. */
+		{
+			struct in_addr none = { 0 };
+
+			net_if_ipv4_set_gw(iface, &none);
+			LOG_WRN("Puerta de enlace estatica del modo AP descartada; "
+				"la fija el DHCP");
+		}
 	}
 
 	/* The DHCP client is started by the network stack on link-up; we only wait
@@ -1316,6 +1350,28 @@ bool wifi_is_interface_up(void)
 bool wifi_ap_is_running(void)
 {
 	return ap_running;
+}
+
+const char *wifi_sta_get_gw(void)
+{
+	static char buf[16];
+	struct net_if *iface = net_if_get_first_wifi();
+	struct net_if_ipv4 *ipv4;
+
+	buf[0] = '\0';
+	if (!iface || !iface->config.ip.ipv4) {
+		return buf;
+	}
+	ipv4 = iface->config.ip.ipv4;
+
+	/* La ruta por defecto, que es justo el dato que faltaba: con el gateway
+	 * heredado del modo AP (192.168.4.1) el device solo alcanzaba su propia
+	 * subred y todo lo de fuera daba -113, con la radio asociada y buena
+	 * senal. No habia forma de verlo desde fuera. */
+	if (!net_ipv4_is_addr_unspecified(&ipv4->gw)) {
+		net_addr_ntop(AF_INET, &ipv4->gw, buf, sizeof(buf));
+	}
+	return buf;
 }
 
 const char *wifi_get_ssid(void)

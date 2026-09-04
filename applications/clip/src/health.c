@@ -58,6 +58,11 @@ static struct k_work_q heartbeat_wq;
 static struct k_work_delayable heartbeat_work;
 static bool heartbeat_running;
 static bool heartbeat_enabled;
+/* Resultado del ultimo latido y momento del ultimo que SI llego. -EAGAIN como
+ * valor inicial: distingue "todavia no se ha intentado" de "se intento y dio
+ * 0", que es justo la ambiguedad que hacia falta resolver. */
+static int last_beat_err = -EAGAIN;
+static int64_t last_beat_ok_uptime;
 
 /* Why the device last restarted. Read once at boot: hwinfo clears the cause
  * only when asked, and reading it repeatedly from different threads would race.
@@ -378,6 +383,24 @@ static void heartbeat_work_fn(struct k_work *work)
 
 		ret = http_post_json_rsp("/health", json, (size_t)ret,
 					 rsp, sizeof(rsp));
+
+		/* Se guarda el resultado, no solo se registra.
+		 *
+		 * Antes esto solo escribia una linea de log cuando fallaba, y el
+		 * log vive en la tarjeta — que desde el ordenador se ve como una
+		 * foto vieja mientras el device la tiene montada. Resultado:
+		 * "¿esta llegando el latido al servicio?" no se podia contestar ni
+		 * por cable ni por el panel si el panel estaba caido, que es
+		 * justamente cuando hace falta. Se perdio bastante tiempo leyendo
+		 * errores de arranques anteriores como si fueran actuales.
+		 *
+		 * Con esto, AT+HTTPUP? lo dice: el ultimo codigo y hace cuanto que
+		 * uno llego de verdad. */
+		last_beat_err = ret;
+		if (ret == 0) {
+			last_beat_ok_uptime = k_uptime_get();
+		}
+
 		if (ret) {
 			/* At WRN, not ERR: a missed beat is normal when the device
 			 * is moving between access points. */
@@ -392,6 +415,19 @@ reschedule:
 		k_work_schedule_for_queue(&heartbeat_wq, &heartbeat_work,
 					  K_SECONDS(CONFIG_CLIP_HEALTH_INTERVAL_S));
 	}
+}
+
+int health_last_beat_err(void)
+{
+	return last_beat_err;
+}
+
+int32_t health_last_beat_age_s(void)
+{
+	if (last_beat_ok_uptime == 0) {
+		return -1;   /* ninguno ha llegado todavia en esta vida del device */
+	}
+	return (int32_t)((k_uptime_get() - last_beat_ok_uptime) / 1000);
 }
 
 int health_init(void)

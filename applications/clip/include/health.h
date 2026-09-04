@@ -43,6 +43,20 @@ int health_init(void);
 int health_beat_now(void);
 
 /**
+ * @brief Codigo del ultimo intento de latido. 0 = llego, -EAGAIN = ninguno aun.
+ *
+ * Existe porque el resultado solo se registraba en el log de la tarjeta, y esa
+ * tarjeta se lee como una foto vieja mientras el device la usa: no habia forma
+ * de contestar "¿esta llegando al servicio?" por cable.
+ */
+int health_last_beat_err(void);
+
+/**
+ * @brief Segundos desde el ultimo latido que SI llego, o -1 si ninguno.
+ */
+int32_t health_last_beat_age_s(void);
+
+/**
  * @brief Turn the periodic heartbeat on or off at runtime
  */
 void health_set_enabled(bool on);

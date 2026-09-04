@@ -192,6 +192,15 @@ int wifi_manual_hold(bool on);
 bool wifi_sta_is_connected(void);
 
 /**
+ * @brief La puerta de enlace en uso, o cadena vacia si no hay ninguna.
+ *
+ * Se publica porque sin ella el enrutado no se puede depurar: un gateway
+ * heredado del modo AP dejaba al device hablando solo con su propia subred, con
+ * la radio asociada, buena senal y ningun sintoma salvo -113 al salir de ella.
+ */
+const char *wifi_sta_get_gw(void);
+
+/**
  * @brief Minutos que lleva sin conseguir conectarse a ninguna red
  *
  * 0 si esta conectado, o si todavia no lo ha intentado. Se usa para decidir
