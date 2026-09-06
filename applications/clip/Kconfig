@@ -755,6 +755,57 @@ config CLIP_UPLOAD_ON_STOP_DELAY_S
 	  10 s cierran ese hueco con holgura y caben de sobra dentro del margen
 	  de 45 s de la radio, asi que el barrido sigue encontrandola encendida.
 
+config CLIP_WIFI_WEDGE_RECOVERY
+	bool "Reiniciar si la radio se queda colgada con el enlace 'arriba'"
+	depends on NRF70_STA_MODE && REBOOT
+	default y
+	help
+	  EL FALLO (H2, reproducido varias veces). El RPU se cuelga y el driver
+	  NO se entera: wifi_sta_is_connected() sigue diciendo que si, hay IP, y
+	  todas las transferencias mueren con ETIMEDOUT. En el log de la tarjeta
+	  se ve "SIGNAL_POLL command timed out" seguido de rafagas de
+	  "hal_rpu_msg_write: Invalid memory address 0xAAAAAAAA". Una sesion de 23
+	  ficheros / 22 MB fallo seis veces seguidas y no subio nunca. Solo se
+	  recupera reiniciando.
+
+	  POR QUE NO LO ARREGLA NADA DE LO QUE YA HAY:
+	    - La reconexion con backoff de wifi.c arranca desde sta_offline_since,
+	      que NUNCA se pone: para la aplicacion el enlace esta arriba.
+	    - CLIP_NO_NETWORK_POWEROFF_MIN mide lo mismo y tampoco se dispara.
+	    - NRF_WIFI_RPU_RECOVERY, que es el mecanismo del driver para esto
+	      exactamente, DEPENDE de NRF_WIFI_LOW_POWER, y el power-save rompe la
+	      asociacion en esta placa: 0/10 con recuperacion apagada y 0/12 con
+	      ella encendida, contra 10/10 sin power-save. Medido en hardware, tres
+	      brazos. O sea que la recuperacion del driver no esta disponible y hay
+	      que hacerla en la aplicacion.
+
+	  QUE HACE. Cuenta ventanas periodicas seguidas en las que no salio NADA:
+	  ni el latido ni una sola subida. Cualquier exito pone la cuenta a cero.
+	  Al llegar a CLIP_WIFI_WEDGE_WINDOWS reinicia en frio.
+
+	  NUNCA reinicia grabando: el trozo en curso todavia no esta cerrado y se
+	  perderia. El audio vale mas que la conectividad, y una grabacion sin red
+	  sigue siendo una grabacion — se sube despues.
+
+	  LO QUE CUESTA, y hay que aceptarlo: si el servicio esta caido (no la
+	  radio), esto reinicia el aparato cada CLIP_WIFI_WEDGE_WINDOWS ventanas.
+	  Con el intervalo en 15 minutos eso es un reinicio cada ~45 minutos, que
+	  se autolimita solo y no pierde datos. Se prefiere eso a un aparato mudo
+	  durante dias, que es lo que pasa hoy.
+
+config CLIP_WIFI_WEDGE_WINDOWS
+	int "Ventanas seguidas sin exito antes de reiniciar"
+	depends on CLIP_WIFI_WEDGE_RECOVERY
+	default 3
+	range 2 20
+	help
+	  Con CLIP_UPLOAD_INTERVAL_MIN en 15, tres ventanas son ~45 minutos antes
+	  de reiniciar.
+
+	  No bajar a 1: una ventana suelta falla por motivos normales — el AP
+	  reiniciandose, el portatil que tiene la tarjeta montada, un corte de
+	  internet. Reiniciar por eso seria peor que el fallo.
+
 config CLIP_UPLOAD_SEND_CHUNK
 	int "Bytes por trozo al enviar el cuerpo de una subida"
 	default 4096

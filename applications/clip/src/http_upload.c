@@ -38,6 +38,7 @@
 #include <zephyr/sys/mem_stats.h>
 #include "upload_registry.h"
 #include "health.h"
+#include <zephyr/sys/reboot.h>
 
 LOG_MODULE_REGISTER(http_upload, CONFIG_CLIP_LOG_LEVEL);
 
@@ -1100,23 +1101,98 @@ static struct k_work_delayable periodic_work;
 /* Latido de salud en el hilo de subida, secuencial con ella. El snapshot
  * lleva upload_state/files_done/files_total: es lo que el panel necesita para
  * decir "subiendo" en vivo. Fallar es tolerable — el periodico lo repite. */
-static void post_health_inline(void)
+static int post_health_inline(void)
 {
 	char json[960];
 	int n = health_snapshot_json(json, sizeof(json));
 
-	if (n > 0) {
-		(void)http_post_json("/health", json, (size_t)n);
+	if (n <= 0) {
+		return -EINVAL;
 	}
+
+	/* Devuelve el resultado, y no por gusto: es la senal mas barata que hay
+	 * para saber si la pila de red sigue viva. El detector de radio colgada
+	 * de abajo se apoya en el. */
+	return http_post_json("/health", json, (size_t)n);
 }
+
+#if defined(CONFIG_CLIP_WIFI_WEDGE_RECOVERY)
+/* Detector de RPU colgado (H2).
+ *
+ * El fallo: el nRF70 se cuelga y el driver no se entera. wifi_sta_is_connected()
+ * sigue diciendo que si, hay IP, y todo lo que se manda muere con ETIMEDOUT.
+ * Como para la aplicacion el enlace esta arriba, ni la reconexion con backoff
+ * de wifi.c ni CLIP_NO_NETWORK_POWEROFF_MIN llegan a mirar: los dos arrancan
+ * desde sta_offline_since, que nunca se pone.
+ *
+ * La recuperacion del propio driver (NRF_WIFI_RPU_RECOVERY) existe para esto
+ * exactamente, pero depende de NRF_WIFI_LOW_POWER y el power-save rompe la
+ * asociacion en esta placa -- medido en tres brazos, 10/10 sin power-save
+ * contra 0/12 y 0/10 con el. O sea que no esta disponible.
+ *
+ * Asi que la senal tiene que ser el RESULTADO, no el estado del enlace: una
+ * ventana en la que no salio nada -- ni el latido, ni una sola subida -- es
+ * sospechosa; varias seguidas no lo son.
+ */
+static int wedge_bad_windows;
+
+static void wedge_note_window(bool any_success)
+{
+	if (any_success) {
+		if (wedge_bad_windows > 0) {
+			LOG_WRN("radio: la ventana funciono, contador de cuelgue a cero "
+				"(iba por %d)", wedge_bad_windows);
+		}
+		wedge_bad_windows = 0;
+		return;
+	}
+
+	wedge_bad_windows++;
+	LOG_WRN("radio: ventana sin un solo exito (%d de %d antes de reiniciar)",
+		wedge_bad_windows, CONFIG_CLIP_WIFI_WEDGE_WINDOWS);
+
+	if (wedge_bad_windows < CONFIG_CLIP_WIFI_WEDGE_WINDOWS) {
+		return;
+	}
+
+	/* Grabando no se reinicia. El trozo en curso no esta cerrado y se
+	 * perderia, y el audio vale mas que la conectividad: una grabacion sin
+	 * red sigue siendo una grabacion y se sube despues. El contador se deja
+	 * como esta, asi que en cuanto se pare se reinicia en la ventana
+	 * siguiente. */
+	if (audio_is_recording()) {
+		LOG_WRN("radio: colgada, pero se esta grabando; no se reinicia");
+		return;
+	}
+
+	/* A WRN para que quede en el log de la tarjeta: en produccion
+	 * LOG_BACKEND_UART esta apagado y, si la radio esta colgada, tampoco hay
+	 * latido. Esta linea es la unica prueba de por que se reinicio. */
+	LOG_WRN("radio colgada: %d ventanas seguidas sin exito con el enlace "
+		"'arriba'. Reiniciando en frio.", wedge_bad_windows);
+	k_sleep(K_MSEC(200));   /* que el backend de fichero vacie */
+	sys_reboot(SYS_REBOOT_COLD);
+}
+#else
+static void wedge_note_window(bool any_success) { ARG_UNUSED(any_success); }
+#endif
 
 static void periodic_work_fn(struct k_work *work)
 {
 	struct storage_session_info *sessions;
 	int found;
 	bool leased = false;
+	/* Se pone en cuanto ALGO sale bien en esta ventana: el latido o una
+	 * subida. Es lo que distingue "no habia nada que hacer" de "la radio no
+	 * mueve un byte". Ver wedge_note_window(). */
+	bool any_success = false;
+	uint32_t ok_at_window_start;
 
 	ARG_UNUSED(work);
+
+	k_mutex_lock(&status_lock, K_FOREVER);
+	ok_at_window_start = status.ok_count;
+	k_mutex_unlock(&status_lock);
 
 	/* Sin endpoint no hay nada que hacer, y no se gasta radio en averiguarlo. */
 	if (config_get_upload_host()[0] == '\0' || config_get_upload_port() == 0) {
@@ -1143,6 +1219,7 @@ static void periodic_work_fn(struct k_work *work)
 
 	if (!wifi_sta_is_connected()) {
 		LOG_WRN("ventana de subida: sin enlace tras esperar, se deja para la siguiente");
+		/* any_success sigue false: no asociarse tambien es sintoma. */
 		goto release;
 	}
 
@@ -1150,7 +1227,9 @@ static void periodic_work_fn(struct k_work *work)
 	 * subir. Si solo saliera cuando hay atraso, un aparato en reposo estaria
 	 * invisible en el panel — que es justo cuando interesa saber que sigue
 	 * vivo y con cuanta bateria. */
-	post_health_inline();
+	if (post_health_inline() == 0) {
+		any_success = true;
+	}
 
 	/* Nunca por encima de una subida en curso ni de una grabacion: el hilo es
 	 * uno solo y la tarjeta esta ocupada. */
@@ -1231,6 +1310,20 @@ static void periodic_work_fn(struct k_work *work)
 			pending_session[sizeof(pending_session) - 1] = '\0';
 			upload_work_fn(NULL); /* mismo hilo: la cola ya nos serializa */
 
+			/* Si alguna subida de esta pasada termino en 2xx, la pila de
+			 * red esta viva aunque el latido hubiera fallado.
+			 *
+			 * Se compara ok_count, que es monotono desde el arranque, y NO
+			 * files_done: ese se pone a cero al empezar cada sesion
+			 * (upload_work_fn), asi que "es mayor que cero" seria cierto por
+			 * el trabajo de la sesion anterior y el detector no dispararia
+			 * nunca. */
+			k_mutex_lock(&status_lock, K_FOREVER);
+			if (status.ok_count != ok_at_window_start) {
+				any_success = true;
+			}
+			k_mutex_unlock(&status_lock);
+
 			if (!wifi_sta_is_connected()) {
 				break; /* la red se fue; no martillear el resto */
 			}
@@ -1238,7 +1331,9 @@ static void periodic_work_fn(struct k_work *work)
 
 		if (any) {
 			/* Y el latido de cierre: done/failed con los contadores. */
-			post_health_inline();
+			if (post_health_inline() == 0) {
+				any_success = true;
+			}
 		}
 	}
 
@@ -1250,6 +1345,15 @@ release:
 	 * fallo exacto del que venimos. */
 	if (leased) {
 		wifi_release("upload");
+	}
+
+	/* Despues del release a proposito: si esto decide reiniciar, la radio ya
+	 * quedo suelta y el reinicio no deja la cuenta de prestamos descuadrada.
+	 * Solo se evalua si de verdad se abrio una ventana (hubo prestamo): sin
+	 * endpoint configurado se salta por `reschedule` y no cuenta como
+	 * fallo -- no hay radio colgada, hay un aparato sin provisionar. */
+	if (leased) {
+		wedge_note_window(any_success);
 	}
 
 reschedule:
