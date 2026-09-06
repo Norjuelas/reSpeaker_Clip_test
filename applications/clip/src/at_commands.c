@@ -198,10 +198,10 @@ static int cmd_batt_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
 {
     struct clip_context *c = clip_get_context();
     bool thermal_off = false;
-    uint8_t idle_polls = 0;
+    uint32_t idle_s = 0;
     uint32_t rearms = 0;
 
-    battery_charge_gate_state(&thermal_off, &idle_polls, &rearms);
+    battery_charge_gate_state(&thermal_off, &idle_s, &rearms);
 
     int n = snprintf(response, len,
         /* current_ua: IBAT en crudo y en MICROamperios, negativo =
@@ -223,14 +223,14 @@ static int cmd_batt_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
          * definicion —esta funcionando de esa celda— y es exactamente el
          * fallo.
          *
-         * thermal_off/idle_polls/rearms: el estado del gate por software.
+         * thermal_off/idle_s/rearms: el estado del gate por software.
          * thermal_off=true significa que NO deberia estar cargando y todo va
          * bien; rearms creciendo significa que G7 sigue apareciendo aunque en
          * este instante cargue. */
         "{\"ok\":true,\"data\":{\"battery\":%u,\"charging\":%s,\"voltage\":%u,"
         "\"temp\":%d,\"current_ua\":%d,\"vbus\":%s,\"chg_status\":%u,"
         "\"chg_error\":%u,\"batt_det\":%s,\"thermal_off\":%s,"
-        "\"idle_polls\":%u,\"rearms\":%u}}",
+        "\"idle_s\":%u,\"rearms\":%u}}",
         c->status.battery_percent,
         c->status.battery_charging ? "true" : "false",
         c->status.battery_mv,
@@ -241,7 +241,7 @@ static int cmd_batt_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
         (unsigned int)c->status.chg_error,
         (c->status.chg_status & BIT(0)) ? "true" : "false",
         thermal_off ? "true" : "false",
-        (unsigned int)idle_polls,
+        (unsigned int)idle_s,
         (unsigned int)rearms);
     if (n < 0 || n >= len - 2) {
         return AT_ERR_NOMEM;

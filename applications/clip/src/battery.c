@@ -213,7 +213,26 @@ static K_MUTEX_DEFINE(battery_mutex);
 static bool last_vbus_present;
 /* Sondeos seguidos con VBUS puesto, sin corte termico y con el cargador sin
  * mostrar actividad. Ver el detector de atasco en read_and_update_locked(). */
-static uint8_t charger_idle_polls;
+/* Detector de atasco del cargador, POR TIEMPO y no por numero de sondeos.
+ *
+ * Antes era `charger_idle_polls >= 3` con el comentario "tres sondeos = tres
+ * minutos". Falso: read_and_update() tiene SEIS sitios de llamada, entre ellos
+ * el hilo de la pantalla, asi que el contador avanzaba con cada refresco —
+ * medido en el aparato, uno cada ~12 s en vez de cada 60. El detector saltaba
+ * unas cinco veces antes de lo previsto y ciclaba el cargador cada ~36 s.
+ * Visto en vivo tras la prueba de descarga: rearms paso de 3 a 4 en 90
+ * segundos.
+ *
+ * Es la misma forma que el fallo que le costo desgaste a la celda al principio
+ * de esta campana (reafirmar el cargador en cada sondeo reiniciaba el ciclo de
+ * carga una vez por minuto). La leccion, ya dos veces: cualquier cosa que
+ * escriba en el cargador se acota con un reloj, nunca contando vueltas de una
+ * funcion cuya cadencia no controlas. */
+#define CHARGER_STUCK_MS      (3 * 60 * 1000)   /* sin ver la celda para actuar */
+#define CHARGER_REARM_GAP_MS  (5 * 60 * 1000)   /* espera minima entre ciclos */
+
+static int64_t charger_idle_since;   /* 0 = no esta atascado */
+static int64_t charger_last_rearm;   /* 0 = nunca */
 /* Cuantas veces se ha tenido que reanimar el cargador desde el arranque. Se
  * publica en AT+BATT?: si crece, G7 sigue vivo aunque el aparato parezca estar
  * cargando cuando se le pregunta. */
@@ -369,14 +388,15 @@ static bool poll_vbus_status(void)
 	return val.val1 != 0;
 }
 
-void battery_charge_gate_state(bool *thermal_off, uint8_t *idle_polls,
+void battery_charge_gate_state(bool *thermal_off, uint32_t *idle_s,
 			       uint32_t *rearms)
 {
 	if (thermal_off) {
 		*thermal_off = thermal_charge_disabled;
 	}
-	if (idle_polls) {
-		*idle_polls = charger_idle_polls;
+	if (idle_s) {
+		*idle_s = (charger_idle_since == 0) ? 0U :
+			  (uint32_t)((k_uptime_get() - charger_idle_since) / 1000);
 	}
 	if (rearms) {
 		*rearms = charger_rearms;
@@ -506,16 +526,23 @@ static void read_and_update_locked(void)
 		 * `chg_status == 0` para que el sintoma quede dicho por su nombre. */
 		bool batt_detected = (chg_status & CHG_STATUS_BATT_DETECTED_MASK) != 0;
 		bool charger_idle = should_charge && !batt_detected;
+		int64_t now = k_uptime_get();
 
-		if (charger_idle) {
-			charger_idle_polls++;
-		} else {
-			charger_idle_polls = 0;
+		if (!charger_idle) {
+			charger_idle_since = 0;
+		} else if (charger_idle_since == 0) {
+			charger_idle_since = now;   /* empieza la cuenta */
 		}
 
-		/* Tres sondeos seguidos = tres minutos. Suficiente para no reaccionar
-		 * a un transitorio, y acotado para no machacar el registro. */
-		bool stuck = (charger_idle_polls >= 3);
+		/* Tres minutos de reloj: bastante para no reaccionar a un transitorio.
+		 * Y una espera minima entre ciclos, para que si el arreglo NO funciona
+		 * —como se vio tras una descarga profunda, donde hicieron falta cuatro
+		 * intentos sin efecto y lo unico que sirvio fue quitar y poner el
+		 * cable— el aparato no se quede machacando el registro del PMIC. */
+		bool stuck = (charger_idle_since != 0) &&
+			     ((now - charger_idle_since) >= CHARGER_STUCK_MS) &&
+			     ((charger_last_rearm == 0) ||
+			      ((now - charger_last_rearm) >= CHARGER_REARM_GAP_MS));
 
 		if (stuck) {
 			/* CICLO APAGADO->ENCENDIDO, no una reafirmacion.
@@ -542,6 +569,8 @@ static void read_and_update_locked(void)
 					      SENSOR_ATTR_CONFIGURATION, &off);
 			k_msleep(50);
 			charger_rearms++;
+			charger_last_rearm = now;
+			charger_idle_since = now;   /* se le da otra ventana entera */
 		}
 
 		if (decision_changed || stuck) {
@@ -561,12 +590,12 @@ static void read_and_update_locked(void)
 			} else {
 				/* A WRN: que el cargador este parado debiendo cargar es
 				 * exactamente lo que costo dias diagnosticar. */
-				LOG_WRN("PMIC sin ver la celda %u sondeos con VBUS puesto "
+				LOG_WRN("PMIC sin ver la celda %u s con VBUS puesto "
 					"(status 0x%02x, err 0x%02x) -- ciclo off/on #%u",
-					charger_idle_polls, (unsigned int)chg_status,
+					(unsigned int)((now - charger_idle_since) / 1000),
+					(unsigned int)chg_status,
 					(unsigned int)chg_error, charger_rearms);
 			}
-			charger_idle_polls = 0;
 		}
 	}
 

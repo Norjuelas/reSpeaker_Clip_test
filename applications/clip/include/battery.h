@@ -59,12 +59,15 @@ bool battery_vbus_present(void);
  *
  *   thermal_off  el latch termico por software tiene la carga apagada. Si es
  *                true, el aparato NO deberia estar cargando y todo va bien.
- *   idle_polls   sondeos seguidos con VBUS puesto y el PMIC sin ver la celda.
+ *   idle_s       SEGUNDOS que lleva con VBUS puesto y el PMIC sin ver la
+ *                celda; 0 si no lo esta. Antes era una cuenta de sondeos, y
+ *                era una unidad enganosa: read_and_update() se llama desde
+ *                seis sitios, asi que "sondeos" no equivale a minutos.
  *   rearms       ciclos apagado/encendido que se han tenido que hacer desde
  *                el arranque. Si crece, G7 sigue vivo aunque en el momento de
  *                preguntar el aparato este cargando.
  */
-void battery_charge_gate_state(bool *thermal_off, uint8_t *idle_polls,
+void battery_charge_gate_state(bool *thermal_off, uint32_t *idle_s,
 			       uint32_t *rearms);
 
 #endif /* CLIP_BATTERY_H */
