@@ -2468,8 +2468,31 @@ static int cmd_httpup_handler(struct at_cmd_ctx *ctx, char *response, size_t len
         return create_json_response(false, "Missing session_id", NULL, response, len);
     }
 
-    strncpy(session_id, ctx->args, sizeof(session_id) - 1);
-    session_id[sizeof(session_id) - 1] = '\0';
+    /* El argumento llega TAL CUAL lo escribio el cliente, comillas incluidas.
+     * Copiarlo en crudo tenia dos consecuencias, y la fea no es la visible:
+     *
+     *   - session_id son 15 bytes (14 digitos + NUL), asi que
+     *     "20260816150844" con sus comillas son 16 y strncpy cortaba a
+     *     '"2026081615084' -- un identificador que no existe, con una comilla
+     *     de primer caracter.
+     *   - y luego el formateador de abajo lo volvia a entrecomillar, saliendo
+     *     {"session":""20260816150844""}, que NO es JSON valido y rompe el
+     *     contrato {"ok":true,"data":...} que parsean todos los clientes.
+     *
+     * Se acepta con y sin comillas: AT+HTTPUP="2026..." es lo que documenta
+     * el protocolo, pero habia clientes mandandolo pelado y funcionaba de
+     * casualidad (sin comillas no habia ni truncado ni doble comilla). */
+    if (ctx->args[0] == '"') {
+        const char *cursor = ctx->args;
+
+        if (parse_quoted(&cursor, session_id, sizeof(session_id)) != 0) {
+            return create_json_response(false, "Malformed session_id",
+                                        NULL, response, len);
+        }
+    } else {
+        strncpy(session_id, ctx->args, sizeof(session_id) - 1);
+        session_id[sizeof(session_id) - 1] = '\0';
+    }
 
     ret = http_upload_session_async(session_id);
     switch (ret) {
