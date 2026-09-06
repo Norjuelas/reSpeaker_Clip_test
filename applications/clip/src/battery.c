@@ -45,6 +45,14 @@
 LOG_MODULE_REGISTER(battery, CONFIG_CLIP_LOG_LEVEL);
 
 /* Charger status bitmasks (BCHGCHARGESTATUS register) */
+/* Bit 0 de BCHGCHARGESTATUS: el PMIC ha DETECTADO una celda. Sin el, los
+ * demas bits no pueden encenderse -- no se carga lo que no se ve.
+ *
+ * Confirmado con lecturas del propio aparato: 0x09 = detectada + corriente
+ * constante (leido mientras cargaba a 120 mA), 0x03 = detectada + completa.
+ * Y 0x00, que es el fallo G7: ni siquiera detectada, con el aparato
+ * funcionando de esa misma celda y el medidor leyendole 4081 mV. */
+#define CHG_STATUS_BATT_DETECTED_MASK BIT(0)
 #define CHG_STATUS_COMPLETE_MASK BIT(1)
 #define CHG_STATUS_TRICKLE_MASK  BIT(2)
 #define CHG_STATUS_CC_MASK       BIT(3)
@@ -68,7 +76,19 @@ LOG_MODULE_REGISTER(battery, CONFIG_CLIP_LOG_LEVEL);
  * at the boundary. Defense-in-depth: HW hot threshold + this SW hysteresis. */
 #define CHARGE_STOP_TEMP_C     45.0f
 #define CHARGE_RESUME_TEMP_C   40.0f   /* 5C hysteresis */
-#define CHARGE_CURRENT_MA      220     /* matches DTS current-microamp; any non-zero re-enables */
+/* NO es una corriente. El driver de Zephyr solo mira si el valor es cero:
+ *
+ *   npm13xx_charger_attr_set(), DESIRED_CHARGING_CURRENT:
+ *     val->val1 == 0  -> EN_CLR            (apagar carga)
+ *     val->val1 != 0  -> ERR_CLR + EN_SET  (limpiar errores y encender)
+ *
+ * La corriente de verdad sale de current-microamp del DTS y la escribe
+ * npm13xx_charger_init(). El comentario anterior decia "matches DTS
+ * current-microamp" y era falso desde que el DTS bajo a 110000 para reducir
+ * el desgaste de la celda: este 220 nunca ha configurado nada. Se conserva el
+ * nombre para no tocar los sitios de uso, pero lo unico que significa es
+ * "distinto de cero". Medido: con esto en 220 el aparato carga a ~120 mA. */
+#define CHARGE_CURRENT_MA      220
 
 /* Battery model - using Nordic's preset model */
 static const struct battery_model battery_model = {
@@ -194,6 +214,10 @@ static bool last_vbus_present;
 /* Sondeos seguidos con VBUS puesto, sin corte termico y con el cargador sin
  * mostrar actividad. Ver el detector de atasco en read_and_update_locked(). */
 static uint8_t charger_idle_polls;
+/* Cuantas veces se ha tenido que reanimar el cargador desde el arranque. Se
+ * publica en AT+BATT?: si crece, G7 sigue vivo aunque el aparato parezca estar
+ * cargando cuando se le pregunta. */
+static uint32_t charger_rearms;
 /* Ultimo valor registrado del registro de error del cargador, para registrar
  * solo los cambios. 0xFF (imposible como valor inicial real) fuerza una linea
  * en el primer sondeo, para que el estado de arranque quede escrito. */
@@ -345,6 +369,20 @@ static bool poll_vbus_status(void)
 	return val.val1 != 0;
 }
 
+void battery_charge_gate_state(bool *thermal_off, uint8_t *idle_polls,
+			       uint32_t *rearms)
+{
+	if (thermal_off) {
+		*thermal_off = thermal_charge_disabled;
+	}
+	if (idle_polls) {
+		*idle_polls = charger_idle_polls;
+	}
+	if (rearms) {
+		*rearms = charger_rearms;
+	}
+}
+
 /* WiFi radio load the NPM1300 IBAT sense cannot see, in amperes.
  *
  * The nRF7002 main VDD (BUCKVBAT) taps VBAT upstream of the NPM1300, so the
@@ -461,7 +499,13 @@ static void read_and_update_locked(void)
 		};
 		bool decision_changed = (was_disabled != thermal_charge_disabled);
 		bool should_charge = !thermal_charge_disabled;
-		bool charger_idle = should_charge && (chg_status == 0);
+		/* La celda deja de estar DETECTADA, no solo de cargarse. Ver
+		 * CHG_STATUS_BATT_DETECTED_MASK: en el fallo G7 el registro entero
+		 * vale 0, o sea que el PMIC no ve la celda de la que el propio
+		 * aparato esta funcionando. Se comprueba el bit en vez de
+		 * `chg_status == 0` para que el sintoma quede dicho por su nombre. */
+		bool batt_detected = (chg_status & CHG_STATUS_BATT_DETECTED_MASK) != 0;
+		bool charger_idle = should_charge && !batt_detected;
 
 		if (charger_idle) {
 			charger_idle_polls++;
@@ -472,6 +516,33 @@ static void read_and_update_locked(void)
 		/* Tres sondeos seguidos = tres minutos. Suficiente para no reaccionar
 		 * a un transitorio, y acotado para no machacar el registro. */
 		bool stuck = (charger_idle_polls >= 3);
+
+		if (stuck) {
+			/* CICLO APAGADO->ENCENDIDO, no una reafirmacion.
+			 *
+			 * Esto es lo que fallaba. Reafirmar escribe ERR_CLR + EN_SET, y
+			 * EN_SET sobre un cargador que YA esta habilitado escribe un 1
+			 * encima de otro 1: no hay flanco. El NPM1300 lanza su rutina de
+			 * deteccion de bateria en el flanco de habilitacion, asi que sin
+			 * flanco no vuelve a mirar si hay celda -- y no se carga lo que
+			 * no se ve. Por eso reiniciar lo curaba y reafirmar no: al
+			 * arrancar, el chip parte de cero y el EN_SET de
+			 * npm13xx_charger_init() SI es un 0->1 de verdad.
+			 *
+			 * Escribir cero primero (EN_CLR) y luego distinto de cero
+			 * reconstruye ese flanco sin reiniciar el aparato.
+			 *
+			 * Solo se hace estando atascado, nunca durante una carga sana:
+			 * la condicion es que el PMIC lleve tres sondeos sin ver la
+			 * celda, o sea que no hay ninguna carga que interrumpir. */
+			struct sensor_value off = { .val1 = 0, .val2 = 0 };
+
+			(void)sensor_attr_set(charger_dev,
+					      SENSOR_CHAN_GAUGE_DESIRED_CHARGING_CURRENT,
+					      SENSOR_ATTR_CONFIGURATION, &off);
+			k_msleep(50);
+			charger_rearms++;
+		}
 
 		if (decision_changed || stuck) {
 			if (sensor_attr_set(charger_dev,
@@ -490,10 +561,10 @@ static void read_and_update_locked(void)
 			} else {
 				/* A WRN: que el cargador este parado debiendo cargar es
 				 * exactamente lo que costo dias diagnosticar. */
-				LOG_WRN("cargador parado %u sondeos con VBUS puesto "
-					"(status 0x%02x, err 0x%02x) -- se rearma",
+				LOG_WRN("PMIC sin ver la celda %u sondeos con VBUS puesto "
+					"(status 0x%02x, err 0x%02x) -- ciclo off/on #%u",
 					charger_idle_polls, (unsigned int)chg_status,
-					(unsigned int)chg_error);
+					(unsigned int)chg_error, charger_rearms);
 			}
 			charger_idle_polls = 0;
 		}

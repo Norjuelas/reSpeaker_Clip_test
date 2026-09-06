@@ -50,4 +50,21 @@ void battery_save_fg_state(void);
  */
 bool battery_vbus_present(void);
 
+/**
+ * @brief Estado interno del gate de carga, para diagnosticar G7 por cable.
+ *
+ * Tres numeros que hasta ahora habia que deducir del log de la tarjeta — que
+ * en produccion es la unica salida y se lee como una foto vieja mientras el
+ * aparato la usa. Con esto, "no esta cargando" se resuelve en una consulta:
+ *
+ *   thermal_off  el latch termico por software tiene la carga apagada. Si es
+ *                true, el aparato NO deberia estar cargando y todo va bien.
+ *   idle_polls   sondeos seguidos con VBUS puesto y el PMIC sin ver la celda.
+ *   rearms       ciclos apagado/encendido que se han tenido que hacer desde
+ *                el arranque. Si crece, G7 sigue vivo aunque en el momento de
+ *                preguntar el aparato este cargando.
+ */
+void battery_charge_gate_state(bool *thermal_off, uint8_t *idle_polls,
+			       uint32_t *rearms);
+
 #endif /* CLIP_BATTERY_H */

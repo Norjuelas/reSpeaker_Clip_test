@@ -197,6 +197,12 @@ static bool is_valid_download_filename(const char *filename)
 static int cmd_batt_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
 {
     struct clip_context *c = clip_get_context();
+    bool thermal_off = false;
+    uint8_t idle_polls = 0;
+    uint32_t rearms = 0;
+
+    battery_charge_gate_state(&thermal_off, &idle_polls, &rearms);
+
     int n = snprintf(response, len,
         /* current_ua: IBAT en crudo y en MICROamperios, negativo =
          * descargando. En mA los 170 uA de reposo se redondeaban a 0, que es
@@ -207,10 +213,24 @@ static int cmd_batt_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
          * aparato que "no carga" se diagnostica por cable: vbus=false es un
          * problema de deteccion, chg_error!=0 es un error enganchado que
          * bloquea la carga, y vbus=true con error 0 y status 0 apunta al
-         * gate termico. Ver clip.h. */
+         * gate termico. Ver clip.h.
+         *
+         * batt_det: bit 0 de chg_status, o sea si el PMIC VE la celda. Se
+         * saca aparte porque es la clave de G7 y leerlo del hexadecimal
+         * invita a equivocarse: status 0x09 (detectada + corriente constante)
+         * y status 0x00 se parecen poco hasta que sabes que mirar. Un
+         * batt_det=false con el aparato encendido es contradictorio por
+         * definicion —esta funcionando de esa celda— y es exactamente el
+         * fallo.
+         *
+         * thermal_off/idle_polls/rearms: el estado del gate por software.
+         * thermal_off=true significa que NO deberia estar cargando y todo va
+         * bien; rearms creciendo significa que G7 sigue apareciendo aunque en
+         * este instante cargue. */
         "{\"ok\":true,\"data\":{\"battery\":%u,\"charging\":%s,\"voltage\":%u,"
         "\"temp\":%d,\"current_ua\":%d,\"vbus\":%s,\"chg_status\":%u,"
-        "\"chg_error\":%u}}",
+        "\"chg_error\":%u,\"batt_det\":%s,\"thermal_off\":%s,"
+        "\"idle_polls\":%u,\"rearms\":%u}}",
         c->status.battery_percent,
         c->status.battery_charging ? "true" : "false",
         c->status.battery_mv,
@@ -218,7 +238,11 @@ static int cmd_batt_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
         c->status.battery_ua,
         c->status.vbus_present ? "true" : "false",
         (unsigned int)c->status.chg_status,
-        (unsigned int)c->status.chg_error);
+        (unsigned int)c->status.chg_error,
+        (c->status.chg_status & BIT(0)) ? "true" : "false",
+        thermal_off ? "true" : "false",
+        (unsigned int)idle_polls,
+        (unsigned int)rearms);
     if (n < 0 || n >= len - 2) {
         return AT_ERR_NOMEM;
     }
