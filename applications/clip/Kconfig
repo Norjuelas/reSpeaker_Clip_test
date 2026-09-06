@@ -755,6 +755,45 @@ config CLIP_UPLOAD_ON_STOP_DELAY_S
 	  10 s cierran ese hueco con holgura y caben de sobra dentro del margen
 	  de 45 s de la radio, asi que el barrido sigue encontrandola encendida.
 
+config CLIP_UPLOAD_SEND_CHUNK
+	int "Bytes por trozo al enviar el cuerpo de una subida"
+	default 4096
+	range 512 8192
+	help
+	  Tamano del buffer que payload_cb lee de la tarjeta y entrega a
+	  zsock_send(). Sale del heap y solo vive mientras dura una subida.
+
+	  POR QUE 4096 Y NO 1024. Medido el 2026-09-05 con tres caminos:
+
+	    portatil -> EC2 ...... 350 KB/s
+	    device   -> receptor LAN  83 KB/s
+	    device   -> EC2 .......... 25 KB/s
+
+	  El portatil descarta el servidor, nginx, el disco y el camino WAN: los
+	  350 KB/s salen por el MISMO AP y el MISMO TLS 1.2 que usa el device. O
+	  sea que las dos cifras del device son defecto nuestro, y son DOS
+	  defectos distintos:
+
+	    - En LAN el retardo de red es despreciable y aun asi son 12 ms por
+	      cada KB. Eso es coste POR TROZO: fs_read() por FAT, descifrado del
+	      audio en reposo, registro TLS y llamada al sistema, mil veces por
+	      megabyte.
+	    - Contra EC2 el RTT son 150 ms medidos, y el caudal cae a 25 KB/s.
+	      Multiplicando, el device solo mantiene ~3,7 KB en vuelo. El
+	      portatil mantiene ~52 KB por el mismo camino.
+
+	  Subir el trozo ataca las dos cosas a la vez: divide entre cuatro el
+	  numero de trozos (y con el, el coste por trozo), y entrega a TCP
+	  cuatro veces mas datos de una vez.
+
+	  4096 y no mas porque es exactamente MBEDTLS_SSL_OUT_CONTENT_LEN: un
+	  trozo entra en UN registro TLS. Pasarse obliga a mbedTLS a partirlo y
+	  se pierde la mitad de la ventaja.
+
+	  Que mirar para saber si funciono: last_read_ms contra last_send_ms en
+	  AT+HTTPUP?. Si domina read, el cuello esta en la tarjeta y este simbolo
+	  no es la palanca. Si domina send, esta en la red.
+
 config CLIP_UDP_TRANSPORT
 	bool "Transporte UDP: canal AT por red y descarga de audio"
 	default n

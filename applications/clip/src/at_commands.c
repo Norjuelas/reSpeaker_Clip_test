@@ -2400,11 +2400,12 @@ static int cmd_httpup_handler(struct at_cmd_ctx *ctx, char *response, size_t len
      */
     char session_id[STORAGE_SESSION_ID_LEN];
     struct http_upload_status st;
-    /* 448: con los contadores y los tiempos, los 224 de antes se pasaban y
+    /* 512: con los contadores y los tiempos, los 224 de antes se pasaban y
      * snprintf trunca en silencio -- saldria un JSON invalido y el cliente lo
-     * descartaria sin decir por que. Caben: create_json_response() envuelve
-     * esto en unos 25 bytes mas y CLIP_AT_MAX_RESPONSE_LEN son 1024. */
-    char data[448];
+     * descartaria sin decir por que. Subio de 448 al anadir read_ms/send_ms/
+     * chunk. Caben: create_json_response() envuelve esto en unos 25 bytes mas
+     * y CLIP_AT_MAX_RESPONSE_LEN son 1024. El corte se comprueba abajo. */
+    char data[512];
     int ret;
 
     if (ctx->type == AT_CMD_TYPE_TEST || ctx->type == AT_CMD_TYPE_READ) {
@@ -2414,13 +2415,16 @@ static int cmd_httpup_handler(struct at_cmd_ctx *ctx, char *response, size_t len
          * justo lo que falta cuando se esta depurando una subida. Y el
          * desglose conn/xfer es lo que convierte "tarda mucho" en un numero:
          * si manda conn_ms, el arreglo es reutilizar la conexion (hay un
-         * handshake TLS POR FICHERO); si manda xfer_ms, esta en SEND_CHUNK o
-         * en el enlace. */
+         * handshake TLS POR FICHERO); si manda xfer_ms, hay que bajar un nivel
+         * mas -- y para eso estan read_ms y send_ms, que parten xfer_ms en
+         * tarjeta y red. Sin ese segundo reparto, "esta en SEND_CHUNK o en el
+         * enlace" era una disyuntiva que no se podia resolver. */
         int n = snprintf(data, sizeof(data),
                  "{\"state\":\"%s\",\"session\":\"%s\",\"files_done\":%u,"
                  "\"files_total\":%u,\"bytes\":%u,\"error\":%d,\"stack_free\":%u,"
                  "\"kbps\":%u,\"ok\":%u,\"fail\":%u,\"pending\":%u,"
                  "\"connect_ms\":%u,\"transfer_ms\":%u,\"session_ms\":%u,"
+                 "\"read_ms\":%u,\"send_ms\":%u,\"chunk\":%u,"
                  "\"beat_err\":%d,\"beat_age_s\":%d,"
                  "\"conn_ret\":%d,\"conn_errno\":%d,"
                  "\"fail_stage\":%d,\"fail_heap\":%u}",
@@ -2433,6 +2437,17 @@ static int cmd_httpup_handler(struct at_cmd_ctx *ctx, char *response, size_t len
                  (unsigned int)st.last_connect_ms,
                  (unsigned int)st.last_transfer_ms,
                  (unsigned int)st.last_session_ms,
+                 /* El reparto de transfer_ms. Es lo que dice DONDE se pierde
+                  * el caudal: read = tarjeta, send = red/TLS. Medido el
+                  * 2026-09-05, el portatil sube a EC2 a 350 KB/s por el mismo
+                  * AP y el mismo TLS que el device usa a 25 KB/s, asi que el
+                  * cuello es nuestro y estas dos cifras lo localizan.
+                  * chunk va al lado a proposito: sin saber con que tamano se
+                  * midio, los otros dos numeros no se pueden comparar entre
+                  * imagenes. */
+                 (unsigned int)st.last_read_ms,
+                 (unsigned int)st.last_send_ms,
+                 (unsigned int)CONFIG_CLIP_UPLOAD_SEND_CHUNK,
                  /* beat_err: 0 = el ultimo latido llego al servicio.
                   * beat_age_s: segundos desde el ultimo que llego, -1 si
                   * ninguno. Juntos contestan "¿esta hablando con el servicio?"

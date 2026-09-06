@@ -66,6 +66,25 @@ struct http_upload_status {
 	uint32_t last_transfer_ms;
 	uint32_t last_session_ms;
 
+	/* El reparto DENTRO de last_transfer_ms, que es lo que faltaba para
+	 * poder arreglarlo en vez de adivinarlo:
+	 *
+	 * last_read_ms: tiempo dentro de fs_read() — tarjeta, FAT, SPI.
+	 * last_send_ms: tiempo dentro de zsock_send() — TLS y red.
+	 *
+	 * No suman transfer_ms: fuera quedan las cabeceras, la respuesta y lo
+	 * que tarde el cliente HTTP entre trozo y trozo. Lo que importa es cual
+	 * de los dos domina, no que cuadren.
+	 *
+	 * Regla de lectura: si domina read, el cuello es la tarjeta y subir
+	 * SEND_CHUNK no arregla nada; si domina send, es la red o el registro
+	 * TLS. Medido el 2026-09-05, el device hace 83 KB/s contra un receptor
+	 * en la LAN mientras el portatil hace 350 KB/s contra EC2 por el mismo
+	 * AP — o sea que el device pierde caudal en los dos caminos y estas dos
+	 * cifras dicen donde. */
+	uint32_t last_read_ms;
+	uint32_t last_send_ms;
+
 	/* El ultimo fallo de conexion, con los DOS numeros separados.
 	 *
 	 * zsock_connect mezcla dos convenciones: un socket normal devuelve -1 y

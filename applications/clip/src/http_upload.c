@@ -43,7 +43,9 @@ LOG_MODULE_REGISTER(http_upload, CONFIG_CLIP_LOG_LEVEL);
 
 /* Enough for the response headers; the body we get back is a short status. */
 #define RECV_BUF_SIZE   512
-#define SEND_CHUNK      1024
+/* Trozo de lectura/envio del cuerpo. Kconfig y no literal para poder medir el
+ * A/B sin tocar codigo; el porque del valor esta en CLIP_UPLOAD_SEND_CHUNK. */
+#define SEND_CHUNK      CONFIG_CLIP_UPLOAD_SEND_CHUNK
 /* Plazo de la peticion HTTP. Fijo ya no sirve, y ese era el fallo.
  *
  * Estaba en 15.000 ms planos, y un trozo de grabacion son ~1,2 MB (5 minutos a
@@ -231,6 +233,15 @@ struct upload_ctx {
 	char *rsp;
 	size_t rsp_max;
 	size_t rsp_len;
+
+	/* Reparto del tiempo del cuerpo, en ciclos de CPU. En milisegundos no
+	 * vale: cada operacion suelta esta por debajo de la resolucion de
+	 * k_uptime_get(), y el reparto es justo lo que hay que ver. Se acumulan
+	 * en 64 bits y se convierten al final; los deltas de 32 bits son
+	 * seguros aunque el contador de ciclos de vuelta (a 128 MHz da la
+	 * vuelta cada ~33 s y una operacion no dura tanto). */
+	uint64_t read_cyc;
+	uint64_t send_cyc;
 };
 
 static char device_id[17];
@@ -266,7 +277,10 @@ static int payload_cb(int sock, struct http_request *req, void *user_data)
 
 	while (ctx->remaining > 0) {
 		size_t want = MIN(ctx->remaining, (size_t)SEND_CHUNK);
+		uint32_t t_read = k_cycle_get_32();
 		ssize_t got = fs_read(ctx->file, ctx->chunk, want);
+
+		ctx->read_cyc += (uint32_t)(k_cycle_get_32() - t_read);
 
 		if (got <= 0) {
 			LOG_ERR("Read failed with %u bytes left: %d",
@@ -282,8 +296,11 @@ static int payload_cb(int sock, struct http_request *req, void *user_data)
 		size_t off = 0;
 
 		while (off < (size_t)got) {
+			uint32_t t_send = k_cycle_get_32();
 			int sent = zsock_send(sock, ctx->chunk + off,
 					      (size_t)got - off, 0);
+
+			ctx->send_cyc += (uint32_t)(k_cycle_get_32() - t_send);
 
 			if (sent <= 0) {
 				LOG_ERR("send stalled at %u/%u of the chunk: %d",
@@ -521,7 +538,8 @@ static int connect_to_endpoint(const char *host, uint16_t port)
  * la llama con NULL, para no obligar a los llamantes que no miden. */
 static int upload_file_timed(const char *session_id, const char *filename,
 			     const char *path, size_t size,
-			     uint32_t *connect_ms, uint32_t *transfer_ms)
+			     uint32_t *connect_ms, uint32_t *transfer_ms,
+			     uint32_t *read_ms, uint32_t *send_ms)
 {
 	const char *host = config_get_upload_host();
 	uint16_t port = config_get_upload_port();
@@ -626,12 +644,24 @@ static int upload_file_timed(const char *session_id, const char *filename,
 		goto out;
 	}
 
+	/* Reparto del cuerpo: de los transfer_ms, cuanto fue tarjeta y cuanto
+	 * fue red. Es lo que decide si SEND_CHUNK es la palanca o no lo es. */
+	if (read_ms) {
+		*read_ms = (uint32_t)k_cyc_to_ms_floor64(ctx.read_cyc);
+	}
+	if (send_ms) {
+		*send_ms = (uint32_t)k_cyc_to_ms_floor64(ctx.send_cyc);
+	}
+
 	/* A WRN para que el desglose llegue al log de la tarjeta en produccion:
 	 * sin red no hay latido, y entonces esta linea es lo unico que queda. */
-	LOG_WRN("uploaded %s (%u bytes) -> HTTP %d [conn %u ms + xfer %u ms]",
+	LOG_WRN("uploaded %s (%u bytes) -> HTTP %d "
+		"[conn %u ms + xfer %u ms = lee %u + envia %u]",
 		filename, (unsigned int)size, ctx.status,
 		(unsigned int)(connect_ms ? *connect_ms : 0),
-		(unsigned int)(transfer_ms ? *transfer_ms : 0));
+		(unsigned int)(transfer_ms ? *transfer_ms : 0),
+		(unsigned int)(read_ms ? *read_ms : 0),
+		(unsigned int)(send_ms ? *send_ms : 0));
 	ret = 0;
 
 out:
@@ -648,7 +678,8 @@ out:
 int http_upload_file(const char *session_id, const char *filename,
 		     const char *path, size_t size)
 {
-	return upload_file_timed(session_id, filename, path, size, NULL, NULL);
+	return upload_file_timed(session_id, filename, path, size,
+				 NULL, NULL, NULL, NULL);
 }
 
 /* A POST whose body is already in memory. The audio path streams from the SD
@@ -940,9 +971,11 @@ static void upload_work_fn(struct k_work *work)
 
 		uint32_t conn_ms = 0;
 		uint32_t xfer_ms = 0;
+		uint32_t read_ms = 0;
+		uint32_t send_ms = 0;
 
 		err = upload_file_timed(session_id, name, path, (size_t)st.size,
-					&conn_ms, &xfer_ms);
+					&conn_ms, &xfer_ms, &read_ms, &send_ms);
 		if (err) {
 			LOG_ERR("%s: file %u of %u failed: %d", session_id,
 				(unsigned int)idx, (unsigned int)file_count, err);
@@ -989,6 +1022,8 @@ static void upload_work_fn(struct k_work *work)
 			status.ok_count++;
 			status.last_connect_ms = conn_ms;
 			status.last_transfer_ms = xfer_ms;
+			status.last_read_ms = read_ms;
+			status.last_send_ms = send_ms;
 			/* Sobre xfer_ms, no sobre el total: con el handshake dentro
 			 * esto no era una velocidad. Ver http_upload.h. */
 			if (xfer_ms > 0) {
