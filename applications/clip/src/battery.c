@@ -606,25 +606,67 @@ static void read_and_update_locked(void)
 			      ((now - charger_last_rearm) >= CHARGER_REARM_GAP_MS));
 
 		if (stuck) {
-			/* CICLO APAGADO->ENCENDIDO, no una reafirmacion.
+			/* Reanimacion del cargador. DOS intentos, y hay que leer con
+			 * cuidado lo que se sabe de cada uno.
 			 *
-			 * Esto es lo que fallaba. Reafirmar escribe ERR_CLR + EN_SET, y
-			 * EN_SET sobre un cargador que YA esta habilitado escribe un 1
-			 * encima de otro 1: no hay flanco. El NPM1300 lanza su rutina de
-			 * deteccion de bateria en el flanco de habilitacion, asi que sin
-			 * flanco no vuelve a mirar si hay celda -- y no se carga lo que
-			 * no se ve. Por eso reiniciar lo curaba y reafirmar no: al
-			 * arrancar, el chip parte de cero y el EN_SET de
-			 * npm13xx_charger_init() SI es un 0->1 de verdad.
+			 * LO QUE YA SE PROBO Y NO FUNCIONA. Se penso que bastaba con un
+			 * flanco de habilitacion: reafirmar escribe ERR_CLR + EN_SET, y
+			 * EN_SET sobre un cargador YA habilitado escribe un 1 encima de
+			 * otro 1, sin flanco; el NPM1300 lanza su deteccion de bateria en
+			 * el flanco. La teoria era buena y es FALSA. Medido el 2026-09-07
+			 * sobre una ocurrencia en vivo al 90% de carga:
 			 *
-			 * Escribir cero primero (EN_CLR) y luego distinto de cero
-			 * reconstruye ese flanco sin reiniciar el aparato.
+			 *   ciclo EN_CLR -> EN_SET desde aqui ....... NO recupera
+			 *   reinicio del MCU (re-init entero del driver) NO recupera
+			 *   quitar y poner el cable ................. SI recupera
 			 *
-			 * Solo se hace estando atascado, nunca durante una carga sana:
-			 * la condicion es que el PMIC lleve tres sondeos sin ver la
-			 * celda, o sea que no hay ninguna carga que interrumpir. */
+			 * O sea que el reinicio TAMPOCO lo arregla, en contra de lo que
+			 * decia el backlog y mi propio mensaje de commit. Y un reinicio
+			 * reescribe todos los registros de configuracion del cargador
+			 * (umbrales NTC, VTERM, ISET, IBAT_EN, TASK_AUTO) y hace un EN_SET
+			 * en frio. Nada de eso vale: el bloque del cargador queda en un
+			 * estado que solo limpia una transicion de VBUS.
+			 *
+			 * LO QUE SE INTENTA AHORA. La unica palanca cercana a VBUS que el
+			 * driver expone es el limite de corriente de entrada:
+			 * attr_set(SENSOR_CHAN_CURRENT) escribe VBUS_ILIM y luego
+			 * ILIMUPDATE, y el propio driver documenta que ILIMUPDATE "se
+			 * reinicia automaticamente al quitar el USB" -- o sea que cuelga
+			 * de la maquina de estados de VBUS, que es justo lo que recupera
+			 * esto. Se baja el limite al minimo (100 mA) y se devuelve al del
+			 * DTS, forzando dos ILIMUPDATE.
+			 *
+			 * NO es equivalente a quitar el cable y puede no servir. Si no
+			 * sirve, no queda nada en el firmware: hay que avisar al usuario
+			 * de que reasiente el aparato, porque los pogo pins son el unico
+			 * interruptor de VBUS que hay.
+			 *
+			 * Bajar el limite 50 ms es seguro aqui: en este estado el aparato
+			 * ya se esta alimentando de la celda (se mide la descarga), asi
+			 * que no hay nada que quitarle a VBUS.
+			 *
+			 * Todo esto solo estando atascado, nunca durante una carga sana:
+			 * la condicion es que el PMIC lleve tres minutos sin ver la celda,
+			 * o sea que no hay ninguna carga que interrumpir. */
+			struct sensor_value ilim_min = { .val1 = 0, .val2 = 100000 };
+			struct sensor_value ilim_dts = {
+				.val1 = 0,
+				.val2 = DT_PROP(DT_NODELABEL(npm1300_charger),
+						vbus_limit_microamp),
+			};
 			struct sensor_value off = { .val1 = 0, .val2 = 0 };
 
+			/* 1. Renegociar el limite de VBUS. */
+			(void)sensor_attr_set(charger_dev, SENSOR_CHAN_CURRENT,
+					      SENSOR_ATTR_CONFIGURATION, &ilim_min);
+			k_msleep(50);
+			(void)sensor_attr_set(charger_dev, SENSOR_CHAN_CURRENT,
+					      SENSOR_ATTR_CONFIGURATION, &ilim_dts);
+			k_msleep(50);
+
+			/* 2. Y el flanco de habilitacion, que por si solo no basta pero
+			 *    tampoco estorba: deja el cargador habilitado y los errores
+			 *    limpios para cuando la deteccion vuelva. */
 			(void)sensor_attr_set(charger_dev,
 					      SENSOR_CHAN_GAUGE_DESIRED_CHARGING_CURRENT,
 					      SENSOR_ATTR_CONFIGURATION, &off);

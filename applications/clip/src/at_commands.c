@@ -226,7 +226,14 @@ static int cmd_batt_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
          * thermal_off/idle_s/rearms: el estado del gate por software.
          * thermal_off=true significa que NO deberia estar cargando y todo va
          * bien; rearms creciendo significa que G7 sigue apareciendo aunque en
-         * este instante cargue. */
+         * este instante cargue.
+         *
+         * Y rearms creciendo NO quiere decir que se haya recuperado. Medido el
+         * 2026-09-07 sobre una ocurrencia en vivo al 90%: ni el ciclo de
+         * habilitacion del cargador ni un reinicio completo del MCU devuelven
+         * la deteccion; lo unico que sirvio fue quitar y poner el cable. Si se
+         * ve batt_det=false con rearms subiendo, el aparato necesita que
+         * alguien lo reasiente. */
         "{\"ok\":true,\"data\":{\"battery\":%u,\"charging\":%s,\"voltage\":%u,"
         "\"temp\":%d,\"current_ua\":%d,\"vbus\":%s,\"chg_status\":%u,"
         "\"chg_error\":%u,\"batt_det\":%s,\"thermal_off\":%s,"

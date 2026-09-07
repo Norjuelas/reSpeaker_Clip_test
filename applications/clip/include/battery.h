@@ -63,9 +63,12 @@ bool battery_vbus_present(void);
  *                celda; 0 si no lo esta. Antes era una cuenta de sondeos, y
  *                era una unidad enganosa: read_and_update() se llama desde
  *                seis sitios, asi que "sondeos" no equivale a minutos.
- *   rearms       ciclos apagado/encendido que se han tenido que hacer desde
- *                el arranque. Si crece, G7 sigue vivo aunque en el momento de
- *                preguntar el aparato este cargando.
+ *   rearms       intentos de reanimacion del cargador desde el arranque. Si
+ *                crece, G7 sigue vivo aunque en el momento de preguntar el
+ *                aparato este cargando. OJO: que crezca NO significa que se
+ *                haya arreglado nada -- medido el 2026-09-07, ni el ciclo de
+ *                habilitacion ni un reinicio del MCU recuperan este fallo;
+ *                solo quitar y poner el cable. Ver battery.c.
  */
 void battery_charge_gate_state(bool *thermal_off, uint32_t *idle_s,
 			       uint32_t *rearms);
