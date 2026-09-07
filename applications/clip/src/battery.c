@@ -231,6 +231,9 @@ static bool last_vbus_present;
 #define CHARGER_STUCK_MS      (3 * 60 * 1000)   /* sin ver la celda para actuar */
 #define CHARGER_REARM_GAP_MS  (5 * 60 * 1000)   /* espera minima entre ciclos */
 
+/* Cuando empezo la celda a estar por debajo del suelo. 0 = no lo esta. */
+static int64_t low_voltage_since;
+
 static int64_t charger_idle_since;   /* 0 = no esta atascado */
 static int64_t charger_last_rearm;   /* 0 = nunca */
 /* Cuantas veces se ha tenido que reanimar el cargador desde el arranque. Se
@@ -474,6 +477,64 @@ static void read_and_update_locked(void)
 	/* Get VBUS status */
 	vbus_connected = poll_vbus_status();
 	last_vbus_present = vbus_connected;
+
+#if CONFIG_CLIP_BATTERY_CUTOFF_MV > 0
+	/* ---- Suelo de la celda ----
+	 *
+	 * Sin esto la celda no tiene fondo. Medido el 2026-09-06: el aparato
+	 * grabo 3 h 40 min y siguio hasta que el PMIC corto por subtension; se
+	 * encontro a 2846 mV y BAJANDO, y sin haber guardado el estado del
+	 * medidor.
+	 *
+	 * Por VOLTAJE y no por estado de carga. La version anterior de esto se
+	 * quito precisamente porque decidia por SoC ("unreliable SoC during PMIC
+	 * I2C failures caused false shutdowns / boot loops"), y el SoC es la
+	 * salida de un modelo -- que ademas miente al alza mientras la radio esta
+	 * encendida, porque wifi_load_estimate_a() consulta wifi_ap_is_running(),
+	 * compilado fuera. El voltaje es una lectura directa del ADC.
+	 *
+	 * Y con reloj, no con cuenta de lecturas: read_and_update() tiene seis
+	 * llamantes y en el aparato entra una cada ~12 s, no cada 60. Contar
+	 * lecturas ya salio mal dos veces en esta campana.
+	 *
+	 * Solo sin VBUS. Con el cable puesto, entrar en modo barco es pedir un
+	 * bucle: el NPM1300 despierta con VBUS presente. Eso deja SIN cubrir el
+	 * caso de la descarga profunda —cable puesto, cargador que no ve la celda
+	 * y bateria bajando—, que no se arregla apagando sino ciclando VBUS, y eso
+	 * el firmware no puede hacerlo.
+	 */
+	{
+		uint32_t mv = (uint32_t)(voltage * 1000.0f);
+		bool low = !vbus_connected &&
+			   (mv < (uint32_t)CONFIG_CLIP_BATTERY_CUTOFF_MV);
+		int64_t now = k_uptime_get();
+
+		if (!low) {
+			low_voltage_since = 0;
+		} else {
+			if (low_voltage_since == 0) {
+				low_voltage_since = now;
+				LOG_WRN("celda a %u mV, por debajo de %d: si aguanta %d s "
+					"el aparato se apaga solo",
+					mv, CONFIG_CLIP_BATTERY_CUTOFF_MV,
+					CONFIG_CLIP_BATTERY_CUTOFF_HOLD_S);
+			} else if ((now - low_voltage_since) >=
+				   (CONFIG_CLIP_BATTERY_CUTOFF_HOLD_S * 1000)) {
+				/* A WRN: en produccion el log de la tarjeta es la unica
+				 * prueba de por que se apago un aparato. */
+				LOG_WRN("celda a %u mV durante %d s: apagando para no "
+					"seguir vaciandola", mv,
+					CONFIG_CLIP_BATTERY_CUTOFF_HOLD_S);
+				/* POWER_OFF_EXEC ya hace lo correcto y en orden: cancela
+				 * transferencia, para la grabacion con margen (CIERRA el
+				 * trozo en vez de perderlo), vibra doble, guarda el estado
+				 * del medidor y entra en modo barco. */
+				low_voltage_since = 0;   /* no repetir el disparo */
+				clip_post_event(CLIP_EVENT_POWER_OFF_EXEC);
+			}
+		}
+	}
+#endif
 
 	/* ---- High-temperature charge gating (software hysteresis) ----
 	 * The HW hot threshold (45C, thermistor-hot-millidegrees in DTS)

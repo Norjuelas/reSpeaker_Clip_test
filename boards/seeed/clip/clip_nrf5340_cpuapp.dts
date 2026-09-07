@@ -312,7 +312,13 @@
 		segment-offset = <0>;
 		page-offset = <1>;  /* +1 page (8 pixels) to center content visually */
 		display-offset = <0>;  /* Hardware COM start from 0 */
-		multiplex-ratio = <63>;  /* Activate all 64 COM lines */
+		/* 47 y no 63: el panel tiene 48 filas (height arriba) y el CH1115
+		 * puede manejar 64. Con 63 se conducian las 64 lineas COM, o sea 16
+		 * con nada encima -- carga de la bomba de carga tirada, alrededor de
+		 * un 25% del consumo del panel, para pintar filas que no existen.
+		 * Si esto queda mal, se ve en la pantalla al instante: imagen
+		 * desplazada o partida. */
+		multiplex-ratio = <47>;
 		prechargep = <0x22>;
 		segment-remap = <0>;
 		com-invdir = <0>;

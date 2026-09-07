@@ -755,6 +755,62 @@ config CLIP_UPLOAD_ON_STOP_DELAY_S
 	  10 s cierran ese hueco con holgura y caben de sobra dentro del margen
 	  de 45 s de la radio, asi que el barrido sigue encontrandola encendida.
 
+config CLIP_BATTERY_CUTOFF_MV
+	int "Milivoltios por debajo de los cuales el aparato se apaga solo (0 = nunca)"
+	default 3300
+	range 0 3600
+	help
+	  HISTORIA. Esto EXISTIO y se quito. El comentario de battery.c lo dice:
+	  "Low-battery auto-shutdown removed -- unreliable SoC during PMIC I2C
+	  failures caused false shutdowns / boot loops". O sea que la version
+	  anterior decidia por el ESTADO DE CARGA (SoC), y el SoC es la salida de
+	  un modelo: una lectura I2C mala lo tiraba y el aparato se apagaba solo o
+	  entraba en bucle de arranque.
+
+	  POR QUE VUELVE, Y DISTINTO. Sin esto la celda no tiene suelo. Medido en
+	  la prueba de descarga del 2026-09-06: el aparato grabo 3 h 40 min y
+	  siguio hasta que el PMIC corto por subtension. Se encontro a 2846 mV y
+	  BAJANDO, muy por debajo de donde una celda de litio deberia llegar, y sin
+	  guardar el estado del medidor. Ademas el SoC miente al alza mientras la
+	  radio esta encendida, porque wifi_load_estimate_a() consulta
+	  wifi_ap_is_running(), que esta compilado fuera.
+
+	  LA DIFERENCIA: esto decide por VOLTAJE, que es una lectura directa del
+	  ADC, no la salida de un modelo. Es justo el numero que el fallo anterior
+	  no podia usar.
+
+	  3300 mV: con holgura por encima de los 2846 medidos y con holgura por
+	  debajo del funcionamiento normal (bajo carga de radio la celda hace
+	  hoyos, y por eso hay tiempo de retencion abajo).
+
+	  QUE PASA AL DISPARARSE: se reutiliza CLIP_EVENT_POWER_OFF_EXEC entero,
+	  que ya hace lo correcto y en el orden correcto -- cancela transferencia,
+	  para la grabacion con margen (o sea que CIERRA el trozo en curso en vez
+	  de perderlo), vibra doble, guarda el estado del medidor y entra en modo
+	  barco.
+
+	  LO QUE NO HACE: no intenta subir el ultimo trozo. Encender la radio a
+	  3,3 V es justo lo que no conviene. El trozo queda cerrado y sin marcar en
+	  la tarjeta, asi que se sube en el siguiente arranque.
+
+	  0 lo desactiva y se vuelve al comportamiento de hoy (sin suelo).
+
+config CLIP_BATTERY_CUTOFF_HOLD_S
+	int "Segundos que el voltaje bajo tiene que mantenerse antes de apagar"
+	depends on CLIP_BATTERY_CUTOFF_MV > 0
+	default 30
+	range 5 300
+	help
+	  Antirrebote. Una sola lectura baja no apaga nada: apagarse por un fallo
+	  de I2C es EL fallo por el que se quito la version anterior.
+
+	  Por TIEMPO y no por numero de lecturas, a proposito. read_and_update()
+	  tiene seis sitios de llamada -- entre ellos el hilo de la pantalla --,
+	  asi que "tres lecturas" no equivale a ningun intervalo concreto: se midio
+	  una cada ~12 s en vez de cada 60. Contar lecturas ya salio mal dos veces
+	  en esta campana (el rearme del cargador y su detector de atasco). Con un
+	  reloj no importa quien llame ni con que frecuencia.
+
 config CLIP_WIFI_WEDGE_RECOVERY
 	bool "Reiniciar si la radio se queda colgada con el enlace 'arriba'"
 	depends on NRF70_STA_MODE && REBOOT
