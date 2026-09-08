@@ -607,6 +607,12 @@ config CLIP_WIFI_HOLD_WHILE_RECORDING
 	  LO QUE CUESTA, y hay que aceptarlo:
 	    - VISIBILIDAD. El latido solo sale dentro de las ventanas, asi que
 	      grabando el panel ve el aparato cada ~15 min en vez de cada 5.
+	      La CONFIRMACION DE ARRANQUE si se conserva: con este simbolo en 'n',
+	      START pide y suelta la radio en el acto (clip_event.c) para que el
+	      latido de arranque salga con enlace. Sin eso se descartaba en
+	      silencio -- health.c se salta la vuelta si no hay enlace -- y la
+	      primera senal de que un aparato esta grabando tardaba hasta ~16 min.
+	      Cuesta una asociacion por grabacion, ~0,1% de ciclo de trabajo.
 	    - LATENCIA. El audio tarda hasta una ventana entera en salir. Sigue en
 	      la tarjeta, pero si el aparato muere se pierde mas.
 	    - MAS ASOCIACIONES. De una por grabacion a cuatro por hora, y cada una

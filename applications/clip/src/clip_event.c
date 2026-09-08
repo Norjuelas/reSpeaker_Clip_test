@@ -662,6 +662,33 @@ static enum clip_event_result execute_transition(enum clip_event event,
          * para lo que cuesta (visibilidad, latencia y mas asociaciones). */
         if (IS_ENABLED(CONFIG_CLIP_WIFI_HOLD_WHILE_RECORDING)) {
             wifi_acquire("rec");
+        } else {
+            /* Sin prestamo de grabacion, la radio queda a cargo de la ventana
+             * periodica -- y con eso se perdio la CONFIRMACION DE ARRANQUE.
+             *
+             * Como funcionaba: START pide la radio, al llegar la IP
+             * wifi.c dispara health_beat_now(), y el panel ve el aparato
+             * grabando a los ~15 s de pulsar. El latido de START que hay mas
+             * abajo (item.event == CLIP_EVENT_START) sigue llamandose, pero
+             * health.c SE SALTA la vuelta si no hay enlace: con la radio
+             * apagada el latido se descarta en silencio. La confirmacion
+             * pasaba a llegar con la siguiente ventana, o sea hasta ~16 min
+             * tarde. Medido hoy: el primer latido de la grabacion llego en el
+             * uptime 128 s, que era la ventana inicial de los 2 minutos, no el
+             * START -- solo parecio pronto porque se empezo a grabar recien
+             * arrancado.
+             *
+             * El arreglo: pedir y soltar en el acto. El prestamo sube la radio,
+             * el latido sale con enlace garantizado, y el margen de
+             * CLIP_WIFI_IDLE_GRACE_S la apaga sola. NO se sujeta nada: la
+             * cuenta vuelve a 0 aqui mismo.
+             *
+             * Lo que cuesta: una asociacion por grabacion, ~10 s de radio.
+             * Contra el 6,3% de ciclo de trabajo medido es ~0,1% mas. Saber
+             * que un aparato empezo a grabar Y alcanzo la red vale mucho mas
+             * que eso, y mas con unidades en tiendas. */
+            wifi_acquire("rec-beat");
+            wifi_release("rec-beat");
         }
 
         display_post_event(UI_EVENT_REC_START);
