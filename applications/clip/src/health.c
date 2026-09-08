@@ -161,7 +161,8 @@ int health_snapshot_json(char *buf, size_t len)
 		     "\"upload_total\":%u,\"upload_err\":%d,"
 		     "\"rssi\":%d,\"heap_free\":%u,\"up_stack_free\":%u,"
 		     "\"up_kbps\":%u,\"up_ok\":%u,\"up_fail\":%u,"
-		     "\"pending_files\":%u,\"recording\":%s}",
+		     "\"pending_files\":%u,\"recording\":%s,"
+		     "\"leases\":%d,\"repowers\":%u}",
 		     device_id_str(), uptime_s, reset_cause_txt(boot_reset_cause),
 		     ctx->status.battery_percent, ctx->status.battery_mv,
 		     ctx->status.battery_charging ? "true" : "false",
@@ -226,7 +227,29 @@ int health_snapshot_json(char *buf, size_t len)
 		     (unsigned int)up.ok_count,
 		     (unsigned int)up.fail_count,
 		     (unsigned int)up.pending_files,
-		     audio_is_recording() ? "true" : "false");
+		     audio_is_recording() ? "true" : "false",
+		     /* leases: prestamos vivos de la radio. Un aparato en reposo
+		      * tiene que marcar 0; cualquier otra cosa en reposo es una
+		      * fuga de prestamo y significa que la radio esta ENCENDIDA
+		      * gastando 41 mA medidos sin subir nada. En una celda de
+		      * 170 mAh eso son ~4 horas de vida haciendo nada.
+		      *
+		      * POR QUE ESTA AQUI. AT+STA=on toma un prestamo 'manual' que
+		      * NO vence: dura hasta un AT+STA=off. Un aparato que salio del
+		      * banco con ese prestamo puesto queda convertido en
+		      * siempre-encendido, y en el panel se ve perfectamente sano --
+		      * el latido llega, la bateria baja despacio, no hay error
+		      * ninguno. Paso DOS veces en las medidas del 2026-09-07/08 y
+		      * las dos invalido la medida: una descarga de 3,6 h que se leyo
+		      * como reposo, y una hora de grabacion que se leyo como radio
+		      * por ventana cuando la radio no se apago nunca. Publicarlo es
+		      * lo que lo habria cazado en el primer latido.
+		      *
+		      * repowers: veces que el RPU arranco sin firmware y hubo que
+		      * apagarlo y encenderlo de verdad (H2). Que crezca significa
+		      * que se detecto y se recupero. Ver wifi.h. */
+		     wifi_lease_count(),
+		     (unsigned int)wifi_rpu_repowers());
 
 	if (n < 0 || (size_t)n >= len) {
 		return -ENOMEM;

@@ -578,12 +578,31 @@ config CLIP_WIFI_HOLD_WHILE_RECORDING
 
 	  QUE PASA AL PONERLO A 'n'. La ventana periodica ya pide y suelta la radio
 	  por su cuenta (http_upload.c), asi que las subidas siguen saliendo: cada
-	  CLIP_UPLOAD_INTERVAL_MIN se asocia, drena el atraso y se suelta. Con el
-	  intervalo en 15 y ~3 trozos por ventana son ~73 s de radio por cada 900:
+	  CLIP_UPLOAD_INTERVAL_MIN se asocia, drena el atraso y se suelta.
 
-	    hoy, radio siempre .......  46,3 mA ->  3,7 h grabando
-	    radio por ventana (~8%) ..   8,3 mA -> 20,5 h grabando
-	    objetivo de jornada de 8 h ..................... 21,3 mA
+	    MEDIDO el 2026-09-08, una hora grabando con la radio por ventana:
+
+	      endurance original (radio siempre) .. 46,3 mA ->  3,7 h
+	      hora con prestamo pegado (siempre) .. 36,5 mA ->  4,7 h
+	      radio por ventana ................... 21,4 mA ->  7,9 h
+	      objetivo de jornada de 8 h .......... 21,2 mA
+
+	    O sea 1,7x y el objetivo de 8 h justo alcanzado. Seis ventanas de 62 s
+	    de media cada 16,4 min = 6,3% de ciclo de trabajo, y 13 de 16 trozos
+	    subidos durante la grabacion (los 3 ultimos en la ventana siguiente,
+	    16/16 entregados, 0 fallos).
+
+	    LA PREDICCION ERA 8,3 mA Y 4,5x, Y ERA FALSA. Suponia que los 41,4 mA
+	    de radio medidos en la descarga EN REPOSO valian tambien grabando, asi
+	    que bajar el ciclo al 6% deberia dejar casi nada. Quedan ~18 mA que no
+	    son la radio: el coste de grabar (CPU a 128 MHz, PDM, Opus, escrituras
+	    a la tarjeta) es mucho mayor que los 3,8 mA que deduje restando dos
+	    corridas -- esa resta suponia que la radio costaba lo mismo en las dos
+	    y no se sostiene.
+
+	    Consecuencia practica: no hay margen sobre el objetivo, y el codec, la
+	    pantalla y la captura PDM -- que descarte como "ruido al lado de
+	    41 mA" -- ahora se reparten esos ~18 mA y vuelven a merecer la pena.
 
 	  LO QUE CUESTA, y hay que aceptarlo:
 	    - VISIBILIDAD. El latido solo sale dentro de las ventanas, asi que
