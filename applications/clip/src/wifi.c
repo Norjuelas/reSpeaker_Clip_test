@@ -881,6 +881,142 @@ int wifi_manual_hold(bool on) { return on ? 0 : wifi_sta_off(); }
 #define STA_RECONNECT_MIN_MS   5000
 #define STA_RECONNECT_MAX_MS   120000
 
+/* ---- Arranque verificado del RPU (H2) ------------------------------------
+ *
+ * net_if_up() puede devolver EXITO con el nRF7002 alimentado y contestando al
+ * bus pero SIN su firmware inicializado. La comprobacion del driver no lo ve
+ * -- su propio TODO dice que rpu_validate_comms() "needs firmware download to
+ * be done successfully before it can be called", y solo lee un valor de reset
+ * por hardware. Asi que el arranque hueco pasa, wifi_ready se dispara igual, y
+ * el primer mandato de verdad escribe a la direccion que el RPU publica en sus
+ * estructuras: 0xAAAAAAAA.
+ *
+ * Y solo lo curaba un reinicio porque net_if_up() -- lo unico que re-alimenta
+ * el RPU -- solo se llama con la interfaz ABAJO, y el fallo de asociacion la
+ * deja ARRIBA a proposito. La reconexion reintentaba CONNECT para siempre
+ * contra el mismo RPU hueco. Ver CLIP_WIFI_RPU_PROBE para la secuencia medida.
+ */
+#if defined(CONFIG_CLIP_WIFI_RPU_PROBE)
+static uint32_t rpu_repowers;
+
+/* Cuantas veces se ha tenido que re-alimentar el RPU desde el arranque. Se
+ * publica en AT+STA?: si crece en campo, H2 sigue vivo pero recuperandose. */
+uint32_t wifi_rpu_repowers(void)
+{
+	return rpu_repowers;
+}
+
+/* ¿Contesta el chip? IFACE_STATUS sirve porque SI va al RPU: el driver exige
+ * if_op_state == UP (lo pone net_if_up, NO la asociacion) y luego pide los
+ * datos al chip con un plazo de 50 ms. Con el RPU hueco falla. */
+static bool rpu_answers(struct net_if *iface)
+{
+	struct wifi_iface_status st = {0};
+
+	return net_mgmt(NET_REQUEST_WIFI_IFACE_STATUS, iface,
+			&st, sizeof(st)) == 0;
+}
+
+/* Apaga y enciende de verdad. net_if_down() llega a rpu_pwroff(), que baja
+ * IOVDD_CTRL y BUCKEN: corte de alimentacion real, no un reset logico. */
+static int rpu_repower(struct net_if *iface)
+{
+	int ret;
+
+	rpu_repowers++;
+	LOG_WRN("radio: el RPU arranco sin firmware, re-alimentando (#%u)",
+		rpu_repowers);
+
+	net_if_down(iface);
+	/* Espera de BAJADA, que no existe en ningun sitio del driver: el suyo
+	 * (iovdd-power-up-delay-ms) es solo al subir. */
+	k_msleep(CONFIG_CLIP_WIFI_RPU_SETTLE_MS);
+
+	wifi_ready = false;
+	k_sem_reset(&wifi_ready_sem);
+
+	wifi_apply_stable_mac(iface);
+	ret = net_if_up(iface);
+	if (ret) {
+		LOG_ERR("radio: net_if_up tras re-alimentar fallo: %d", ret);
+		return ret;
+	}
+
+	return 0;
+}
+#endif /* CONFIG_CLIP_WIFI_RPU_PROBE */
+
+#if !defined(CONFIG_CLIP_WIFI_RPU_PROBE)
+uint32_t wifi_rpu_repowers(void) { return 0; }
+#endif
+
+/* Levanta la interfaz y NO vuelve hasta que el RPU contesta de verdad, o hasta
+ * agotar los reintentos. Sustituye al bloque que solo miraba si net_if_up()
+ * devolvia 0. */
+static int sta_bring_rpu_up(struct net_if *iface)
+{
+	int ret;
+
+	if (net_if_is_admin_up(iface)) {
+		/* Ya arriba. NO se devuelve exito sin mas: la interfaz puede estar
+		 * arriba con el RPU hueco -- ese era el agujero por el que H2 se
+		 * hacia permanente. Se sondea, y si el chip no contesta se
+		 * re-alimenta como en cualquier otro caso. */
+#if defined(CONFIG_CLIP_WIFI_RPU_PROBE)
+		if (rpu_answers(iface)) {
+			return 0;
+		}
+		LOG_WRN("radio: interfaz arriba pero el RPU no contesta");
+#else
+		return 0;
+#endif
+	} else {
+		wifi_apply_stable_mac(iface);
+		ret = net_if_up(iface);
+		if (ret) {
+			LOG_ERR("net_if_up failed: %d", ret);
+			return ret;
+		}
+	}
+
+	for (int intento = 0; ; intento++) {
+		if (!wifi_ready) {
+			/* 10s y no 3: el PRIMER arranque del RPU tras un reinicio
+			 * carga el parche del nRF70 (87KB) desde la flash externa en
+			 * trozos de 8KB, y con 3s el primer intento moria aqui con
+			 * ETIMEDOUT. Era la mitad del "autoconnect no se dispara". */
+			ret = k_sem_take(&wifi_ready_sem, K_SECONDS(10));
+			if (ret) {
+				LOG_ERR("WiFi ready timeout");
+				net_if_down(iface);
+				return -ETIMEDOUT;
+			}
+		}
+
+#if defined(CONFIG_CLIP_WIFI_RPU_PROBE)
+		if (rpu_answers(iface)) {
+			return 0;
+		}
+
+		if (intento >= CONFIG_CLIP_WIFI_RPU_REPOWER_MAX) {
+			/* A WRN: en produccion el log de la tarjeta es la unica
+			 * prueba de por que la radio no sube. */
+			LOG_WRN("radio: el RPU no arranca tras %d intentos; se deja "
+				"para el detector de cuelgue", intento);
+			net_if_down(iface);
+			return -EIO;
+		}
+
+		ret = rpu_repower(iface);
+		if (ret) {
+			return ret;
+		}
+#else
+		return 0;
+#endif
+	}
+}
+
 int wifi_sta_on(void)
 {
 	struct net_if *iface;
@@ -919,32 +1055,12 @@ int wifi_sta_on(void)
 		return -ENODEV;
 	}
 
-	if (!net_if_is_admin_up(iface))
+	/* Subida VERIFICADA: no basta con que net_if_up() devuelva 0, porque el
+	 * RPU puede quedar alimentado y sin firmware. Ver sta_bring_rpu_up(). */
+	ret = sta_bring_rpu_up(iface);
+	if (ret)
 	{
-		wifi_apply_stable_mac(iface);
-		ret = net_if_up(iface);
-		if (ret)
-		{
-			LOG_ERR("net_if_up failed: %d", ret);
-			return ret;
-		}
-
-		if (!wifi_ready)
-		{
-			/* 10s y no 3: el PRIMER arranque del RPU tras un reinicio carga
-			 * el parche del nRF70 (87KB) desde la flash externa en trozos de
-			 * 8KB, y con 3s el primer intento moria aqui con ETIMEDOUT — el
-			 * segundo intento siempre funcionaba porque la radio ya estaba
-			 * arriba. Era la mitad del "autoconnect no se dispara": el unico
-			 * intento del arranque caia justo en este timeout. */
-			ret = k_sem_take(&wifi_ready_sem, K_SECONDS(10));
-			if (ret)
-			{
-				LOG_ERR("WiFi ready timeout");
-				net_if_down(iface);
-				return -ETIMEDOUT;
-			}
-		}
+		return ret;
 	}
 
 	wifi_set_reg_domain(iface);
@@ -1090,16 +1206,37 @@ int wifi_sta_off(void)
 	sta_offline_since = 0;
 	k_work_cancel_delayable(&sta_reconnect_work);
 
-	if (!sta_associated)
-	{
-		return 0;
-	}
 	if (!iface)
 	{
 		return -ENODEV;
 	}
 
-	wifi_udp_stop();
+	/* NO se sale aqui si no hay asociacion, y esa salida temprana era el
+	 * fallo entero de H2.
+	 *
+	 * Antes habia un `if (!sta_associated) return 0;`. Parece razonable --
+	 * "si no esta conectado no hay nada que desconectar" -- y es justo al
+	 * contrario: "arriba pero sin asociar" es EXACTAMENTE el estado en que el
+	 * RPU puede haber arrancado sin firmware y hace falta re-alimentarlo.
+	 *
+	 * Con esa salida, tras una asociacion fallida:
+	 *   - AT+STA=off y el vencimiento del prestamo llamaban aqui y NO bajaban
+	 *     la interfaz: net_if_down() -- lo unico que corta BUCKEN e IOVDD --
+	 *     no se ejecutaba nunca.
+	 *   - la siguiente subida veia la interfaz ya arriba y se salta net_if_up,
+	 *     asi que reintentaba CONNECT contra el mismo RPU muerto.
+	 *   - y un reinicio era el UNICO camino del firmware que volvia a apagar
+	 *     y encender la radio. De ahi "solo lo arregla reiniciar".
+	 *
+	 * Medido: gate de 10 ciclos, 1/10. El primero asocia; del segundo en
+	 * adelante todos fallan con el plazo entero, y el contador de
+	 * re-alimentaciones se queda en 0 porque la sonda nunca llegaba a correr.
+	 *
+	 * Ademas de dejar la radio muerta, la dejaba ENCENDIDA: 41 mA medidos por
+	 * una radio asociada, gastandose sin subir nada. */
+	if (sta_associated)
+	{
+		wifi_udp_stop();
 	net_dhcpv4_stop(iface);
 
 	ret = net_mgmt(NET_REQUEST_WIFI_DISCONNECT, iface, NULL, 0);
@@ -1108,19 +1245,35 @@ int wifi_sta_off(void)
 		LOG_WRN("STA disconnect failed: %d", ret);
 	}
 
-	sta_associated = false;
+		sta_associated = false;
+		sta_ip[0] = '\0';
+
+#ifdef CONFIG_NRF70_SR_COEX
+		nrf_wifi_coex_hw_reset();
+#endif
+	}
+
+	/* El margen antes de tirar la interfaz va FUERA del `if (sta_associated)`,
+	 * y esa colocacion importa.
+	 *
+	 * El comentario original decia: "DISCONNECT immediately followed by
+	 * net_if_down() while the supplicant is still mid-scan -- took the whole
+	 * device down every time". Cuando este margen vivia dentro de la rama de
+	 * asociado, el caso SIN asociar -- que es justo el de una asociacion
+	 * fallida, con el supplicant posiblemente a media busqueda -- se iba
+	 * derecho a net_if_down() sin esperar: exactamente lo que aquel aviso
+	 * describe. Se escribio desde la experiencia y no hay motivo para
+	 * apostar contra el.
+	 *
+	 * Medio segundo por ciclo de radio no se nota (4 ciclos/hora en reposo)
+	 * y compra respetar un fallo ya pagado. */
+	k_msleep(500);
+
+	/* Y bajar la interfaz SIEMPRE que este arriba, asociada o no: es el unico
+	 * sitio del firmware que llega a rpu_pwroff() (BUCKEN=0, IOVDD=0). */
 	sta_ip[0] = '\0';
 	wifi_ready = false;
 	k_sem_reset(&wifi_ready_sem);
-
-	/* Give the supplicant a moment to unwind before pulling the interface
-	 * down. Doing both back to back is what wedged the device on the failed
-	 * association path. */
-	k_msleep(500);
-
-#ifdef CONFIG_NRF70_SR_COEX
-	nrf_wifi_coex_hw_reset();
-#endif
 
 	if (net_if_is_admin_up(iface))
 	{

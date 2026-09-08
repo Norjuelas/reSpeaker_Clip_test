@@ -647,15 +647,22 @@ static enum clip_event_result execute_transition(enum clip_event event,
             display_post_error("Rec Fail");
             return CLIP_EVENT_ERROR;
         }
-        /* La radio se pide AQUI y se suelta en STOP. Grabando es cuando el
-         * aparato tiene algo que decir y algo que mandar, asi que es la
-         * ventana natural para tener enlace: el barrido de subida drena el
-         * atraso mientras se graba, y el latido sale por el mismo enlace.
+        /* La radio se pide AQUI y se suelta en STOP, SI el simbolo lo permite.
          *
          * No bloquea: wifi_acquire() programa la asociacion en la cola de la
          * STA. Grabar NO espera a la red — el audio a la tarjeta vale mas que
-         * el enlace, y una jornada sin red sigue siendo una jornada grabada. */
-        wifi_acquire("rec");
+         * el enlace, y una jornada sin red sigue siendo una jornada grabada.
+         *
+         * Con CLIP_WIFI_HOLD_WHILE_RECORDING=n no se pide nada y la radio
+         * queda a cargo de la ventana periodica, que ya la pide y la suelta
+         * por su cuenta (http_upload.c). Las subidas siguen saliendo; lo que
+         * cambia es que el enlace deja de estar arriba las horas que dure la
+         * grabacion. Medido: la radio asociada son 41,4 mA de los 46,3 que
+         * gasta grabando — el 89%. Ver el simbolo para el reparto entero y
+         * para lo que cuesta (visibilidad, latencia y mas asociaciones). */
+        if (IS_ENABLED(CONFIG_CLIP_WIFI_HOLD_WHILE_RECORDING)) {
+            wifi_acquire("rec");
+        }
 
         display_post_event(UI_EVENT_REC_START);
         display_set_recording(true, c->config.mode == MODE_ENHANCED);
@@ -682,10 +689,18 @@ static enum clip_event_result execute_transition(enum clip_event event,
             LOG_ERR("audio_stop_recording failed: %d", err);
             return CLIP_EVENT_ERROR;
         }
-        /* Se suelta el prestamo pedido en START. La radio no cae aqui: el
-         * margen de CLIP_WIFI_IDLE_GRACE_S da tiempo a que termine una subida
-         * en curso y evita derribar el enlace si se vuelve a grabar enseguida. */
-        wifi_release("rec");
+        /* Se suelta el prestamo pedido en START, si se pidio. La radio no cae
+         * aqui: el margen de CLIP_WIFI_IDLE_GRACE_S da tiempo a que termine
+         * una subida en curso y evita derribar el enlace si se vuelve a grabar
+         * enseguida.
+         *
+         * Sin prestamo (CLIP_WIFI_HOLD_WHILE_RECORDING=n) no hay nada que
+         * soltar, y el barrido de fin de grabacion se encuentra la radio
+         * apagada: paga una asociacion entera en vez de aprovechar el enlace
+         * vivo. Es el precio anotado en ese simbolo. */
+        if (IS_ENABLED(CONFIG_CLIP_WIFI_HOLD_WHILE_RECORDING)) {
+            wifi_release("rec");
+        }
 
 #if defined(CONFIG_CLIP_UPLOAD_ON_STOP)
         /* Y se adelanta el barrido, en vez de dejar la grabacion esperando al

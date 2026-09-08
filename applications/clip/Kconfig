@@ -476,6 +476,130 @@ config CLIP_WIFI_ON_DEMAND
 	  visibilidad de flota y el drenaje del backlog; no se puede poner a 0
 	  y esperar que las grabaciones lleguen solas.
 
+config CLIP_WIFI_RPU_PROBE
+	bool "Comprobar que el firmware del RPU arranco, y re-alimentarlo si no"
+	depends on NRF70_STA_MODE
+	default y
+	help
+	  EL FALLO (H2). net_if_up() puede devolver EXITO con el nRF7002
+	  alimentado y contestando al bus pero SIN su firmware inicializado. La
+	  comprobacion del propio driver no lo detecta, y su TODO lo dice:
+
+	    /* TODO: rpu_validate_comms() needs firmware download to be done
+	     * successfully before it can be called. */
+
+	  Solo lee un valor de reset por hardware en 0x0005C. El arranque hueco
+	  pasa, wifi_ready se dispara igual, se asocia, y el primer mandato de
+	  verdad escribe a la direccion que el RPU publica en sus estructuras --
+	  que en ese estado vale 0xAAAAAAAA. De ahi las rafagas de
+	  "hal_rpu_mem_write: Invalid memory address 0xAAAAAAAA".
+
+	  LA SECUENCIA, del log de la tarjeta (log.0025, 2026-09-08):
+	    00:00:56  STA up: 192.168.0.9          enlace sano
+	    00:01:00  radio: suelta -> se apaga    rpu_pwroff, BUCKEN=0
+	    00:01:09  radio: pide prestamo         rpu_pwron
+	    00:01:10  STA connecting
+	    00:01:14  0xAAAAAAAA + "Scan trigger failed"
+
+	  POR QUE SOLO LO CURABA UN REINICIO. wifi_sta_on() solo llama a
+	  net_if_up() -- lo unico que re-alimenta el RPU -- si la interfaz esta
+	  ABAJO, y en el fallo de asociacion se deja ARRIBA a proposito (tirarla
+	  con el supplicant a media busqueda tumbaba el aparato entero). Asi que
+	  la reconexion con retroceso reintentaba CONNECT para siempre contra el
+	  mismo RPU hueco. Un reinicio era el UNICO camino del firmware que
+	  volvia a apagar y encender la radio.
+
+	  QUE HACE ESTO. Tras net_if_up() y wifi_ready, y ANTES de asociar, se
+	  pregunta al chip. Si no contesta, se apaga y se enciende de verdad y se
+	  reintenta hasta CLIP_WIFI_RPU_REPOWER_MAX veces. Detectar aqui evita el
+	  plazo de asociacion de 20 s y la escalera de reintentos: el arranque
+	  hueco no llega al resto del sistema.
+
+	  LA SONDA es NET_REQUEST_WIFI_IFACE_STATUS porque SI va al RPU: el
+	  driver exige if_op_state == UP (lo pone net_if_up, no la asociacion) y
+	  luego pide los datos al chip con un plazo de 50 ms. Con el RPU hueco
+	  falla; en los logs se ve como "SIGNAL_POLL command timed out".
+
+	  NO ARREGLA LA CAUSA -- por que el parche no se carga a veces esta dentro
+	  del camino de Nordic. Convierte un fallo terminal (41 minutos sin subir
+	  nada, medido esta manana) en uno recuperable en ~15 s. Y a diferencia
+	  del reinicio por cuelgue, re-alimentar solo la radio no pierde el trozo
+	  de audio en curso, asi que SI puede actuar mientras se graba.
+
+config CLIP_WIFI_RPU_REPOWER_MAX
+	int "Intentos de re-alimentar el RPU antes de rendirse"
+	depends on CLIP_WIFI_RPU_PROBE
+	default 2
+	range 1 5
+	help
+	  Tope para que un RPU que no arranca NUNCA no deje al aparato dando
+	  vueltas. Agotado el tope, wifi_sta_on() devuelve error y el detector de
+	  cuelgue (CLIP_WIFI_WEDGE_RECOVERY) queda como ultimo recurso.
+
+config CLIP_WIFI_RPU_SETTLE_MS
+	int "Milisegundos entre apagar y volver a encender el RPU"
+	depends on CLIP_WIFI_RPU_PROBE
+	default 1000
+	range 100 10000
+	help
+	  Margen para que BUCKEN e IOVDD se descarguen antes de volver a
+	  levantarlos. El driver ya espera iovdd-power-up-delay-ms=20 al subir;
+	  esto es la espera de BAJADA, que no existe en ningun sitio.
+
+config CLIP_WIFI_HOLD_WHILE_RECORDING
+	bool "Mantener la radio asociada durante TODA la grabacion"
+	depends on CLIP_WIFI_ON_DEMAND
+	default y
+	help
+	  Con esto, CLIP_EVENT_START pide un prestamo de radio y CLIP_EVENT_STOP
+	  lo suelta, asi que el enlace esta arriba de principio a fin de la
+	  grabacion. Es como se ha comportado el aparato hasta ahora.
+
+	  POR QUE SE HIZO ASI. Grabando es cuando el aparato tiene algo que mandar,
+	  asi que parecia la ventana natural para tener enlace: el barrido drena el
+	  atraso mientras se graba, el latido sale cada 5 minutos y el panel ve el
+	  aparato en vivo.
+
+	  POR QUE AHORA SE PUEDE APAGAR. Medido el 2026-09-07, y no es un matiz:
+
+	    radio asociada, power-save off ... 41,4 mA   <- 97% del gasto en reposo
+	    todo lo demas en reposo .......... 1,1 mA
+	    lo que anade grabar .............. 3,8 mA
+
+	  De una descarga en reposo (90% -> 0% en 3,60 h = 42,5 mA reales) contra
+	  lo que decia el medidor en ese mismo rato (1,1 mA). El medidor es CIEGO a
+	  la radio: el nRF7002 se alimenta de VBAT por delante de la resistencia de
+	  medida del NPM1300. Contrastado con la prueba de grabacion de 3,67 h,
+	  46,3 mA.
+
+	  O sea que el microfono, el codec, la tarjeta y la pantalla se reparten
+	  3,8 mA mientras la radio se lleva 41,4. Todo lo demas que se podria
+	  optimizar es ruido al lado de esto.
+
+	  QUE PASA AL PONERLO A 'n'. La ventana periodica ya pide y suelta la radio
+	  por su cuenta (http_upload.c), asi que las subidas siguen saliendo: cada
+	  CLIP_UPLOAD_INTERVAL_MIN se asocia, drena el atraso y se suelta. Con el
+	  intervalo en 15 y ~3 trozos por ventana son ~73 s de radio por cada 900:
+
+	    hoy, radio siempre .......  46,3 mA ->  3,7 h grabando
+	    radio por ventana (~8%) ..   8,3 mA -> 20,5 h grabando
+	    objetivo de jornada de 8 h ..................... 21,3 mA
+
+	  LO QUE CUESTA, y hay que aceptarlo:
+	    - VISIBILIDAD. El latido solo sale dentro de las ventanas, asi que
+	      grabando el panel ve el aparato cada ~15 min en vez de cada 5.
+	    - LATENCIA. El audio tarda hasta una ventana entera en salir. Sigue en
+	      la tarjeta, pero si el aparato muere se pierde mas.
+	    - MAS ASOCIACIONES. De una por grabacion a cuatro por hora, y cada una
+	      es un arranque en frio del RPU con recarga de 87 KB desde la flash
+	      externa (10,3 s medidos). Eso es MAS exposicion a H2, el cuelgue del
+	      RPU. Si el ritmo de cuelgues sube, este cambio no compensa.
+	    - CLIP_UPLOAD_ON_STOP deja de ser casi gratis: al parar ya no hay
+	      enlace vivo, asi que ese barrido paga una asociacion entera.
+
+	  Se deja como simbolo y no como borrado para que el A/B sea una linea y
+	  volver atras no sea un revert.
+
 config CLIP_WIFI_IDLE_GRACE_S
 	int "Segundos que la radio sigue arriba tras soltarse el ultimo prestamo"
 	depends on CLIP_WIFI_ON_DEMAND
@@ -725,13 +849,16 @@ config CLIP_UPLOAD_ON_STOP
 	  o sea hasta ~16 minutos con el intervalo en 15. El audio ya esta
 	  completo en la tarjeta todo ese rato, esperando a un temporizador.
 
-	  Y sale casi gratis, que es lo que lo hace la opcion buena en vez de un
-	  intercambio: al parar la grabacion la radio TODAVIA ESTA ENCENDIDA — la
-	  sujeto el prestamo de 'rec' y aun corre el margen de
-	  CLIP_WIFI_IDLE_GRACE_S antes de apagarse. Asi que este barrido no paga
-	  la asociacion, que es la parte cara (10,3 s medidos, mas DHCP, mas
-	  recargar 87 KB de parche del nRF70). Solo paga handshake (~340 ms
-	  medidos) y transferencia.
+	  Salia casi gratis MIENTRAS la grabacion sujetara la radio: al parar, el
+	  enlace seguia arriba por el prestamo de 'rec' y el margen de
+	  CLIP_WIFI_IDLE_GRACE_S, asi que este barrido no pagaba la asociacion —
+	  la parte cara (10,3 s medidos, mas DHCP, mas recargar 87 KB de parche
+	  del nRF70) — sino solo handshake (~340 ms) y transferencia.
+
+	  CON CLIP_WIFI_HOLD_WHILE_RECORDING=n eso deja de ser cierto: al parar no
+	  hay enlace vivo y este barrido paga una asociacion entera. Sigue
+	  mereciendo la pena —una asociacion por grabacion contra esperar hasta
+	  una ventana entera— pero ya es un intercambio y no un regalo.
 
 	  Resultado con el intervalo en 15: la latencia tras grabar pasa de una
 	  media de ~8 minutos a unos 15 segundos, SIN aumentar los encendidos de

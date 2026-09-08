@@ -211,6 +211,20 @@ const char *wifi_sta_get_gw(void);
 uint32_t wifi_sta_offline_minutes(void);
 
 /**
+ * @brief Veces que se ha tenido que re-alimentar el RPU desde el arranque.
+ *
+ * net_if_up() puede devolver exito con el nRF7002 alimentado y contestando al
+ * bus pero SIN su firmware inicializado (H2): la comprobacion del driver solo
+ * lee un valor de reset por hardware. Si eso pasa, se apaga y se enciende de
+ * verdad antes de asociar, y esto lo cuenta. Se publica en AT+STA?.
+ *
+ * Que crezca NO es un fallo visible para el usuario -- significa justo lo
+ * contrario, que se detecto y se recupero. Que crezca MUCHO si es una senal.
+ * Devuelve 0 si CLIP_WIFI_RPU_PROBE esta desactivado.
+ */
+uint32_t wifi_rpu_repowers(void);
+
+/**
  * @brief La MAC del interfaz WiFi, como "AA:BB:CC:DD:EE:FF"
  *
  * Hace falta para las redes de tienda que filtran por lista blanca: sin este

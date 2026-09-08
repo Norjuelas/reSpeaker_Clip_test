@@ -2180,18 +2180,26 @@ static int cmd_sta_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
          * con prestamos es una asociacion que no arranca. Un valor que no baja
          * a 0 en reposo es la fuga de prestamo, que deja la radio encendida
          * para siempre. */
+        /* repowers: veces que el RPU arranco SIN firmware y hubo que
+         * apagarlo y encenderlo de verdad antes de asociar (H2). Que crezca
+         * significa que se detecto y se recupero, no que algo este roto; que
+         * crezca mucho es la senal de que H2 sigue apareciendo. Antes de esto,
+         * ese arranque hueco dejaba la radio muerta hasta un reinicio: 41
+         * minutos sin subir nada, medido el 2026-09-08. Ver wifi.h. */
         if (wifi_sta_is_connected()) {
             snprintf(data, sizeof(data),
                      "{\"state\":\"connected\",\"ssid\":\"%s\",\"ip\":\"%s\","
-                     "\"gw\":\"%s\",\"leases\":%d}",
+                     "\"gw\":\"%s\",\"leases\":%d,\"repowers\":%u}",
                      config_get_sta_ssid(), wifi_sta_get_ip(),
-                     wifi_sta_get_gw(), wifi_lease_count());
+                     wifi_sta_get_gw(), wifi_lease_count(),
+                     (unsigned int)wifi_rpu_repowers());
         } else {
             snprintf(data, sizeof(data),
                      "{\"state\":\"off\",\"ssid\":\"%s\",\"reg\":\"%s\","
-                     "\"last_error\":\"%s\",\"leases\":%d}",
+                     "\"last_error\":\"%s\",\"leases\":%d,\"repowers\":%u}",
                      config_get_sta_ssid(), config_get_wifi_reg_domain(),
-                     wifi_sta_get_fail_reason(), wifi_lease_count());
+                     wifi_sta_get_fail_reason(), wifi_lease_count(),
+                     (unsigned int)wifi_rpu_repowers());
         }
         return create_json_response(true, NULL, data, response, len);
     }
