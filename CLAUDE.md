@@ -25,13 +25,16 @@ thinking about BLE, GATT, `ClipAP_XXXX`, or `192.168.4.1`, you are thinking abou
 
 Violate these and the build fails, the device bricks, or a fleet in the field breaks.
 
-**Flash is the binding constraint.** The app partition is `0xe9e00` = **957,952 bytes** and the
-image runs at roughly 97%. Before adding any library, measure it:
+**Flash is the binding constraint, and there are two denominators — use the honest one.**
+Partition Manager gives the `app` partition `0xe9e00` = 957,952 B, but MCUboot reserves
+24,576 B of that (header + trailer/swap status), so the linker only offers **933,376 B**.
+The image is at **98.8%** of what it can actually use — about **11 KB free**, not the ~37 KB
+the "96%" figure in older commit messages implies. Before adding any library, measure it:
 `west build -d build-clip/clip -t rom_report`. This single number explains most of the
 architecture — why Bluetooth is compiled out, why the JSON parser in `health.c` is hand-rolled,
 why the nRF7002 firmware patch lives in a flash partition instead of the image.
 
-**Static RAM is at roughly 92%.** `-t ram_report`. Any buffer over ~1 KB goes on the **heap**
+**Static RAM is at roughly 95%.** `-t ram_report`. About 22 KB free of 440 KB. Any buffer over ~1 KB goes on the **heap**
 (`k_malloc`/`k_free`), never on a thread stack. This firmware has crashed three times from stack
 sizing.
 
@@ -233,6 +236,24 @@ Devices in the field carry these.
   has stopped responding.
 - **Do not enable `AT+LOG` while USB MSC is mounted** — two writers on the same FAT volume. It has
   taken the device down.
+- **A guard that reads as obviously correct can be exactly backwards.** `wifi_sta_off()` had
+  `if (!sta_associated) return 0;` — *"nothing connected, nothing to disconnect"*. But
+  **"interface up, not associated" is precisely the state where the radio must be re-powered**,
+  and `net_if_down()` is the only path in the firmware that reaches `rpu_pwroff()` and cuts
+  BUCKEN/IOVDD. So after a failed association nothing ever re-powered the chip and the device
+  stayed off the network until someone rebooted — which was the whole of "H2". Cost: weeks,
+  attributed to Nordic's driver. Association gate went **1/10 → 20/20** when it was removed.
+- **`AT+STA=on` takes a radio lease that never expires** — it holds until `AT+STA=off`. A device
+  left in that state is silently converted to always-on: the radio never sleeps, ~41 mA, roughly
+  4 hours of life doing nothing, and **it looks perfectly healthy on the panel**. This invalidated
+  two full battery measurements before `leases` was published in the heartbeat. In a beat,
+  `leases` can never be 0 (the beat is sent from inside a window) — what tells the truth is
+  **1 versus 2**. Always `AT+STA=off` before handing the device over for a test.
+- **Mounting the SD card on the host stops the radio associating**, not just uploads. Desktop
+  auto-mount grabs it on every USB re-enumeration, and two whole association gates were
+  invalidated before this was spotted. `gsettings set org.gnome.desktop.media-handling automount false`.
+- **The fuel gauge cannot see the radio.** Any current figure from `battery_ua` excludes the
+  nRF7002. Get real consumption from the SoC slope between heartbeats, never from `battery_ua`.
 - **Crystal load capacitors come from Kconfig, not the devicetree.** `clip_xo_cap_init()` in
   `main.c` runs at `POST_KERNEL` and overwrites what SoC init wrote from the DTS, using
   `CLIP_HFXO_CAPVALUE` and `CLIP_LFXO_INTCAP`. The DTS values are not what the chip runs.
@@ -241,16 +262,33 @@ Devices in the field carry these.
 
 Do not "fix" these casually; each has a task in the backlog.
 
-- **The SD idle power-gate never executes.** `CONFIG_CLIP_LOG_FS_DEFAULT_ON=y` is set explicitly
-  in `prj.conf`, which beats the Kconfig default the production snippet relies on, so
-  `clip_sd_busy()` is true from boot and `storage_idle_poweroff()` always returns `-EBUSY`.
-- **CPU boost leaks across `PAUSED`.** Acquired in `audio.c`, released only on stop paths — the
-  core stays at 128 MHz through a pause.
-- **RPU power-save is fully disabled** (`CONFIG_NRF_WIFI_LOW_POWER=n`) as a deliberate workaround
-  for an association bug. The STA link is never torn down automatically.
-- **`ble_is_bonded()` always returns false**, so the display cannot reach its sleep path and sits
-  in a pairing screen refreshing once per second.
+- **RPU power-save is fully disabled** (`CONFIG_NRF_WIFI_LOW_POWER=n`), and this is now a
+  *measured* decision, not an inherited workaround. Three arms on hardware, ten cold
+  associations each: power-save off **10/10**; on **0/12**; on with `NRF_WIFI_RPU_RECOVERY`
+  forced off **0/10**. Power-save breaks association on this board by itself. Note the
+  dependency: `RPU_RECOVERY` has `depends on NRF_WIFI_LOW_POWER` and `default y`, so the two
+  symbols move together unless you stop them.
+- **`wifi_load_estimate_a()` reads `wifi_ap_is_running()`**, which is compiled out — so the
+  fuel-gauge WiFi compensation **never applies** and SoC reads high whenever the radio is on.
+  Quantified: on an idle discharge the gauge reported 1.1 mA while the real drain was 42.5 mA.
+  The nRF7002 taps VBAT upstream of the PMIC's sense resistor, so the gauge is structurally
+  blind to it. Its constants (59/99 mA) are uncalibrated AP-era guesses — calibrate before
+  enabling, or the gauge will read low instead.
 - **`prj.conf` has 22 inert `CONFIG_BT_*` lines** and four contradictory duplicate pairs.
+- **The network core still runs a full Bluetooth controller** (`ipc_radio`: `CONFIG_BT=y`,
+  `MPSL`, `MPSL_CX`) that the app core never talks to. Not a casual removal — that image is
+  signed by `b0n` and has its own OTA path — and `NRF70_SR_COEX` on the app core is the *other
+  half* of the same two-core mechanism, so removing one alone is untested and suspect.
+
+Fixed since, do not re-report: the SD idle power-gate (`CLIP_LOG_FS_BOOT_WINDOW_S` retires the
+FS log backend so `clip_sd_busy()` can go false), CPU boost leaking across `PAUSED`, and the
+STA link never being torn down (the reference-counted lease in `wifi.c` does that now).
+
+**And one thing that was never true:** the display does *not* refresh at 1 Hz during a
+recording. `display_thread_fn` waits `K_SECONDS(1)` only in `STATUS_BAR` and `PAIRING_GUIDE`;
+in `REC_DOT` — where a recording spends all its time after the first 5 s — it waits
+`K_FOREVER` and pushes no frames. The cost during a recording is the **panel being powered**
+(`oled_reg` is `regulator-boot-on` and never disabled), which is a different fix.
 
 ---
 
