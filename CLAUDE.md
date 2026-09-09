@@ -301,9 +301,12 @@ at boot. Run `AT+STA=on` first or you will collect blanks. The `chip` field is a
   two full battery measurements before `leases` was published in the heartbeat. In a beat,
   `leases` can never be 0 (the beat is sent from inside a window) — what tells the truth is
   **1 versus 2**. Always `AT+STA=off` before handing the device over for a test.
+  The bench harnesses in `applications/clip/tests/hil/` now **refuse to run** when a lease
+  is stuck, so this cannot silently ruin a measurement again.
 - **Mounting the SD card on the host stops the radio associating**, not just uploads. Desktop
   auto-mount grabs it on every USB re-enumeration, and two whole association gates were
-  invalidated before this was spotted. `gsettings set org.gnome.desktop.media-handling automount false`.
+  invalidated before this was spotted. `gsettings set org.gnome.desktop.media-handling automount false`. The harnesses in
+  `applications/clip/tests/hil/` check for this and abort before measuring.
 - **The fuel gauge cannot see the radio.** Any current figure from `battery_ua` excludes the
   nRF7002. Get real consumption from the SoC slope between heartbeats, never from `battery_ua`.
 - **Crystal load capacitors come from Kconfig, not the devicetree.** `clip_xo_cap_init()` in
@@ -411,6 +414,7 @@ replaced over USB**, only over SWD, so a bootloader change applies to future pro
 |---|---|
 | `applications/clip/` | the product firmware |
 | `applications/clip/tests/tools/` | host side: `bpin_http_receiver.py` (the receiving service + fleet panel), `panel_admin.py` (cable provisioning, localhost only), `bpin_decrypt.py` (BPE2 reference decryptor), `decode_opus.py` (adds the Ogg container the device omits) |
+| `applications/clip/tests/hil/` | arneses de banco: gates de asociacion, con trafico y por reinicio, y el registro de bateria. **Antes de escribir un guion nuevo para preguntarle algo al aparato, mira si ya esta aqui** — las cifras solo son comparables si las produce el mismo guion |
 | `applications/clip/tests/audio_test/` | ASR-scored audio quality harness — **use it before and after any codec or DSP change** |
 | `boards/seeed/clip/` | board support package |
 | `drivers/`, `lib/`, `dts/`, `include/`, `sysbuild/`, `zephyr/module.yml` | module wiring |
