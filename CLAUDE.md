@@ -212,8 +212,60 @@ Devices in the field carry these.
 | Upload ledger `/SD:/UPLOADED.TXT` | `upload_registry.c` | fails **open** by design — unreadable means re-upload |
 | `lfs_storage` at `0x130000` | `pm_static_clip_nrf5340_cpuapp.yml` | chosen so existing device settings survive upgrades |
 | TLS credential tags: CA = 42, client = 43 | `mtls.c` | Zephyr indexes by tag; reusing one overwrites the other |
+| **WiFi MAC = `0xB2` + last 5 bytes of `FICR.DEVICEID`** | `wifi_apply_stable_mac()` in `wifi.c` | corporate networks whitelist these addresses; changing the derivation silently locks every fielded unit out of every network that filters by MAC |
 
 ---
+
+## The WiFi MAC address — do not change this
+
+Corporate and store networks admit these devices by MAC allow-list, so the address is a
+contract with every network that has ever whitelisted a unit.
+
+**Where it comes from.** `wifi_apply_stable_mac()` in `wifi.c`, called on every radio bring-up
+just before `net_if_up()` (it can only be set while the interface is down):
+
+```c
+len = hwinfo_get_device_id(chip_id, sizeof(chip_id));   /* FICR.DEVICEID, 8 bytes */
+mac[0] = 0xB2;                                          /* B de B-Pin; U/L=1, I/G=0 */
+memcpy(&mac[1], &chip_id[len - 5], 5);                  /* últimos 5 del chip id */
+net_if_set_link_addr(iface, mac, sizeof(mac), NET_LINK_ETHERNET);
+```
+
+```
+chip id  62 51 8A 2B 20 63 EA E0
+                      └─────────┘
+MAC      B2 :2B :20 :63 :EA :E0
+```
+
+`FICR.DEVICEID` is burned by Nordic at manufacture and is read-only, so the address survives
+reboots, flat batteries, `AT+FACTORY`, and reflashing. **Verified on hardware 2026-09-08:**
+identical before and after a full power cycle, and the phone hotspot's client list showed the
+same address on air, with the same DHCP lease reissued.
+
+**`0xB2` is not arbitrary.** Bit 1 set = locally administered ("assigned by software, not an
+IEEE-registered vendor prefix"); bit 0 clear = unicast. Both are required for a valid station
+address. Some corporate tooling flags non-vendor MACs — that is expected, not a fault.
+
+**Why it must not change.** Alter the prefix or which bytes of the chip ID are used and every
+allow-list entry, at every site, stops matching — with no error anywhere. Just devices that no
+longer connect, and nothing in any log to say why.
+
+**A failure mode that breaks filtering.** If `hwinfo_get_device_id()` ever returns fewer than
+6 bytes, the function logs `"Sin chip id: la MAC queda aleatoria por arranque"` and returns
+without setting anything — so the nRF70 driver's own address wins, and that build has
+`CONFIG_WIFI_RANDOM_MAC_ADDRESS=y`: a **new random MAC every boot**. Under MAC filtering that
+presents as a unit which connects once and is never admitted again. Check for that log line
+first if a device becomes intermittently unwelcome on a network that worked before.
+
+**Do not "fix" the random-MAC Kconfig.** `CONFIG_WIFI_RANDOM_MAC_ADDRESS=y` looks wrong and is
+not: it is only the driver's default before our address is applied, and the application's
+override wins. Reasoning from those symbols alone led to a whole wrong diagnosis on
+2026-09-08 that a five-minute hotspot test disproved. If you need to know what a device
+actually transmits, connect it to a phone hotspot and read the client list — do not infer it.
+
+**Collecting MACs for provisioning:** `AT+DEVICE` returns an **empty** `mac` until the radio has
+been brought up at least once, because the address is applied in the bring-up path rather than
+at boot. Run `AT+STA=on` first or you will collect blanks. The `chip` field is always present.
 
 ## Known pitfalls
 
