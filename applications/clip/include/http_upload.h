@@ -12,6 +12,25 @@
 
 #include "storage.h"
 
+/**
+ * @brief Donde se rindio una ventana de subida que no logro nada.
+ *
+ * Viaja en el latido como `miss_stage`. El valor importa mas que el conteo:
+ * dice si el problema fue la radio, la red, la tarjeta o el endpoint, que son
+ * cuatro arreglos distintos. Los numeros son contrato con el panel — anadir al
+ * final, nunca reordenar.
+ */
+enum clip_win_stage {
+	CLIP_WIN_OK          = 0,  /* la ventana logro algo */
+	CLIP_WIN_NO_LINK     = 1,  /* la radio no asocio en 45 s */
+	CLIP_WIN_BEAT_FAIL   = 2,  /* asocio, pero el POST del latido fallo */
+	CLIP_WIN_UPLOAD_FAIL = 3,  /* asocio y el latido salio, fallaron las subidas */
+	CLIP_WIN_BUSY        = 4,  /* ya habia una subida en curso */
+	CLIP_WIN_NO_CARD     = 5,  /* la tarjeta no monto */
+	CLIP_WIN_NO_MEM      = 6,  /* sin heap para listar sesiones */
+	CLIP_WIN_NO_LIST     = 7,  /* la tarjeta monto pero no se pudo listar */
+};
+
 enum http_upload_state {
 	HTTP_UPLOAD_IDLE = 0,
 	HTTP_UPLOAD_RUNNING,
@@ -150,6 +169,24 @@ int http_upload_sweep_now(void);
  * aqui invertiria el orden de los cerrojos contra el hilo de subida.
  */
 bool http_upload_is_sweeping(void);
+
+/**
+ * @brief Que paso mientras el aparato no pudo contar nada.
+ *
+ * Cuando la radio se cae, el unico canal que informa de la salud es el que se
+ * cae. Estos tres numeros se acumulan en RAM y se publican en el primer latido
+ * que consigue salir, para no tener que deducir el agujero a posteriori.
+ *
+ * @param miss      ventanas seguidas sin un solo exito. Si la racha ya termino,
+ *                  es la ultima que hubo — el latido de la recuperacion es el
+ *                  que tiene que contar el tamano del agujero.
+ * @param stage     enum clip_win_stage de la ultima ventana mala.
+ * @param ok_age_s  segundos desde la ultima ventana que logro algo.
+ *
+ * Cualquiera de los tres puede ser NULL. Un reinicio los borra: el agujero que
+ * termina en reinicio lo cuenta el log de la tarjeta, no esto.
+ */
+void http_upload_window_health(uint32_t *miss, uint8_t *stage, uint32_t *ok_age_s);
 
 /**
  * @brief Como http_upload_sweep_now(), pero con espera.

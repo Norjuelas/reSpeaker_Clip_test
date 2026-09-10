@@ -1137,6 +1137,74 @@ static int post_health_inline(void)
 	return http_post_json("/health", json, (size_t)n);
 }
 
+/* Que paso mientras el aparato no pudo contar nada.
+ *
+ * El problema: cuando la radio deja de funcionar, el unico canal que informa de
+ * la salud es justamente el que se cae. La noche del 2026-09-09 al 10 el aparato
+ * estuvo 5 h 37 min mudo, y hicieron falta cuatro consultas al servidor y dos
+ * hipotesis equivocadas para deducir que habia pasado -- y aun asi no se supo EN
+ * QUE se rendian las ventanas.
+ *
+ * Se lleva la cuenta en RAM y se publica en el primer latido que consiga salir:
+ *
+ *   miss       ventanas seguidas sin un solo exito. Si la racha ya termino se
+ *              conserva la ultima, porque el latido que anuncia la recuperacion
+ *              es justo el que tiene que contar el tamano del agujero.
+ *   miss_stage donde se rindio la ultima ventana mala. Es el que mas informa:
+ *              distingue "no asocio" de "asocio y el latido fallo" de "no se
+ *              pudo leer la tarjeta".
+ *   ok_age_s   segundos desde la ultima ventana que logro algo.
+ *
+ * Lo de anoche habria sido, de un vistazo: miss=22 stage=1 ok_age_s=20200
+ * -- o sea CLIP_WIN_NO_LINK: la radio no asocio, 22 veces, durante 5,6 horas.
+ *
+ * Limite conocido: un reinicio se lleva estos contadores, asi que si el detector
+ * de cuelgue reinicia, el agujero se pierde. Eso lo cubre el log de la tarjeta,
+ * no esto. */
+static uint32_t win_bad_run;      /* racha en curso */
+static uint32_t win_miss_last;    /* la ultima racha que termino */
+static uint8_t  win_stage;        /* donde se rindio la ultima ventana mala */
+static int64_t  win_last_ok_ms;   /* uptime del ultimo exito; 0 = ninguno aun */
+
+static void win_note(bool any_success, enum clip_win_stage stage)
+{
+	if (any_success) {
+		if (win_bad_run > 0) {
+			win_miss_last = win_bad_run;
+			LOG_WRN("ventanas: se recupera tras %u sin exito (ultima etapa %u)",
+				(unsigned int)win_bad_run, (unsigned int)win_stage);
+		}
+		win_bad_run = 0;
+		win_last_ok_ms = k_uptime_get();
+		return;
+	}
+
+	win_bad_run++;
+	win_stage = (uint8_t)stage;
+	LOG_WRN("ventana sin exito (%u seguidas), etapa %u",
+		(unsigned int)win_bad_run, (unsigned int)stage);
+}
+
+void http_upload_window_health(uint32_t *miss, uint8_t *stage, uint32_t *ok_age_s)
+{
+	if (miss) {
+		/* La racha en curso si la hay; si no, la ultima que hubo. Junto a
+		 * ok_age_s se distinguen: un agujero abierto da ok_age_s grande. */
+		*miss = win_bad_run > 0 ? win_bad_run : win_miss_last;
+	}
+	if (stage) {
+		*stage = win_stage;
+	}
+	if (ok_age_s) {
+		/* Si nunca ha habido un exito se devuelve el uptime, no cero: un
+		 * cero se lee como "acaba de funcionar", que es justo lo contrario.
+		 * Asi "nunca ha funcionado desde el arranque" y "funciono hace un
+		 * momento" no se confunden. */
+		*ok_age_s = (uint32_t)((k_uptime_get() -
+				       (win_last_ok_ms ? win_last_ok_ms : 0)) / 1000);
+	}
+}
+
 #if defined(CONFIG_CLIP_WIFI_WEDGE_RECOVERY)
 /* Detector de RPU colgado (H2).
  *
@@ -1207,6 +1275,7 @@ static void periodic_work_fn(struct k_work *work)
 	 * subida. Es lo que distingue "no habia nada que hacer" de "la radio no
 	 * mueve un byte". Ver wedge_note_window(). */
 	bool any_success = false;
+	enum clip_win_stage stage = CLIP_WIN_OK;
 	uint32_t ok_at_window_start;
 
 	ARG_UNUSED(work);
@@ -1241,6 +1310,7 @@ static void periodic_work_fn(struct k_work *work)
 	if (!wifi_sta_is_connected()) {
 		LOG_WRN("ventana de subida: sin enlace tras esperar, se deja para la siguiente");
 		/* any_success sigue false: no asociarse tambien es sintoma. */
+		stage = CLIP_WIN_NO_LINK;
 		goto release;
 	}
 
@@ -1250,6 +1320,10 @@ static void periodic_work_fn(struct k_work *work)
 	 * vivo y con cuanta bateria. */
 	if (post_health_inline() == 0) {
 		any_success = true;
+	} else {
+		/* Con enlace y el latido fallando, no es la asociacion. Se anota por
+		 * si ninguna subida lo corrige despues. */
+		stage = CLIP_WIN_BEAT_FAIL;
 	}
 
 	/* Nunca por encima de una subida en curso ni de una grabacion: el hilo es
@@ -1257,6 +1331,7 @@ static void periodic_work_fn(struct k_work *work)
 	k_mutex_lock(&status_lock, K_FOREVER);
 	if (status.state == HTTP_UPLOAD_RUNNING) {
 		k_mutex_unlock(&status_lock);
+		stage = CLIP_WIN_BUSY;
 		/* A `release`, NO a `reschedule`: saltarse el release con un prestamo
 		 * vivo deja la cuenta arriba para siempre y la radio no vuelve a
 		 * apagarse nunca — el fallo exacto que este mecanismo viene a
@@ -1289,11 +1364,13 @@ static void periodic_work_fn(struct k_work *work)
 	if (storage_ensure_mounted() != 0) {
 		LOG_ERR("ventana de subida: la tarjeta no monta; el atraso queda sin saber");
 		status_set_state(HTTP_UPLOAD_FAILED, -EIO);
+		stage = CLIP_WIN_NO_CARD;
 		goto release;
 	}
 
 	sessions = k_malloc(sizeof(*sessions) * CONFIG_CLIP_STORAGE_MAX_SESSIONS);
 	if (!sessions) {
+		stage = CLIP_WIN_NO_MEM;
 		goto release;   /* mismo motivo: no dejar el prestamo colgado */
 	}
 
@@ -1310,6 +1387,7 @@ static void periodic_work_fn(struct k_work *work)
 		LOG_ERR("no se pudo listar la tarjeta: %d. El atraso es DESCONOCIDO, "
 			"no cero: no se toca pending_files", found);
 		status_set_state(HTTP_UPLOAD_FAILED, found);
+		stage = CLIP_WIN_NO_LIST;
 		k_free(sessions);
 		goto release;
 	}
@@ -1421,6 +1499,12 @@ release:
 	 * endpoint configurado se salta por `reschedule` y no cuenta como
 	 * fallo -- no hay radio colgada, hay un aparato sin provisionar. */
 	if (leased) {
+		/* Hubo ventana de verdad, asi que cuenta. Si se intento algo y nada
+		 * salio bien pero ninguna etapa se marco, fue en las subidas. */
+		if (!any_success && stage == CLIP_WIN_OK) {
+			stage = CLIP_WIN_UPLOAD_FAIL;
+		}
+		win_note(any_success, stage);
 		wedge_note_window(any_success);
 	}
 

@@ -127,6 +127,9 @@ int health_snapshot_json(char *buf, size_t len)
 	struct clip_context *ctx = clip_get_context();
 	struct http_upload_status up;
 	struct storage_stats st = {0};
+	uint32_t win_miss = 0;
+	uint8_t win_stage = 0;
+	uint32_t win_ok_age = 0;
 	char mac[18] = "";
 	struct sys_memory_stats hs = {0};
 	extern struct k_heap _system_heap;
@@ -139,6 +142,10 @@ int health_snapshot_json(char *buf, size_t len)
 	}
 
 	have_storage = (storage_get_stats(&st) == 0);
+
+	/* Salud de las ventanas. Se lee aqui y no en el formato para que el
+	 * snapshot sea coherente consigo mismo: ok_age_s crece con el reloj. */
+	http_upload_window_health(&win_miss, &win_stage, &win_ok_age);
 	(void)wifi_get_mac(mac, sizeof(mac));
 	/* Memoria libre del heap: en una jornada de 8 horas es donde se veria una
 	 * fuga, y una fuga lenta no se nota hasta que el device deja de subir. */
@@ -162,7 +169,12 @@ int health_snapshot_json(char *buf, size_t len)
 		     "\"rssi\":%d,\"heap_free\":%u,\"up_stack_free\":%u,"
 		     "\"up_kbps\":%u,\"up_ok\":%u,\"up_fail\":%u,"
 		     "\"pending_files\":%u,\"recording\":%s,"
-		     "\"leases\":%d,\"repowers\":%u}",
+		     "\"leases\":%d,\"repowers\":%u,"
+		     /* Lo que se perdio mientras no se podia contar nada. Ver
+		      * http_upload_window_health(): este latido puede ser el
+		      * primero que sale tras un agujero, y entonces es el unico
+		      * sitio donde consta que hubo agujero. */
+		     "\"miss\":%u,\"miss_stage\":%u,\"ok_age_s\":%u}",
 		     device_id_str(), uptime_s, reset_cause_txt(boot_reset_cause),
 		     ctx->status.battery_percent, ctx->status.battery_mv,
 		     ctx->status.battery_charging ? "true" : "false",
@@ -249,7 +261,9 @@ int health_snapshot_json(char *buf, size_t len)
 		      * apagarlo y encenderlo de verdad (H2). Que crezca significa
 		      * que se detecto y se recupero. Ver wifi.h. */
 		     wifi_lease_count(),
-		     (unsigned int)wifi_rpu_repowers());
+		     (unsigned int)wifi_rpu_repowers(),
+		     (unsigned int)win_miss, (unsigned int)win_stage,
+		     (unsigned int)win_ok_age);
 
 	if (n < 0 || (size_t)n >= len) {
 		return -ENOMEM;
