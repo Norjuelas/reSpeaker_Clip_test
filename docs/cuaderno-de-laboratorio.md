@@ -517,6 +517,68 @@ libres**, y el latido pasa a 660 bytes de los 960 del buffer. Cero avisos del co
 
 ---
 
+## L-011 · Limpieza de `prj.conf` demostrablemente inerte
+**pendiente de commit · 2026-09-10 · 🟢 verificado por construcción**
+
+**Para qué.** `prj.conf` tenía 8 símbolos asignados dos veces y 22 líneas `CONFIG_BT_*`
+de un Bluetooth que se compila fuera. Lo peligroso no es el desorden: es que en un
+duplicado **gana la última asignación en silencio**, y tres fallos de este proyecto
+entraron exactamente así.
+
+**Lo que la limpieza NO podía hacer.** Cinco de los ocho pares tienen valores
+**distintos**:
+
+```
+MBEDTLS_HEAP_SIZE               1024  ->  16384
+MCUMGR_GRP_IMG_STATUS_HOOKS        n  ->  y
+MCUMGR_GRP_IMG_UPLOAD_CHECK_HOOK   n  ->  y
+MCUMGR_MGMT_NOTIFICATION_HOOKS     n  ->  y
+NCS_SAMPLE_MCUMGR_BT_OTA_DFU       n  ->  y
+```
+
+Los cuatro `MCUMGR` están en `n` con un comentario que dice *"BLE OTA va con BLE"*, y un
+bloque posterior los vuelve a poner en `y`. **El estado real es `y`.** Ordenar hacia la
+intención declarada —quedarse con el `n`— habría cambiado la imagen y podría haber roto
+los ganchos de progreso de DFU, que es el único camino para reflashear una unidad
+sellada. Por eso se borra **la primera de cada par**, nunca la última.
+
+**Qué cambia.** 30 líneas fuera: las 8 primeras de cada duplicado y las 22 `CONFIG_BT_*`
+(que ni siquiera llegan al `.config` generado — Kconfig las descarta por dependencias no
+satisfechas).
+
+**Implicación.** Ninguna funcional, y eso está *probado*, no supuesto. Lo que sí cambia
+es que ahora se puede activar una puerta de cero avisos en CI: los duplicados casi
+seguro emitían "assigned more than once", y una puerta que pinta el repo en rojo el
+primer día se desactiva y no vuelve.
+
+**Cómo se verifica.** El gate para cualquier cambio que se afirme inerte:
+
+```sh
+diff <(grep ^CONFIG_ build-A/clip/zephyr/.config | sort) \
+     <(grep ^CONFIG_ build-B/clip/zephyr/.config | sort)
+cmp -l build-A/clip/zephyr/zephyr.bin build-B/clip/zephyr/zephyr.bin | wc -l
+```
+
+**Resultado. 🟢 Inerte, byte a byte.**
+
+```
+.config generado : IDENTICO
+FLASH / RAM      : 927.324 B / 428.848 B en los dos
+zephyr.bin       : 0 bytes distintos
+```
+
+Los `.signed.bin` sí difieren en hash, y eso es esperado: imgtool estampa su propia
+cabecera. La imagen es la misma.
+
+**Nota para el resto de la limpieza.** Los 9 símbolos `CLIP_*` muertos
+(`CLIP_AGC_*` ×4, `CLIP_STORAGE_ENABLED`, `CLIP_TRANSFER_ENABLED`, `CLIP_UDP_*`)
+**no** se han tocado todavía: quitarlos sí cambia el `.config` (desaparecen), aunque no
+debería cambiar la imagen. Hay que pasarlos por el mismo gate antes de afirmarlo.
+Y `CLIP_TRANSFER_ENABLED` no gobierna nada: `transfer.c` se compila incondicionalmente
+en `CMakeLists.txt:21`, así que sacar el fichero es un cambio aparte que sí vale 2.864 B.
+
+---
+
 ## Observaciones sin cambio asociado
 
 - **El latido falla con `-ENOMEM` mientras se drena un atraso grande** (2026-09-10).
