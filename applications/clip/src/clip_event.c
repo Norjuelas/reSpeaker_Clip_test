@@ -324,6 +324,15 @@ static bool clip_sd_busy(void)
     if (clip_log_fs_active()) {
         return true;   /* logs write to SD */
     }
+    if (http_upload_is_sweeping()) {
+        /* Una pasada de subida corre con g_state en IDLE, asi que ninguna de
+         * las condiciones de arriba la ve. Sin esto el rail se cortaba a mitad
+         * de leer un trozo: en campo el 2026-09-09 el fs_stat() del 0004 fue
+         * bien, la tarjeta se apago y la lectura murio con -EIO a mitad de
+         * 2,4 MB. El fichero quedo sin marcar (correcto) pero nadie volvio a
+         * mirarlo hasta el reinicio. */
+        return true;
+    }
     return false;
 }
 

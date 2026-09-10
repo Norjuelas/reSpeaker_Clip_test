@@ -138,6 +138,20 @@ int http_upload_session_async(const char *session_id);
 int http_upload_sweep_now(void);
 
 /**
+ * @brief Hay una pasada de subida leyendo la tarjeta ahora mismo.
+ *
+ * Lo consulta clip_sd_busy() para no cortarle el rail por debajo. La pasada
+ * corre con la maquina de estados en IDLE, asi que sin esta pregunta ninguna
+ * de las condiciones de clip_sd_busy() es cierta durante un barrido y la
+ * tarjeta se apaga a mitad de una lectura (-EIO, visto en campo).
+ *
+ * Es una lectura atomica sin cerrojo a proposito: se llama desde dentro de
+ * storage_idle_poweroff(), que ya tiene sd_lifecycle_mutex. Coger status_lock
+ * aqui invertiria el orden de los cerrojos contra el hilo de subida.
+ */
+bool http_upload_is_sweeping(void);
+
+/**
  * @brief Como http_upload_sweep_now(), pero con espera.
  *
  * La usa el barrido de fin de grabacion: al parar hay que dejar que el hilo de

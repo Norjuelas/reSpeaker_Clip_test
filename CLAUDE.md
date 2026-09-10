@@ -28,8 +28,9 @@ Violate these and the build fails, the device bricks, or a fleet in the field br
 **Flash is the binding constraint, and there are two denominators — use the honest one.**
 Partition Manager gives the `app` partition `0xe9e00` = 957,952 B, but MCUboot reserves
 24,576 B of that (header + trailer/swap status), so the linker only offers **933,376 B**.
-The image is at **98.8%** of what it can actually use — about **11 KB free**, not the ~37 KB
-the "96%" figure in older commit messages implies. Before adding any library, measure it:
+The image is at **99.1%** of what it can actually use — about **8.4 KB free**, not the ~37 KB
+the "96%" figure in older commit messages implies. Measured 2026-09-09; it was 98.8% / ~11 KB
+a week earlier, so this number moves and is worth re-measuring rather than quoting. Before adding any library, measure it:
 `west build -d build-clip/clip -t rom_report`. This single number explains most of the
 architecture — why Bluetooth is compiled out, why the JSON parser in `health.c` is hand-rolled,
 why the nRF7002 firmware patch lives in a flash partition instead of the image.

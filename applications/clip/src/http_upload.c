@@ -114,6 +114,27 @@ static int32_t http_timeout_for(size_t size)
 #define CA_MAX_LEN     2048
 #define CA_SEC_TAG     42
 
+/* Hay un barrido leyendo la tarjeta ahora mismo.
+ *
+ * clip_sd_busy() lo consulta para no cortarle el rail por debajo. Sin esto la
+ * tarjeta se apagaba a mitad de una subida: el barrido corre con la maquina de
+ * estados en IDLE, y ninguna de las condiciones de clip_sd_busy() (grabando,
+ * transferencia, OTA, USB, log) es cierta durante una pasada. Pasó en campo el
+ * 2026-09-09: fs_stat() del trozo 0004 fue bien, el rail cayó, y la lectura
+ * murió con -EIO a mitad de 2,4 MB.
+ *
+ * Es un atomic y NO status.state leido bajo status_lock, a proposito:
+ * clip_sd_busy() se llama desde dentro de storage_idle_poweroff(), que ya tiene
+ * cogido sd_lifecycle_mutex, mientras el hilo de subida coge status_lock y
+ * despues toca storage. Coger status_lock aqui invierte el orden de los cerrojos
+ * y es un abrazo mortal. Leerlo sin cerrojo lo evita entero. */
+static atomic_t sweep_active;
+
+bool http_upload_is_sweeping(void)
+{
+	return atomic_get(&sweep_active) != 0;
+}
+
 static bool ca_loaded;
 
 /* Propiedad permanente del proceso: tls_credential_add() se queda con el
@@ -1245,12 +1266,53 @@ static void periodic_work_fn(struct k_work *work)
 	}
 	k_mutex_unlock(&status_lock);
 
+	/* A partir de aqui se toca la tarjeta, asi que no puede apagarse debajo.
+	 * Ver el comentario de sweep_active: clip_sd_busy() lo consulta. */
+	atomic_set(&sweep_active, 1);
+
+	/* La tarjeta se apaga sola a los CLIP_SD_IDLE_DELAY_MS (45 s) sin uso, y
+	 * este era el UNICO consumidor que no la volvia a montar antes de leerla:
+	 * at_commands.c lo hace seis veces, transfer.c dos, y ademas mtls.c,
+	 * usb_cdc.c, clip_event.c y nrf70_fw_provision.c.
+	 *
+	 * Sin esto storage_list_sessions() devolvia -EINVAL, los dos bucles de
+	 * abajo daban CERO vueltas, y el aparato publicaba pending_files:0 con
+	 * audio sin enviar en la tarjeta. Y se realimentaba: con la tarjeta abajo
+	 * nadie volvia a montarla, asi que no subia nada mas hasta un reinicio o
+	 * una grabacion nueva. Medido en campo el 2026-09-09: 1,2 MB parados 50
+	 * minutos, tres ventanas seguidas diciendo que no habia nada que hacer.
+	 *
+	 * Ademas rearma el temporizador de inactividad: storage_ensure_mounted()
+	 * es el UNICO sitio que llama a sd_activity_cb() (storage.c:466). Ni las
+	 * lecturas ni las escrituras lo rearman -- lo que mantiene viva la tarjeta
+	 * durante una grabacion no es escribir, es que clip_sd_busy() sea cierto. */
+	if (storage_ensure_mounted() != 0) {
+		LOG_ERR("ventana de subida: la tarjeta no monta; el atraso queda sin saber");
+		status_set_state(HTTP_UPLOAD_FAILED, -EIO);
+		goto release;
+	}
+
 	sessions = k_malloc(sizeof(*sessions) * CONFIG_CLIP_STORAGE_MAX_SESSIONS);
 	if (!sessions) {
 		goto release;   /* mismo motivo: no dejar el prestamo colgado */
 	}
 
 	found = storage_list_sessions(sessions, CONFIG_CLIP_STORAGE_MAX_SESSIONS);
+	if (found < 0) {
+		/* Esto NO es "no hay nada pendiente", y confundirlo es lo que hizo
+		 * invisible el fallo de campo: tres ventanas seguidas publicando
+		 * pending_files:0 mientras dos ficheros esperaban en la tarjeta.
+		 * Un cero es una afirmacion; aqui no se sabe.
+		 *
+		 * Se deja pending_files como estaba -- el ultimo valor conocido es
+		 * mas honesto que un cero inventado -- y se marca el error, que
+		 * junto a sd_mounted del latido dice exactamente que pasa. */
+		LOG_ERR("no se pudo listar la tarjeta: %d. El atraso es DESCONOCIDO, "
+			"no cero: no se toca pending_files", found);
+		status_set_state(HTTP_UPLOAD_FAILED, found);
+		k_free(sessions);
+		goto release;
+	}
 
 	/* De la mas antigua a la mas nueva: si la ventana no da para todas, lo que
 	 * lleva mas tiempo esperando sale primero. */
@@ -1340,6 +1402,12 @@ static void periodic_work_fn(struct k_work *work)
 	k_free(sessions);
 
 release:
+	/* Lo primero: la tarjeta ya puede volver a apagarse por inactividad. Se
+	 * limpia aqui y no en cada rama por el mismo motivo que el prestamo de
+	 * radio — una rama que se lo salte deja la tarjeta encendida para siempre
+	 * y se pierde justo el ahorro que este mecanismo vino a dar. */
+	atomic_set(&sweep_active, 0);
+
 	/* Se suelta aqui pase lo que pase. Un release que se salte una rama deja
 	 * la cuenta arriba para siempre y la radio no vuelve a apagarse — el
 	 * fallo exacto del que venimos. */
