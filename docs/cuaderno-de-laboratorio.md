@@ -166,7 +166,7 @@ en dos — decisión de producto, no técnica.
 ---
 
 ## L-005 · El latido cuenta lo que pasó mientras no podía contar nada
-**pendiente de commit · 2026-09-10 · 🟢 verificado en banco, 🟡 sin verificar en campo**
+**`4556fb1` · 2026-09-10 · 🟢 verificado en banco**
 
 **Para qué.** Cuando la radio se cae, el único canal que informa de la salud es el que
 se cae. Para entender las 5 h 37 min mudas de L-004 hicieron falta cuatro consultas al
@@ -220,7 +220,7 @@ Segunda mitad (que el latido de recuperación conserve `miss`) en curso.
 ---
 
 ## L-006 · Log en la tarjeta cuando hay problema
-**pendiente de commit · 2026-09-10 · 🟡 sin verificar**
+**`71d8a68` · 2026-09-10 · 🟢 verificado en banco**
 
 **Para qué.** L-005 vive en RAM y un reinicio se lo lleva — y reiniciar es justo lo que
 hace el detector de radio colgada al llegar a su umbral. El log de la tarjeta, que sería
@@ -271,7 +271,7 @@ haya que leer la tarjeta de todos modos.
 ---
 
 ## L-007 · Dos hilos mandaban el latido a la vez, y la ventana se contaba fallida
-**pendiente de commit · 2026-09-10 · 🟡 verificación en curso**
+**`71d8a68` · 2026-09-10 · 🟢 verificado en banco**
 
 **Para qué.** Lo encontró L-005 a los veinte minutos de existir. Con el endpoint bueno y
 el AP sano, el banco daba `miss=2 stage=2` mientras `beat_err` valía 0 y `conn_errno`
@@ -324,7 +324,7 @@ para darlo por bueno.
 ---
 
 ## L-008 · El log sale gratis cuando la tarjeta ya está encendida
-**pendiente de commit · 2026-09-10 · 🟢 verificado en banco**
+**`2cbad8b` · 2026-09-10 · 🟢 verificado en banco**
 
 **Para qué.** El retiro del log a los 120 s (`CLIP_LOG_FS_BOOT_WINDOW_S`) era un
 **temporizador puro**: disparaba sin mirar si la tarjeta estaba encendida por otra razón.
@@ -355,7 +355,7 @@ la ventana de arranque. Y es lo que capturó L-009.
 ---
 
 ## L-009 · `net_if_down()` puede fallar, y descartábamos el aviso
-**pendiente de commit · 2026-09-10 · 🟡 sin verificar**
+**`2cbad8b` · 2026-09-10 · 🟡 sin verificar**
 
 **Para qué — y esto es el hallazgo del día.** Con L-006 y L-008 registrando, el banco
 capturó por primera vez el fallo de radio con detalle del driver:
@@ -407,7 +407,7 @@ libres. Cero avisos del compilador.
 ---
 
 ## L-010 · Que un aparato de tienda pueda contar lo que le pasó ANTES de reiniciarse
-**pendiente de commit · 2026-09-10 · 🟡 parcialmente verificado**
+**`ad59518` · 2026-09-10 · 🟢 verificado en banco (motivo WEDGE), 🟡 CLEAN pendiente**
 
 **Para qué.** Auditoría de lo que el latido podía contestar en remoto, que es lo único
 que llega cuando no estás delante — el log de la tarjeta exige tenerla en la mano. El
@@ -461,9 +461,28 @@ libres**, y el latido pasa a 660 bytes de los 960 del buffer. Cero avisos del co
   es la respuesta honesta.
 - 🟡 **Motivo `CLEAN` sin verificar.** Exige un `AT+POWEROFF` y volver a encender con el
   botón; es acción física.
-- 🟡 **Motivo `WEDGE` sin verificar.** Exige tres ventanas malas seguidas (~45 min con el
-  endpoint apuntado a un puerto muerto). Es la que más importa y la que hay que hacer
-  antes del próximo despliegue en tienda.
+- 🟢 **Motivo `WEDGE` VERIFICADO el 2026-09-10.** Imagen de prueba con
+  `CLIP_UPLOAD_INTERVAL_MIN=2` (2 y no 1: una ventana fallida tarda ~50 s y la gracia del
+  préstamo otros 45, con 60 s se solaparían) y el endpoint en un puerto muerto:
+
+  ```
+  up=172s  miss=1 stage=2         <- ventana 1 falla
+  up=352s  miss=2 stage=2         <- ventana 2 falla
+           (sin puerto)           <- ventana 3: el detector reinicia
+  up= 15s  boots=4  prev_why=2  prev_miss=3  prev_stage=2
+  ```
+
+  El aparato se reinició solo y volvió **diciendo por qué**. Cuatro cosas de una vez:
+  L-005 contando bien (y `stage=2`, no 1 — asoció y falló el latido, correcto contra un
+  puerto muerto), L-006 registrando durante toda la racha, L-010 sobreviviendo al
+  reinicio en frío, y el propio detector siguiendo vivo después de que L-007 tocara
+  `post_health_inline()` — que era un riesgo real.
+
+  `prev_td=0` es correcto: en esta prueba la radio estaba sana y el apagado nunca falló.
+
+  Después se reflasheó la imagen de producción y se verificó `intervalo=15` y
+  `endpoint=:443`. El primer intento de reflasheo falló porque el aparato había vuelto
+  como **ttyACM1** y el guion tenía ACM0 fijo — el escollo de siempre, y van dos veces.
 
 ---
 
