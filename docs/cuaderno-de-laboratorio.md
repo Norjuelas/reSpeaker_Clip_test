@@ -407,7 +407,7 @@ libres. Cero avisos del compilador.
 ---
 
 ## L-010 · Que un aparato de tienda pueda contar lo que le pasó ANTES de reiniciarse
-**`ad59518` · 2026-09-10 · 🟢 verificado en banco (motivo WEDGE), 🟡 CLEAN pendiente**
+**`ad59518` · 2026-09-10 · 🟢 verificado en banco (WEDGE y CLEAN)**
 
 **Para qué.** Auditoría de lo que el latido podía contestar en remoto, que es lo único
 que llega cuando no estás delante — el log de la tarjeta exige tenerla en la mano. El
@@ -459,8 +459,24 @@ libres**, y el latido pasa a 660 bytes de los 960 del buffer. Cero avisos del co
 - 🟢 **Persistencia y contador**, 2026-09-10: `boots` fue 1 → 2 a través de un
   `AT+REBOOT`, con `prev_why=0` — correcto, porque `AT+REBOOT` no se marca y "no se sabe"
   es la respuesta honesta.
-- 🟡 **Motivo `CLEAN` sin verificar.** Exige un `AT+POWEROFF` y volver a encender con el
-  botón; es acción física.
+- 🟢 **Motivo `CLEAN` VERIFICADO el 2026-09-10.** Apagado con el botón, dos minutos
+  fuera, y encendido de nuevo:
+
+  ```
+  reset_cause : unknown     <- arranque en frio de verdad (RESETREAS = 0)
+  prev_why    : 1           <- apagado deliberado
+  boots       : 6
+  ```
+
+  Ese par es lo que se buscaba. Hasta hoy `unknown` significaba tres cosas
+  indistinguibles: lo apagaron, se quedó sin batería, o se colgó. La tabla queda:
+
+  | `reset_cause` | `prev_why` | qué pasó |
+  |---|---|---|
+  | `unknown` | 1 | lo apagaron a propósito |
+  | `unknown` | 0 | batería agotada, celda retirada, o fallo duro |
+  | `software` | 2 | el detector de radio colgada se rindió |
+  | `software` | 0 | `AT+REBOOT`, o un reinicio del firmware sin marcar |
 - 🟢 **Motivo `WEDGE` VERIFICADO el 2026-09-10.** Imagen de prueba con
   `CLIP_UPLOAD_INTERVAL_MIN=2` (2 y no 1: una ventana fallida tarda ~50 s y la gracia del
   préstamo otros 45, con 60 s se solaparían) y el endpoint en un puerto muerto:
