@@ -88,6 +88,24 @@ void clip_storage_activity_notify(void);
 bool clip_log_fs_active(void);
 
 /**
+ * @brief Encender o retirar el log a la tarjeta porque hay un problema.
+ *
+ * Lo llama la contabilidad de ventanas de http_upload.c: cuando una ventana no
+ * logra nada se enciende, y al recuperarse (o al agotar
+ * CLIP_LOG_FS_TROUBLE_WINDOWS) se retira.
+ *
+ * Existe porque los contadores del latido viven en RAM y un reinicio se los
+ * lleva -- y reiniciar es justo lo que hace el detector de radio colgada. El
+ * log de la tarjeta es lo unico que sobrevive a eso.
+ *
+ * Una peticion explicita de AT+LOG manda sobre esto: si alguien pidio logs, no
+ * se los quitamos; si los apago, no se los volvemos a poner.
+ *
+ * Ojo: mientras esta activo, clip_sd_busy() es cierto y la tarjeta no duerme.
+ */
+void clip_log_fs_trouble(bool on);
+
+/**
  * @brief Wait for events (called by main loop)
  *
  * Blocks until an event is posted or timeout expires.

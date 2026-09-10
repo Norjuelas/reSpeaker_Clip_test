@@ -38,6 +38,7 @@
 #include <zephyr/sys/mem_stats.h>
 #include "upload_registry.h"
 #include "health.h"
+#include "clip_event.h"
 #include <zephyr/sys/reboot.h>
 
 LOG_MODULE_REGISTER(http_upload, CONFIG_CLIP_LOG_LEVEL);
@@ -1122,7 +1123,38 @@ static struct k_work_delayable periodic_work;
 /* Latido de salud en el hilo de subida, secuencial con ella. El snapshot
  * lleva upload_state/files_done/files_total: es lo que el panel necesita para
  * decir "subiendo" en vivo. Fallar es tolerable — el periodico lo repite. */
-static int post_health_inline(void)
+/* Un latido reciente vale por el de esta ventana: la red funciona, que es lo
+ * unico que la ventana necesita saber. */
+#define WINDOW_BEAT_FRESH_S 30
+/* Cuanto se espera al hilo del latido. Con TLS, connect solo ya puede tardar
+ * CONNECT_TIMEOUT_MS = 20 s antes de rendirse. */
+#define WINDOW_BEAT_WAIT_S  30
+
+/* El latido de la ventana, delegado al hilo del latido en vez de mandado aqui.
+ *
+ * Antes esto hacia su propio http_post_json(), y eso era una carrera. Cuando la
+ * asociacion termina pasan dos cosas a la vez: wifi.c llama a health_beat_now()
+ * desde el evento STA-up, y esta ventana —que sondea el enlace cada segundo—
+ * llega justo despues a mandar el suyo. Dos handshakes TLS simultaneos al mismo
+ * endpoint, en hilos distintos, sin nada que los serialice y con ~44 KB de heap.
+ * Uno gana y el otro muere con ETIMEDOUT o -ENOMEM.
+ *
+ * Y no era solo un POST desperdiciado: cuando perdia el de la ventana,
+ * any_success quedaba en false y la ventana se contaba como fallida **con la red
+ * perfectamente sana**. Eso alimenta wedge_bad_windows, y tres de esas reinician
+ * un aparato que no tiene nada roto. Visto en banco el 2026-09-10 en cuanto se
+ * publicaron los contadores: miss=2 stage=2 mientras beat_err valia 0 y
+ * conn_errno 116.
+ *
+ * El comentario de wifi.c dice "esto no duplica latidos: adelanta el que
+ * tocaba", y es cierto para el temporizador de health.c — pero no sabia de este
+ * camino, que se anadio despues con lo de "un despertar, los dos trabajos".
+ *
+ * Asi que ahora hay un solo camino de POST. Si acaba de salir uno, vale; si no,
+ * se pide y se espera el resultado. */
+/* El camino de antes: mandar el POST aqui mismo. Solo se usa con el latido
+ * deshabilitado, donde por definicion no hay competidor. */
+static int post_health_direct(void)
 {
 	char json[960];
 	int n = health_snapshot_json(json, sizeof(json));
@@ -1130,11 +1162,43 @@ static int post_health_inline(void)
 	if (n <= 0) {
 		return -EINVAL;
 	}
-
-	/* Devuelve el resultado, y no por gusto: es la senal mas barata que hay
-	 * para saber si la pila de red sigue viva. El detector de radio colgada
-	 * de abajo se apoya en el. */
 	return http_post_json("/health", json, (size_t)n);
+}
+
+static int post_health_inline(void)
+{
+	int32_t age;
+
+	/* Con AT+HEALTH=off el hilo del latido no manda nada, asi que delegar
+	 * dejaria a la ventana sin senal de red y la contaria como fallida --
+	 * y tres de esas reinician el aparato. Sin latido tampoco hay
+	 * competidor, asi que se manda directo como antes. */
+	if (!health_is_enabled()) {
+		return post_health_direct();
+	}
+
+	age = health_last_beat_age_s();
+
+	if (age >= 0 && age <= WINDOW_BEAT_FRESH_S) {
+		return 0;   /* el de wifi.c ya salio: la red funciona */
+	}
+
+	if (health_beat_now() != 0) {
+		return -EAGAIN;   /* latido deshabilitado o sin arrancar */
+	}
+
+	for (int i = 0; i < WINDOW_BEAT_WAIT_S; i++) {
+		k_sleep(K_SECONDS(1));
+		age = health_last_beat_age_s();
+		if (age >= 0 && age <= WINDOW_BEAT_FRESH_S) {
+			return 0;
+		}
+	}
+
+	/* Se devuelve el error real del hilo del latido: es la senal mas barata
+	 * que hay para saber si la pila de red sigue viva, y el detector de radio
+	 * colgada se apoya en ella. */
+	return health_last_beat_err() ? health_last_beat_err() : -ETIMEDOUT;
 }
 
 /* Que paso mientras el aparato no pudo contar nada.
@@ -1173,6 +1237,9 @@ static void win_note(bool any_success, enum clip_win_stage stage)
 			win_miss_last = win_bad_run;
 			LOG_WRN("ventanas: se recupera tras %u sin exito (ultima etapa %u)",
 				(unsigned int)win_bad_run, (unsigned int)win_stage);
+			/* Se retira DESPUES de escribir la linea de recuperacion, para
+			 * que el fichero de la tarjeta acabe diciendo como termino. */
+			clip_log_fs_trouble(false);
 		}
 		win_bad_run = 0;
 		win_last_ok_ms = k_uptime_get();
@@ -1181,6 +1248,21 @@ static void win_note(bool any_success, enum clip_win_stage stage)
 
 	win_bad_run++;
 	win_stage = (uint8_t)stage;
+
+	/* El log a la tarjeta se enciende ANTES de escribir esta linea, o la
+	 * primera ventana mala -- la que dice como empezo todo -- no queda
+	 * registrada. Y se retira al agotar el cupo: interesa el comienzo del
+	 * problema, no el mismo fallo veinte veces con el rail encendido.
+	 *
+	 * Esto es lo unico que sobrevive a un reinicio. Los contadores de arriba
+	 * viven en RAM, y reiniciar es precisamente lo que hace el detector de
+	 * radio colgada al llegar a su umbral. */
+	if (win_bad_run <= CONFIG_CLIP_LOG_FS_TROUBLE_WINDOWS) {
+		clip_log_fs_trouble(true);
+	} else {
+		clip_log_fs_trouble(false);
+	}
+
 	LOG_WRN("ventana sin exito (%u seguidas), etapa %u",
 		(unsigned int)win_bad_run, (unsigned int)stage);
 }

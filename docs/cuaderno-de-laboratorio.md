@@ -219,21 +219,90 @@ Segunda mitad (que el latido de recuperación conserve `miss`) en curso.
 
 ---
 
-## L-006 · Log en la tarjeta cuando hay problema *(propuesto, sin escribir)*
+## L-006 · Log en la tarjeta cuando hay problema
+**pendiente de commit · 2026-09-10 · 🟡 sin verificar**
 
-**Para qué.** L-005 se pierde en un reinicio, y el log de la tarjeta se retira a los
-120 s de cada arranque (`CLIP_LOG_FS_BOOT_WINDOW_S`), así que un agujero que acaba en
-reinicio no deja rastro en ningún sitio.
+**Para qué.** L-005 vive en RAM y un reinicio se lo lleva — y reiniciar es justo lo que
+hace el detector de radio colgada al llegar a su umbral. El log de la tarjeta, que sería
+lo único que sobrevive, se retira a los 120 s de cada arranque
+(`CLIP_LOG_FS_BOOT_WINDOW_S`). Resultado: la noche del 2026-09-09 al 10 el aparato estuvo
+5 h 37 min mudo y **no quedó una sola línea** de por qué.
 
-**Idea.** Reactivar el backend de log en tarjeta mientras `win_bad_run > 0`, y retirarlo
-otra vez al recuperarse. El log aparece exactamente cuando hay algo que registrar, y de
-paso caen en la tarjeta las líneas del detector de cuelgue, incluida la de
-"reiniciando en frío" — que hoy no las ve nadie.
+**Qué cambia.** `clip_log_fs_trouble(bool)` en `at_commands.c`, llamada desde
+`win_note()`: se enciende el backend de log a la tarjeta en cuanto una ventana no logra
+nada, y se retira al recuperarse o al agotar `CLIP_LOG_FS_TROUBLE_WINDOWS` (5 por
+defecto). Se enciende **antes** de escribir la línea de la ventana mala, o la primera
+—la que dice cómo empezó todo— no quedaría registrada; y se retira **después** de la
+línea de recuperación, para que el fichero acabe diciendo cómo terminó.
 
-**Implicación a vigilar.** `clip_log_fs_active()` es una de las condiciones de
-`clip_sd_busy()`, así que mientras el log esté activo **la tarjeta no duerme**. Es
-aceptable justo en ese caso (si la radio está rota no se está ahorrando nada útil), pero
-hay que asegurarse de que se retira al recuperarse o el ahorro se pierde para siempre.
+**Implicación.** Mientras el log está activo, `clip_log_fs_active()` hace cierto a
+`clip_sd_busy()` y **la tarjeta no duerme**. Por eso el cupo: interesa el comienzo del
+problema, no repetir el mismo fallo veinte veces con el rail encendido en un aparato a
+batería. Con 5 se cubren con margen las 3 ventanas que disparan el reinicio.
+Una petición explícita de `AT+LOG` manda en los dos sentidos: si alguien pidió logs no
+se los quitamos, y si los apagó no se los devolvemos.
+
+**Coste medido.** 925.716 → 926.100 B, **+384 bytes**, 99,18% → 99,22%. Quedan 7.276
+libres. Cero avisos del compilador.
+
+**Cómo se verifica.** Provocar una racha mala (endpoint muerto), comprobar que aparecen
+líneas nuevas en `/SD:/LOG` con marcas de tiempo muy posteriores a los 120 s de arranque,
+y que tras restaurar el endpoint el log deja de crecer.
+
+**Resultado.** Pendiente.
+
+---
+
+## L-007 · Dos hilos mandaban el latido a la vez, y la ventana se contaba fallida
+**pendiente de commit · 2026-09-10 · 🟡 verificación en curso**
+
+**Para qué.** Lo encontró L-005 a los veinte minutos de existir. Con el endpoint bueno y
+el AP sano, el banco daba `miss=2 stage=2` mientras `beat_err` valía 0 y `conn_errno`
+116: un latido había salido bien **y** un connect había expirado, en la misma ventana.
+
+La causa: cuando la asociación termina pasan dos cosas a la vez. `wifi.c:380` llama a
+`health_beat_now()` desde el evento STA-up, y la ventana —que sondea el enlace cada
+segundo— llega justo después a mandar el suyo con `post_health_inline()`. **Dos
+handshakes TLS simultáneos al mismo endpoint, en hilos distintos, sin nada que los
+serialice y con ~44 KB de heap.** Uno gana, el otro muere con `ETIMEDOUT` o `-ENOMEM`.
+
+Y no era solo un POST desperdiciado: cuando perdía el de la ventana, `any_success`
+quedaba en false y **la ventana se contaba como fallida con la red perfectamente sana**.
+Eso alimenta `wedge_bad_windows`, y tres de esas reinician un aparato que no tiene nada
+roto.
+
+El comentario de `wifi.c` dice *"esto no duplica latidos: adelanta el que tocaba"* — y es
+cierto para el temporizador de `health.c`. No sabía de este otro camino, añadido después
+con lo de "un despertar, los dos trabajos".
+
+**Qué cambia.** Un solo camino de POST. `post_health_inline()` ya no manda nada por su
+cuenta: si acaba de salir un latido (≤30 s) lo da por bueno, y si no se lo pide al hilo
+del latido y espera el resultado hasta 30 s.
+
+**Implicación.** La ventana ahora puede esperar hasta 30 s extra al hilo del latido; ya
+esperaba 45 s por el enlace, así que no cambia el orden de magnitud. En el latido de
+cierre eso se paga con la tarjeta encendida (`sweep_active` sigue en 1).
+**Regresión que hubo que cerrar:** delegar dejaba a `AT+HEALTH=off` silenciando también
+el latido de la ventana, con lo que **todas** las ventanas habrían contado como fallidas
+y el detector habría reiniciado un aparato sano cada ~45 min. Con el latido apagado no
+hay competidor posible, así que ese caso vuelve al camino directo de antes.
+
+**Coste medido.** 925.636 → 925.716 B, **+80 bytes**.
+
+**Cómo se verifica.** `miss` tiene que quedarse en 0 a lo largo de varias ventanas con
+red sana, y `conn_errno` en 0.
+
+**Resultado.** Primera ventana limpia el 2026-09-10:
+
+```
+up=122s  miss=0  ok_age=122  wifi=False   <- aun sin exito: ok_age = uptime
+up=153s  miss=0  ok_age=12   wifi=True    <- ventana OK, beat_age=22
+```
+
+Las dos edades juntas cuentan la historia: el latido de `wifi.c` salió en el uptime ~131,
+y la ventana del ~141 lo vio con 10 s, lo dio por bueno y **no mandó un segundo POST**.
+`conn_errno` se quedó en 0 toda la tanda, donde antes daba 116. Faltan dos ventanas más
+para darlo por bueno.
 
 ---
 

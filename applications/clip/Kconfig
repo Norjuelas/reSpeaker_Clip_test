@@ -83,6 +83,30 @@ config CLIP_LOG_FS_DEFAULT_ON
 	  the production snippet) avoids broadcasting an app-only Kconfig symbol
 	  into the mcuboot sysbuild image, where it is undefined.
 
+config CLIP_LOG_FS_TROUBLE_WINDOWS
+	int "Ventanas malas que se registran en la tarjeta antes de callarse (0 = nunca)"
+	default 5
+	range 0 50
+	help
+	  Cuando una ventana de subida no logra nada, se vuelve a encender el
+	  backend de log a la tarjeta para las siguientes N ventanas malas, y se
+	  retira al recuperarse o al agotar el cupo.
+
+	  Por que existe: los contadores del latido (miss, miss_stage) viven en
+	  RAM, asi que un agujero que acabe en reinicio -- justo lo que hace el
+	  detector de radio colgada -- se los lleva. Y el log normal se retira a
+	  los CLIP_LOG_FS_BOOT_WINDOW_S del arranque, asi que a la hora del
+	  problema no hay nadie grabando nada. La noche del 2026-09-09 al 10 el
+	  aparato estuvo 5 h 37 min mudo y no quedo ni una linea de por que.
+
+	  El cupo importa: mientras el log esta activo, clip_log_fs_active() hace
+	  cierto a clip_sd_busy() y la tarjeta NO se duerme. Interesa el comienzo
+	  del problema, no repetir el mismo fallo veinte veces con el rail
+	  encendido en un aparato a bateria. Con el valor por defecto se cubren
+	  las tres ventanas que disparan el reinicio, con margen.
+
+	  Una peticion explicita de AT+LOG manda sobre esto en los dos sentidos.
+
 config CLIP_LOG_FS_BOOT_WINDOW_S
 	int "Seconds of FS logging after boot before it retires itself (0 = never)"
 	default 0 if LOG_BACKEND_UART

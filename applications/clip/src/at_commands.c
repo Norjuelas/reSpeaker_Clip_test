@@ -647,6 +647,71 @@ static int cmd_log_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
     }
 }
 
+#if CONFIG_CLIP_LOG_FS_TROUBLE_WINDOWS > 0
+/* Lo encendimos nosotros por un problema, no alguien con AT+LOG. Solo se
+ * retira lo que se encendio asi. */
+static bool log_fs_trouble;
+
+void clip_log_fs_trouble(bool on)
+{
+#if CONFIG_CLIP_LOG_FS_BOOT_WINDOW_S > 0
+    /* Una decision explicita manda en los dos sentidos: si alguien pidio logs
+     * no se los quitamos, y si los apago no se los devolvemos. */
+    if (log_fs_user_requested) {
+        return;
+    }
+#endif
+
+    if (on) {
+        if (log_fs_active) {
+            return;   /* idempotente: ya esta */
+        }
+
+        /* La tarjeta puede estar dormida; para esto se la despierta a
+         * proposito -- si hay problema, el ahorro ya no es lo importante. */
+        if (storage_ensure_mounted() != 0) {
+            return;
+        }
+
+        const struct log_backend *fs_be = log_backend_get_by_name("log_backend_fs");
+        if (!fs_be) {
+            return;
+        }
+
+        log_backend_activate(fs_be, NULL);
+        uint32_t src_cnt = log_src_cnt_get(0);
+        for (uint32_t i = 0; i < src_cnt; i++) {
+            log_filter_set(fs_be, 0, (int16_t)i, LOG_LEVEL_INF);
+        }
+        log_fs_active = true;
+        log_fs_trouble = true;
+        clip_storage_activity_notify();
+
+        LOG_WRN("FS log: reactivado porque una ventana no logro nada. Se retira "
+                "al recuperarse o tras %d ventanas malas.",
+                CONFIG_CLIP_LOG_FS_TROUBLE_WINDOWS);
+        return;
+    }
+
+    if (!log_fs_trouble) {
+        return;   /* no lo encendimos nosotros: no nos toca apagarlo */
+    }
+
+    /* Se avisa ANTES de desactivar, igual que en la ventana de arranque: un
+     * fichero que termina sin mas parece un cuelgue. */
+    LOG_WRN("FS log: se retira (recuperado, o agotado el cupo de ventanas)");
+
+    const struct log_backend *fs_be = log_backend_get_by_name("log_backend_fs");
+    if (fs_be) {
+        log_backend_deactivate(fs_be);
+    }
+    log_fs_active = false;
+    log_fs_trouble = false;
+}
+#else
+void clip_log_fs_trouble(bool on) { ARG_UNUSED(on); }
+#endif
+
 bool clip_log_fs_active(void)
 {
     return log_fs_active;
