@@ -14,7 +14,7 @@ Estados: 🟢 verificado · 🟡 sin verificar · 🔴 refutado · ⚪ no aplica
 ---
 
 ## L-001 · Los arneses de banco salen de `/tmp` y se niegan a medir sucio
-**`4b58d38` · 2026-09-09 · 🟡 parcialmente verificado**
+**`4b58d38` · 2026-09-09 · 🟢 verificado 2026-09-10**
 
 **Para qué.** Los cuatro guiones que produjeron las cifras de H2 (`1/10` → `20/20`)
 vivían en el directorio temporal de la sesión. Lo caro no eran las 242 líneas sino la
@@ -33,10 +33,25 @@ futuro de esos plazos invalida la línea base y hay que anotarlo aquí.
 **Cómo se verifica.** `test_bench_guard.py` con un puerto de mentira, y la rama de la
 lease contra hardware real.
 
-**Resultado.** Guardia probada 4/4 con el puerto falso, incluida la distinción que
-importa: ventana pasajera (1→0) pasa, lease colgada (1 persistente) aborta.
-**Sin probar contra hardware**: la rama de la lease nunca se ejercitó con un aparato
-real. Pendiente.
+**Resultado. 🟢 Cerrado el 2026-09-10.** Guardia probada 4/4 con el puerto falso,
+incluida la distinción que importa: ventana pasajera (1→0) pasa, lease colgada
+(1 persistente) aborta.
+
+Y **contra hardware real**, con una lease de `AT+STA=on` de verdad colgada:
+
+```
+sucio  : "hay 1 lease(s) de radio sin soltar tras 60 s"  -> salida 2, NO escribe fichero
+limpio : 2/2, 10,3 s por asociación, -44/-48 dBm         -> salida 0
+```
+
+Las dos mitades importan. Que aborte prueba que el confusor se detecta; que **no cree el
+fichero** prueba que no queda una medida a medias que alguien pueda leer como buena. Y
+que en limpio no dé falso positivo es lo que evita que la guardia acabe esquivándose con
+`--force`, que sería como no tenerla.
+
+Los 10,3 s coinciden exactamente con el gate de 20/20 del arreglo de H2: mismo guion,
+mismos plazos, así que las cifras siguen siendo comparables entre sí. Que era justo el
+motivo de sacar los arneses de `/tmp`.
 
 ---
 
