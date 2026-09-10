@@ -54,6 +54,12 @@ static struct k_work_delayable pair_reset_work;
 static bool reboot_clear_bonds;
 static bool log_fs_active = IS_ENABLED(CONFIG_CLIP_LOG_FS_DEFAULT_ON);
 
+/* Dos razones independientes para tener el log de la tarjeta encendido. Ver
+ * log_fs_apply(), mas abajo, que es quien las resuelve. */
+static bool log_req_trouble;   /* ventanas de subida sin exito: el log CUESTA */
+static bool log_req_free;      /* la tarjeta ya esta encendida: NO cuesta */
+static bool log_fs_auto;       /* lo encendimos nosotros; solo eso se retira */
+
 #if CONFIG_CLIP_LOG_FS_BOOT_WINDOW_S > 0
 /* El backend de log a la tarjeta se enciende por defecto para que se vea el
  * aprovisionamiento del parche del nRF70, que ocurre durante el arranque y no
@@ -559,6 +565,19 @@ static void log_fs_retire_handler(struct k_work *work)
         return;
     }
 
+    /* Este retiro era un TEMPORIZADOR puro: disparaba a los N segundos del
+     * arranque sin mirar si la tarjeta estaba encendida por otra razon. Por eso
+     * una grabacion de 7 horas se quedaba sin log a los 2 minutos, con el rail
+     * alimentado todo el rato. Si la tarjeta esta ocupada, el log no cuesta
+     * corriente: se conserva y lo retirara log_fs_apply() cuando deje de estarlo. */
+    if (clip_sd_busy_other_than_log()) {
+        log_fs_auto = true;
+        log_req_free = true;
+        LOG_WRN("FS log: ventana de arranque agotada, pero la tarjeta sigue "
+                "encendida por otra razon; el log sale gratis y se conserva.");
+        return;
+    }
+
     /* Se avisa ANTES de desactivar, para que la ultima linea del fichero
      * explique por que se corta. Un log que termina sin mas parece un cuelgue. */
     LOG_INF("FS log: ventana de arranque agotada (%ds), se retira para que la "
@@ -647,12 +666,23 @@ static int cmd_log_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
     }
 }
 
-#if CONFIG_CLIP_LOG_FS_TROUBLE_WINDOWS > 0
-/* Lo encendimos nosotros por un problema, no alguien con AT+LOG. Solo se
- * retira lo que se encendio asi. */
-static bool log_fs_trouble;
-
-void clip_log_fs_trouble(bool on)
+/* Dos razones independientes para tener el log de la tarjeta encendido, y una
+ * sola funcion que las resuelve. Antes esto era un unico interruptor y no
+ * podian coexistir.
+ *
+ *   log_req_trouble  ventanas de subida que no logran nada (L-006). Aqui el
+ *                    log SI cuesta: mantiene la tarjeta despierta. Por eso hay
+ *                    cupo (CLIP_LOG_FS_TROUBLE_WINDOWS).
+ *   log_req_free     la tarjeta esta encendida por otra razon -- grabando,
+ *                    barriendo, USB puesto. Aqui el log NO cuesta corriente:
+ *                    el rail esta alimentado igualmente.
+ *
+ * Lo segundo es lo que faltaba, y es lo que dejo a oscuras la noche del
+ * 2026-09-09 al 10: 7 h 21 min grabando, con la tarjeta encendida todo el
+ * rato, y el log apagandose solo a los 120 s del arranque. El retiro por
+ * ventana de arranque es un TEMPORIZADOR, no una decision de energia -- no
+ * miraba si la tarjeta estaba ocupada. */
+static void log_fs_apply(void)
 {
 #if CONFIG_CLIP_LOG_FS_BOOT_WINDOW_S > 0
     /* Una decision explicita manda en los dos sentidos: si alguien pidio logs
@@ -662,13 +692,11 @@ void clip_log_fs_trouble(bool on)
     }
 #endif
 
-    if (on) {
-        if (log_fs_active) {
-            return;   /* idempotente: ya esta */
-        }
+    bool want = log_req_trouble || log_req_free;
 
-        /* La tarjeta puede estar dormida; para esto se la despierta a
-         * proposito -- si hay problema, el ahorro ya no es lo importante. */
+    if (want && !log_fs_active) {
+        /* La tarjeta puede estar dormida (caso trouble); se la despierta a
+         * proposito. En el caso free ya esta montada por definicion. */
         if (storage_ensure_mounted() != 0) {
             return;
         }
@@ -684,33 +712,44 @@ void clip_log_fs_trouble(bool on)
             log_filter_set(fs_be, 0, (int16_t)i, LOG_LEVEL_INF);
         }
         log_fs_active = true;
-        log_fs_trouble = true;
+        log_fs_auto = true;
         clip_storage_activity_notify();
 
-        LOG_WRN("FS log: reactivado porque una ventana no logro nada. Se retira "
-                "al recuperarse o tras %d ventanas malas.",
-                CONFIG_CLIP_LOG_FS_TROUBLE_WINDOWS);
+        LOG_WRN("FS log: encendido (%s%s)",
+                log_req_trouble ? "ventanas sin exito" : "",
+                log_req_free ? " tarjeta ya encendida: sale gratis" : "");
         return;
     }
 
-    if (!log_fs_trouble) {
-        return;   /* no lo encendimos nosotros: no nos toca apagarlo */
-    }
+    if (!want && log_fs_active && log_fs_auto) {
+        /* Se avisa ANTES de desactivar, igual que en la ventana de arranque:
+         * un fichero que termina sin mas parece un cuelgue. */
+        LOG_WRN("FS log: se retira (ni problema ni tarjeta encendida)");
 
-    /* Se avisa ANTES de desactivar, igual que en la ventana de arranque: un
-     * fichero que termina sin mas parece un cuelgue. */
-    LOG_WRN("FS log: se retira (recuperado, o agotado el cupo de ventanas)");
-
-    const struct log_backend *fs_be = log_backend_get_by_name("log_backend_fs");
-    if (fs_be) {
-        log_backend_deactivate(fs_be);
+        const struct log_backend *fs_be = log_backend_get_by_name("log_backend_fs");
+        if (fs_be) {
+            log_backend_deactivate(fs_be);
+        }
+        log_fs_active = false;
+        log_fs_auto = false;
     }
-    log_fs_active = false;
-    log_fs_trouble = false;
 }
+
+void clip_log_fs_trouble(bool on)
+{
+#if CONFIG_CLIP_LOG_FS_TROUBLE_WINDOWS > 0
+    log_req_trouble = on;
+    log_fs_apply();
 #else
-void clip_log_fs_trouble(bool on) { ARG_UNUSED(on); }
+    ARG_UNUSED(on);
 #endif
+}
+
+void clip_log_fs_evaluate(void)
+{
+    log_req_free = clip_sd_busy_other_than_log();
+    log_fs_apply();
+}
 
 bool clip_log_fs_active(void)
 {

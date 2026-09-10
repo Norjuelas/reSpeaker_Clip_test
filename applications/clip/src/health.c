@@ -174,7 +174,8 @@ int health_snapshot_json(char *buf, size_t len)
 		      * http_upload_window_health(): este latido puede ser el
 		      * primero que sale tras un agujero, y entonces es el unico
 		      * sitio donde consta que hubo agujero. */
-		     "\"miss\":%u,\"miss_stage\":%u,\"ok_age_s\":%u}",
+		     "\"miss\":%u,\"miss_stage\":%u,\"ok_age_s\":%u,"
+		     "\"tdfail\":%u}",
 		     device_id_str(), uptime_s, reset_cause_txt(boot_reset_cause),
 		     ctx->status.battery_percent, ctx->status.battery_mv,
 		     ctx->status.battery_charging ? "true" : "false",
@@ -263,7 +264,8 @@ int health_snapshot_json(char *buf, size_t len)
 		     wifi_lease_count(),
 		     (unsigned int)wifi_rpu_repowers(),
 		     (unsigned int)win_miss, (unsigned int)win_stage,
-		     (unsigned int)win_ok_age);
+		     (unsigned int)win_ok_age,
+		     (unsigned int)wifi_teardown_fails());
 
 	if (n < 0 || (size_t)n >= len) {
 		return -ENOMEM;

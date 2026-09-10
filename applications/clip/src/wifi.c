@@ -59,6 +59,11 @@ static bool wifi_ready;
 
 /* Station-mode state. sta_associated means the link layer is up; sta_ip is only
  * populated once DHCP hands us a lease, which is what callers actually need. */
+/* Veces que net_if_down() ha fallado. Importa mas de lo que parece: es la
+ * unica ruta que llega a rpu_pwroff(), asi que un apagado fallido significa
+ * que el RPU NO se apago. Ver wifi_sta_off(). */
+static uint32_t teardown_fails;
+
 static bool sta_associated;
 static char sta_ip[NET_IPV4_ADDR_LEN];
 static int sta_fail_reason;
@@ -901,6 +906,11 @@ static uint32_t rpu_repowers;
 
 /* Cuantas veces se ha tenido que re-alimentar el RPU desde el arranque. Se
  * publica en AT+STA?: si crece en campo, H2 sigue vivo pero recuperandose. */
+uint32_t wifi_teardown_fails(void)
+{
+	return teardown_fails;
+}
+
 uint32_t wifi_rpu_repowers(void)
 {
 	return rpu_repowers;
@@ -1277,7 +1287,38 @@ int wifi_sta_off(void)
 
 	if (net_if_is_admin_up(iface))
 	{
-		net_if_down(iface);
+		int down_ret = net_if_down(iface);
+
+		if (down_ret)
+		{
+			/* Esto se descartaba, y era el unico dato que decia que la
+			 * recuperacion no habia funcionado.
+			 *
+			 * net_if_down() acaba en nrf_wifi_if_stop_zep(), y esa es la
+			 * unica ruta que llega a rpu_pwroff() (BUCKEN=0, IOVDD=0). Si
+			 * falla, el chip NO se apaga: se queda exactamente en el estado
+			 * roto en que estaba, y la ventana siguiente hace net_if_up()
+			 * sobre una interfaz que nunca bajo.
+			 *
+			 * Capturado en banco el 2026-09-10 con la firma del driver:
+			 *   hal_rpu_mem_write: Invalid memory address 0xAAAAAAAA
+			 *   nrf_wifi_sys_fmac_chg_vif_state: RPU is unresponsive for 10 sec
+			 *   nrf_wifi_if_stop_zep: nrf_wifi_sys_fmac_chg_vif_state failed
+			 *
+			 * 0xAAAAAAAA es patron de memoria sin inicializar: el driver esta
+			 * calculando una direccion del RPU que es basura.
+			 *
+			 * Corrige una conclusion anterior de este mismo dia: se venia
+			 * diciendo que la radio se apaga entera entre cada dos ventanas y
+			 * que por tanto un chip colgado no podia ser la causa. Es cierto
+			 * SOLO cuando el apagado funciona; cuando el RPU no responde, lo
+			 * que falla es justo el apagado. */
+			teardown_fails++;
+			LOG_ERR("net_if_down() fallo: %d. La interfaz no bajo, asi que "
+				"rpu_pwroff() no corrio y el chip se queda como estaba "
+				"(van %u). Buscar 'RPU is unresponsive' mas arriba.",
+				down_ret, (unsigned int)teardown_fails);
+		}
 	}
 
 	ble_notify_event("sta", "off");

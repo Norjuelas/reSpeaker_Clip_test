@@ -323,6 +323,89 @@ para darlo por bueno.
 
 ---
 
+## L-008 · El log sale gratis cuando la tarjeta ya está encendida
+**pendiente de commit · 2026-09-10 · 🟢 verificado en banco**
+
+**Para qué.** El retiro del log a los 120 s (`CLIP_LOG_FS_BOOT_WINDOW_S`) era un
+**temporizador puro**: disparaba sin mirar si la tarjeta estaba encendida por otra razón.
+Y grabando la tarjeta está encendida siempre — `audio_is_recording()` es una de las
+condiciones de `clip_sd_busy()`, así que la puerta de inactividad no llega a ejecutarse.
+Resultado: la noche del 2026-09-09 al 10 se grabó 7 h 21 min con el raíl alimentado todo
+el rato y el log apagándose solo a los dos minutos. Se tiró registro gratis.
+
+**Qué cambia.** `clip_sd_busy_other_than_log()` separa "la tarjeta está ocupada por algo
+que no es el log" de `clip_sd_busy()` — hacía falta porque el log es una de las
+condiciones de esta última, así que preguntarle con el log encendido siempre dice que sí.
+`log_fs_apply()` resuelve dos peticiones independientes: `log_req_trouble` (L-006, donde
+el log **sí** cuesta porque despierta la tarjeta, de ahí el cupo) y `log_req_free` (la
+tarjeta ya está encendida, no cuesta corriente). El tick de inactividad reevalúa antes de
+intentar apagar, en ese orden, para que el mismo tick pueda apagar la tarjeta cuando deja
+de hacer falta.
+
+**Implicación.** Grabando, barriendo o con USB puesto ahora hay log continuo sin coste de
+energía — sólo las escrituras. En reposo con la radio sana no hay log, como antes. Y el
+retiro por ventana de arranque ya no apaga el log de una grabación en curso.
+
+**Cómo se verifica.** Que el fichero de la tarjeta crezca con marcas muy posteriores a
+los 120 s de arranque.
+
+**Resultado. 🟢 Verificado el 2026-09-10.** `log.0038` llegó a `[00:22:52]` — once veces
+la ventana de arranque. Y es lo que capturó L-009.
+
+---
+
+## L-009 · `net_if_down()` puede fallar, y descartábamos el aviso
+**pendiente de commit · 2026-09-10 · 🟡 sin verificar**
+
+**Para qué — y esto es el hallazgo del día.** Con L-006 y L-008 registrando, el banco
+capturó por primera vez el fallo de radio con detalle del driver:
+
+```
+[00:19:15] <err> wifi_nrf: hal_rpu_mem_write: Invalid memory address 0xAAAAAAAA
+[00:19:15] <err> wifi_nrf: nrf_wifi_wpa_set_supp_port: nrf_wifi_sys_fmac_chg_sta failed
+[00:19:23] <wrn> wifi: radio: sin prestamos, se apaga
+[00:19:34] <err> wifi_nrf: nrf_wifi_sys_fmac_chg_vif_state: RPU is unresponsive for 10 sec
+[00:19:34] <err> wifi_nrf: nrf_wifi_if_stop_zep: nrf_wifi_sys_fmac_chg_vif_state failed
+```
+
+`0xAAAAAAAA` es patrón de memoria sin inicializar: el driver está calculando una
+dirección del RPU que es basura. Y la misma firma aparece en los logs **viejos** justo
+antes de `radio colgada: 3 ventanas seguidas sin exito. Reiniciando en frio.` — o sea que
+es la huella del H2 residual, no algo de hoy.
+
+La línea que importa es la última: `nrf_wifi_if_stop_zep` **es** la implementación de
+bajar la interfaz, lo que llama `net_if_down()`. Y en `wifi_sta_off()` el retorno se
+descartaba.
+
+**Corrige una conclusión mía de esta misma mañana.** Dije que la radio se apaga entera
+entre cada dos ventanas y que por tanto un chip colgado no podía ser la causa — y con eso
+descarté reencenderla como arreglo. Es cierto **sólo cuando el apagado funciona**. Cuando
+el RPU no responde, lo que falla es justo el apagado: `rpu_pwroff()` no corre, el chip se
+queda como estaba, y la ventana siguiente levanta una interfaz que nunca bajó.
+
+**Qué cambia.** Se comprueba el retorno, se cuenta (`teardown_fails`), se registra con la
+explicación, y se publica en el latido como `tdfail`.
+
+**Implicación.** Sólo detección: no cambia ningún comportamiento de recuperación todavía.
+A propósito — diseñar el remedio antes de saber qué está roto es como salieron cinco
+teorías equivocadas sobre H2, y hoy van cuatro más mías. Con `tdfail` y `miss_stage`
+juntos el diagnóstico son dos números: `tdfail` subiendo con `stage=1` es "el apagado
+falló y ahora no levanta".
+
+**Lo que NO se afirma.** Que esto explique las 5 h 37 min de anoche. Aquí se recuperó
+solo: errores a las 00:19:34 y un `AT+STA=on` manual asoció normalmente a las 00:22:47,
+tres minutos después, sin reiniciar. Misma firma, persistencia muy distinta.
+
+**Coste medido.** 926.396 → 926.612 B, **+216 bytes**, 99,25% → 99,28%. Quedan 6.764
+libres. Cero avisos del compilador.
+
+**Cómo se verifica.** Que `tdfail` suba la próxima vez que aparezca la firma
+`RPU is unresponsive` en el log de la tarjeta.
+
+**Resultado.** Pendiente. Recién instalado el 2026-09-10; `tdfail=0` al arrancar.
+
+---
+
 ## Observaciones sin cambio asociado
 
 - **El latido falla con `-ENOMEM` mientras se drena un atraso grande** (2026-09-10).

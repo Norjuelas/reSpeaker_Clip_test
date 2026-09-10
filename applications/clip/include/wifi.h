@@ -225,6 +225,18 @@ uint32_t wifi_sta_offline_minutes(void);
 uint32_t wifi_rpu_repowers(void);
 
 /**
+ * @brief Veces que net_if_down() ha fallado desde el arranque.
+ *
+ * net_if_down() es la unica ruta que llega a rpu_pwroff() (BUCKEN=0, IOVDD=0).
+ * Si falla, el chip no se apaga y la ventana siguiente levanta una interfaz
+ * que nunca bajo -- el estado del que historicamente solo se sale reiniciando.
+ *
+ * Junto a `miss_stage` da el diagnostico en dos numeros: tdfail creciendo con
+ * stage=1 (no asocio) es "el apagado fallo y ahora no levanta".
+ */
+uint32_t wifi_teardown_fails(void);
+
+/**
  * @brief La MAC del interfaz WiFi, como "AA:BB:CC:DD:EE:FF"
  *
  * Hace falta para las redes de tienda que filtran por lista blanca: sin este

@@ -310,7 +310,17 @@ static void fg_save_work_handler(struct k_work *work)
 /* Registered with storage as the busy callback: returns true (busy) if the SD
  * must NOT be idle-powered-off. Evaluated under sd_lifecycle_mutex by
  * storage_idle_poweroff(), closing the TOCTOU with the unlocked tick. */
-static bool clip_sd_busy(void)
+/* La tarjeta esta encendida por algo QUE NO ES el log.
+ *
+ * Se separa del log a proposito: clip_log_fs_active() es una de las
+ * condiciones de clip_sd_busy(), asi que preguntar "esta ocupada" con el log
+ * encendido siempre dice que si, y no sirve para decidir si el log sale gratis.
+ *
+ * Cuando esto es cierto, el rail esta alimentado igualmente y registrar no
+ * cuesta corriente -- solo las escrituras. Esa distincion es la que faltaba:
+ * la noche del 2026-09-09 al 10 el aparato grabo 7 h 21 min con la tarjeta
+ * encendida todo el rato, y el log se apago solo a los 120 s del arranque. */
+bool clip_sd_busy_other_than_log(void)
 {
     if ((enum clip_state)atomic_get(&g_state) != CLIP_STATE_IDLE) {
         return true;
@@ -321,17 +331,19 @@ static bool clip_sd_busy(void)
     if (usb_cdc_is_enabled()) {
         return true;   /* USB MSC exposes the SD — don't pull the rail */
     }
+    if (http_upload_is_sweeping()) {
+        return true;
+    }
+    return false;
+}
+
+static bool clip_sd_busy(void)
+{
+    if (clip_sd_busy_other_than_log()) {
+        return true;
+    }
     if (clip_log_fs_active()) {
         return true;   /* logs write to SD */
-    }
-    if (http_upload_is_sweeping()) {
-        /* Una pasada de subida corre con g_state en IDLE, asi que ninguna de
-         * las condiciones de arriba la ve. Sin esto el rail se cortaba a mitad
-         * de leer un trozo: en campo el 2026-09-09 el fs_stat() del 0004 fue
-         * bien, la tarjeta se apago y la lectura murio con -EIO a mitad de
-         * 2,4 MB. El fichero quedo sin marcar (correcto) pero nadie volvio a
-         * mirarlo hasta el reinicio. */
-        return true;
     }
     return false;
 }
@@ -378,6 +390,11 @@ static void sd_idle_poweroff_work_handler(struct k_work *work)
      * condicion — algo lleva un rato ocioso, apagalo. */
     check_no_network_poweroff();
 #endif
+
+    /* Antes de intentar apagar: si la tarjeta esta encendida por otra razon,
+     * el log sale gratis y se enciende; si ya no, se retira. En ese orden, para
+     * que el mismo tick pueda apagar la tarjeta cuando deja de hacer falta. */
+    clip_log_fs_evaluate();
 
     /* storage_idle_poweroff() checks writing_file + the busy callback UNDER
      * the lock, so no TOCTOU with a recording/transfer starting mid-check. */

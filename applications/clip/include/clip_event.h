@@ -106,6 +106,26 @@ bool clip_log_fs_active(void);
 void clip_log_fs_trouble(bool on);
 
 /**
+ * @brief La tarjeta esta encendida por algo que NO es el log.
+ *
+ * Grabando, transfiriendo, con USB puesto, con un OTA o con un barrido de
+ * subida en curso. Se separa de clip_sd_busy() a proposito: el log es una de
+ * las condiciones de esa, asi que preguntarle con el log encendido siempre
+ * dice que si, y no sirve para decidir si el log sale gratis.
+ */
+bool clip_sd_busy_other_than_log(void);
+
+/**
+ * @brief Reevaluar si el log a la tarjeta debe estar encendido.
+ *
+ * Lo llama el tick de inactividad de la SD antes de intentar apagarla. Si la
+ * tarjeta esta encendida por otra razon, registrar no cuesta corriente y el
+ * log se conserva; cuando deja de estarlo, se retira para que la tarjeta pueda
+ * dormir.
+ */
+void clip_log_fs_evaluate(void);
+
+/**
  * @brief Wait for events (called by main loop)
  *
  * Blocks until an event is posted or timeout expires.
