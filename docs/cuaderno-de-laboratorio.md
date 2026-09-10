@@ -406,6 +406,67 @@ libres. Cero avisos del compilador.
 
 ---
 
+## L-010 · Que un aparato de tienda pueda contar lo que le pasó ANTES de reiniciarse
+**pendiente de commit · 2026-09-10 · 🟡 parcialmente verificado**
+
+**Para qué.** Auditoría de lo que el latido podía contestar en remoto, que es lo único
+que llega cuando no estás delante — el log de la tarjeta exige tenerla en la mano. El
+agujero: **`miss`, `miss_stage` y `tdfail` viven en RAM, y el reinicio del detector de
+radio colgada se los lleva.** Ese detector existe justamente para reiniciar tras tres
+ventanas malas, así que en el fallo típico el aparato llega al servidor con todo a cero y
+`reset: software`: dice que se rindió, no por qué.
+
+La noche del 2026-09-09 al 10 sólo se salvó de eso por accidente — la grabación en curso
+difirió el reinicio cinco horas y con ello conservó la evidencia. Un aparato de tienda
+que no esté grabando reinicia a los ~45 minutos y no se aprende nada.
+
+Y dos ambigüedades menores del mismo tipo: `reset_cause: unknown` no distingue *lo
+apagaron* de *se quedó sin batería*, y no había forma de saber cuántas veces ha
+reiniciado una unidad desde que se instaló.
+
+**Qué cambia.** Una nota persistida de 16 bytes, `struct clip_boot_note`, en su propia
+clave de settings (`clip/boot_note`) — **fuera del `config_table`** a propósito: esa tabla
+mapea claves a campos de `struct clip_config` por `offsetof`, y añadir ahí cambiaría el
+formato persistido de la configuración entera. Esto es diagnóstico, no configuración.
+
+El mecanismo, y la parte que importa es la tercera:
+
+1. Al arrancar se lee la nota anterior y se guarda en RAM para publicarla como `prev_*`.
+2. `boots` se incrementa y persiste.
+3. **Acto seguido se escribe una nota nueva con motivo `UNKNOWN`.** Así, si el aparato
+   muere sin avisar — corte, batería, cuelgue — el arranque siguiente encuentra `UNKNOWN`,
+   y eso *ya es información*. Sólo un apagado o un reinicio deliberado la sobrescriben
+   con su motivo real antes de irse.
+
+Motivos: `0` no se sabe · `1` apagado deliberado (ship mode) · `2` el detector de radio
+colgada reinició en frío.
+
+Campos nuevos en el latido: `boots`, `prev_why`, `prev_miss`, `prev_stage`, `prev_td`.
+
+**Implicación.** Un reinicio del detector deja de ser opaco: llega
+`prev_why=2 prev_miss=3 prev_stage=1 prev_td=2` y eso se lee como *"se rindió tras tres
+ventanas sin asociar, con dos apagados de interfaz fallidos"* — sin tener el aparato
+delante. No se intenta migrar notas de versión distinta: perder una nota vieja no cuesta
+nada, malinterpretarla sí.
+
+**Coste medido.** 926.612 → 927.324 B, **+712 bytes**, 99,28% → 99,35%. Quedan **6.052
+libres**, y el latido pasa a 660 bytes de los 960 del buffer. Cero avisos del compilador.
+
+**Cómo se verifica.** Tres caminos, uno por motivo.
+
+**Resultado.**
+
+- 🟢 **Persistencia y contador**, 2026-09-10: `boots` fue 1 → 2 a través de un
+  `AT+REBOOT`, con `prev_why=0` — correcto, porque `AT+REBOOT` no se marca y "no se sabe"
+  es la respuesta honesta.
+- 🟡 **Motivo `CLEAN` sin verificar.** Exige un `AT+POWEROFF` y volver a encender con el
+  botón; es acción física.
+- 🟡 **Motivo `WEDGE` sin verificar.** Exige tres ventanas malas seguidas (~45 min con el
+  endpoint apuntado a un puerto muerto). Es la que más importa y la que hay que hacer
+  antes del próximo despliegue en tienda.
+
+---
+
 ## Observaciones sin cambio asociado
 
 - **El latido falla con `-ENOMEM` mientras se drena un atraso grande** (2026-09-10).

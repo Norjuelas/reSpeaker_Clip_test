@@ -49,6 +49,19 @@ int health_beat_now(void);
  * tarjeta se lee como una foto vieja mientras el device la usa: no habia forma
  * de contestar "¿esta llegando al servicio?" por cable.
  */
+/**
+ * @brief Dejar dicho por que nos vamos, antes de reiniciar o apagar.
+ *
+ * Recoge los contadores de diagnostico que viven en RAM (`miss`, `miss_stage`,
+ * `tdfail`) y los persiste junto al motivo. El arranque siguiente los publica
+ * en el latido como `prev_*`, que es la unica forma de que un aparato en una
+ * tienda cuente lo que le paso ANTES de reiniciarse -- el log de la tarjeta
+ * exige tenerlo en la mano.
+ *
+ * Llamar justo antes de sys_reboot() o de entrar en ship mode.
+ */
+void health_boot_note_mark(int reason);
+
 int health_last_beat_err(void);
 
 /**

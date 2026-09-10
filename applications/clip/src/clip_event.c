@@ -931,6 +931,12 @@ static enum clip_event_result execute_transition(enum clip_event event,
          * on the next boot (avoids the reboot % jump). */
         battery_save_fg_state();
 
+        /* Y dejar dicho que este apagado fue deliberado. Sin esto el arranque
+         * siguiente reporta reset_cause "unknown", que es indistinguible de
+         * quedarse sin bateria o de que alguien quite la celda: salir de ship
+         * mode es un arranque en frio de verdad y RESETREAS vuelve a 0. */
+        health_boot_note_mark(CLIP_BOOT_CLEAN);
+
         err = regulator_parent_ship_mode(regulators);
         if (err) {
             LOG_ERR("Failed to enter ship mode: %d", err);

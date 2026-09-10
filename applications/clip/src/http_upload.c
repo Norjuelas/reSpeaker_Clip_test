@@ -1341,6 +1341,13 @@ static void wedge_note_window(bool any_success)
 	 * latido. Esta linea es la unica prueba de por que se reinicio. */
 	LOG_WRN("radio colgada: %d ventanas seguidas sin exito con el enlace "
 		"'arriba'. Reiniciando en frio.", wedge_bad_windows);
+
+	/* Dejar dicho por que, ANTES de reiniciar: los contadores viven en RAM y
+	 * este reinicio se los lleva. Sin esto, el aparato llega al servidor con
+	 * todo a cero y `reset: software` -- dice que se rindio, no por que. Es
+	 * justo el caso que mas interesa explicar en una tienda. */
+	health_boot_note_mark(CLIP_BOOT_WEDGE);
+
 	k_sleep(K_MSEC(200));   /* que el backend de fichero vacie */
 	sys_reboot(SYS_REBOOT_COLD);
 }

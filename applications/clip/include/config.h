@@ -26,6 +26,57 @@
 #define CONFIG_KEY_UPLOAD_HOST   0x11
 #define CONFIG_KEY_UPLOAD_PORT   0x12
 
+/**
+ * @brief Por que se apago o reinicio el aparato la vez anterior.
+ *
+ * `reset_cause` del latido dice COMO (power-on, software, watchdog) pero no
+ * POR QUE, y ahi se confunden tres cosas muy distintas: alguien lo apago, se
+ * quedo sin bateria, o el firmware se reinicio solo. Esto las separa.
+ */
+enum clip_boot_reason {
+	CLIP_BOOT_UNKNOWN = 0,  /* corte de corriente, bateria, AT+REBOOT, cuelgue */
+	CLIP_BOOT_CLEAN   = 1,  /* apagado deliberado: se entro en ship mode */
+	CLIP_BOOT_WEDGE   = 2,  /* el detector de radio colgada reinicio en frio */
+};
+
+/**
+ * @brief Lo que el arranque anterior quiso dejar dicho.
+ *
+ * Existe porque los contadores de diagnostico (`miss`, `miss_stage`, `tdfail`)
+ * viven en RAM, y el reinicio del detector de radio colgada -- justo el caso que
+ * mas interesa explicar -- se los lleva. Sin esto, un aparato de tienda llega al
+ * servidor con todo a cero y `reset: software`: dice que se rindio, no por que.
+ *
+ * Se escribe antes de un reinicio deliberado y se lee una vez al arrancar. El
+ * log de la tarjeta cubre el resto, pero ese exige tener el aparato en la mano;
+ * esto viaja en el latido.
+ */
+struct clip_boot_note {
+	uint8_t  version;      /* 1 */
+	uint8_t  reason;       /* enum clip_boot_reason */
+	uint8_t  miss_stage;   /* enum clip_win_stage de la ultima ventana mala */
+	uint8_t  reserved;
+	uint16_t miss;         /* ventanas seguidas sin exito al morir */
+	uint16_t tdfail;       /* net_if_down() fallidos acumulados */
+	uint32_t boots;        /* arranques desde el aprovisionamiento */
+	uint32_t uptime_s;     /* cuanto llevaba encendido */
+};
+
+#define CLIP_BOOT_NOTE_VERSION 1
+
+/**
+ * @brief Guardar la nota de arranque. Se llama antes de reiniciar o apagar.
+ */
+int config_save_boot_note(const struct clip_boot_note *note);
+
+/**
+ * @brief Leer la nota que dejo el arranque anterior.
+ *
+ * @retval 0        habia nota y es de una version conocida
+ * @retval -ENOENT  no hay nota (aparato nuevo, o el arranque anterior murio sin avisar)
+ */
+int config_load_boot_note(struct clip_boot_note *note);
+
 
 /**
  * @brief Initialize configuration system

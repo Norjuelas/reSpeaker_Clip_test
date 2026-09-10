@@ -45,6 +45,11 @@ LOG_MODULE_REGISTER(config, CONFIG_CLIP_LOG_LEVEL);
 #define SETTING_AUDIO_KEY       "config/audio_key"
 #define SETTING_UPLOAD_PORT     "config/upload_port"
 #define SETTING_TIME_UNIX       "time/unix_timestamp"
+/* Fuera del config_table a proposito: esa tabla mapea claves a campos de
+ * struct clip_config por offsetof, asi que anadir ahi cambia el formato
+ * persistido de la configuracion entera. Esto es un registro de diagnostico,
+ * no configuracion, y se lee con settings_load_subtree_direct(). */
+#define SETTING_BOOT_NOTE       "clip/boot_note"
 
 /* settings_load is normally <100 ms. A corrupt settings file (typically
  * from repeated BLE pair/unpair churning bond records) makes it block for
@@ -944,4 +949,54 @@ const char *config_get_wifi_reg_domain(void)
 {
     struct clip_context *ctx = clip_get_context();
     return ctx->config.wifi_reg_domain;
+}
+
+/* ------------------------------------------------------------------ */
+/* Nota de arranque                                                    */
+/* ------------------------------------------------------------------ */
+
+int config_save_boot_note(const struct clip_boot_note *note)
+{
+	if (!note) {
+		return -EINVAL;
+	}
+	return settings_save_one(SETTING_BOOT_NOTE, note, sizeof(*note));
+}
+
+static int boot_note_direct(const char *key, size_t len,
+			    settings_read_cb read_cb, void *cb_arg, void *param)
+{
+	struct clip_boot_note *out = param;
+
+	ARG_UNUSED(key);
+
+	if (len != sizeof(*out)) {
+		return -EINVAL;   /* version antigua o basura: se ignora */
+	}
+	if (read_cb(cb_arg, out, sizeof(*out)) < 0) {
+		return -EIO;
+	}
+	return 0;
+}
+
+int config_load_boot_note(struct clip_boot_note *note)
+{
+	int rc;
+
+	if (!note) {
+		return -EINVAL;
+	}
+
+	memset(note, 0, sizeof(*note));
+	rc = settings_load_subtree_direct(SETTING_BOOT_NOTE, boot_note_direct, note);
+	if (rc) {
+		return rc;
+	}
+	if (note->version != CLIP_BOOT_NOTE_VERSION) {
+		/* No se intenta migrar: es diagnostico, no configuracion. Perder una
+		 * nota vieja no cuesta nada; malinterpretarla si. */
+		memset(note, 0, sizeof(*note));
+		return -ENOENT;
+	}
+	return 0;
 }

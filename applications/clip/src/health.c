@@ -61,6 +61,11 @@ static bool heartbeat_enabled;
 /* Resultado del ultimo latido y momento del ultimo que SI llego. -EAGAIN como
  * valor inicial: distingue "todavia no se ha intentado" de "se intento y dio
  * 0", que es justo la ambiguedad que hacia falta resolver. */
+/* Lo que dejo dicho el arranque anterior, leido una vez al arrancar. Se
+ * publica en cada latido: es constante, describe el arranque de antes. */
+static struct clip_boot_note prev_note;
+static uint32_t boot_count;
+
 static int last_beat_err = -EAGAIN;
 static int64_t last_beat_ok_uptime;
 
@@ -175,7 +180,13 @@ int health_snapshot_json(char *buf, size_t len)
 		      * primero que sale tras un agujero, y entonces es el unico
 		      * sitio donde consta que hubo agujero. */
 		     "\"miss\":%u,\"miss_stage\":%u,\"ok_age_s\":%u,"
-		     "\"tdfail\":%u}",
+		     "\"tdfail\":%u,"
+		     /* Lo que conto el arranque anterior antes de irse. Es la
+		      * unica via para que un aparato en una tienda explique lo
+		      * que le paso ANTES de reiniciarse: los contadores de
+		      * arriba viven en RAM y el reinicio se los lleva. */
+		     "\"boots\":%u,\"prev_why\":%u,\"prev_miss\":%u,"
+		     "\"prev_stage\":%u,\"prev_td\":%u}",
 		     device_id_str(), uptime_s, reset_cause_txt(boot_reset_cause),
 		     ctx->status.battery_percent, ctx->status.battery_mv,
 		     ctx->status.battery_charging ? "true" : "false",
@@ -265,7 +276,10 @@ int health_snapshot_json(char *buf, size_t len)
 		     (unsigned int)wifi_rpu_repowers(),
 		     (unsigned int)win_miss, (unsigned int)win_stage,
 		     (unsigned int)win_ok_age,
-		     (unsigned int)wifi_teardown_fails());
+		     (unsigned int)wifi_teardown_fails(),
+		     (unsigned int)boot_count, (unsigned int)prev_note.reason,
+		     (unsigned int)prev_note.miss, (unsigned int)prev_note.miss_stage,
+		     (unsigned int)prev_note.tdfail);
 
 	if (n < 0 || (size_t)n >= len) {
 		return -ENOMEM;
@@ -456,6 +470,28 @@ reschedule:
 	}
 }
 
+void health_boot_note_mark(int reason)
+{
+	struct clip_boot_note note = {
+		.version = CLIP_BOOT_NOTE_VERSION,
+		.reason = (uint8_t)reason,
+		.boots = boot_count,
+		.uptime_s = (uint32_t)(k_uptime_get() / 1000),
+	};
+	uint32_t miss = 0, ok_age = 0;
+	uint8_t stage = 0;
+
+	http_upload_window_health(&miss, &stage, &ok_age);
+	note.miss = (uint16_t)MIN(miss, (uint32_t)UINT16_MAX);
+	note.miss_stage = stage;
+	note.tdfail = (uint16_t)MIN(wifi_teardown_fails(), (uint32_t)UINT16_MAX);
+
+	(void)config_save_boot_note(&note);
+	LOG_WRN("nota de arranque: motivo=%d miss=%u etapa=%u tdfail=%u",
+		reason, (unsigned int)note.miss, (unsigned int)note.miss_stage,
+		(unsigned int)note.tdfail);
+}
+
 int health_last_beat_err(void)
 {
 	return last_beat_err;
@@ -479,6 +515,34 @@ int health_init(void)
 		boot_reset_cause = 0;
 	}
 	hwinfo_clear_reset_cause();
+
+	/* Lo que dejo dicho el arranque anterior. Se lee UNA vez y se conserva en
+	 * RAM para publicarlo en cada latido: describe el arranque de antes, asi
+	 * que no cambia.
+	 *
+	 * Y acto seguido se deja una nota nueva con motivo UNKNOWN. Esa es la
+	 * clave del mecanismo: si el aparato muere sin avisar -- corte de
+	 * corriente, bateria, cuelgue -- el arranque siguiente encuentra UNKNOWN y
+	 * eso YA es informacion. Solo un apagado o un reinicio deliberado la
+	 * sobrescriben con su motivo real antes de irse. */
+	if (config_load_boot_note(&prev_note) != 0) {
+		memset(&prev_note, 0, sizeof(prev_note));
+	}
+	boot_count = prev_note.boots + 1;
+
+	{
+		struct clip_boot_note fresh = {
+			.version = CLIP_BOOT_NOTE_VERSION,
+			.reason = CLIP_BOOT_UNKNOWN,
+			.boots = boot_count,
+		};
+		(void)config_save_boot_note(&fresh);
+	}
+
+	LOG_WRN("arranque %u; el anterior: motivo=%u miss=%u etapa=%u tdfail=%u tras %us",
+		(unsigned int)boot_count, (unsigned int)prev_note.reason,
+		(unsigned int)prev_note.miss, (unsigned int)prev_note.miss_stage,
+		(unsigned int)prev_note.tdfail, (unsigned int)prev_note.uptime_s);
 
 	k_work_queue_init(&heartbeat_wq);
 	k_work_queue_start(&heartbeat_wq, heartbeat_stack,
