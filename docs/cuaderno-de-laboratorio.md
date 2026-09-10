@@ -245,11 +245,28 @@ se los quitamos, y si los apagó no se los devolvemos.
 **Coste medido.** 925.716 → 926.100 B, **+384 bytes**, 99,18% → 99,22%. Quedan 7.276
 libres. Cero avisos del compilador.
 
-**Cómo se verifica.** Provocar una racha mala (endpoint muerto), comprobar que aparecen
-líneas nuevas en `/SD:/LOG` con marcas de tiempo muy posteriores a los 120 s de arranque,
-y que tras restaurar el endpoint el log deja de crecer.
+**Cómo se verifica.** Provocar una racha mala (endpoint muerto) y comprobar que el log
+se reactiva solo después de haberse retirado; después restaurar el endpoint y comprobar
+que se retira otra vez.
 
-**Resultado.** Pendiente.
+**Resultado. 🟢 Primera mitad verificada en banco el 2026-09-10** (`71d8a68`):
+
+```
+up= 98s  miss=0            log=info   <- el por defecto de arranque
+up=139s  miss=0            log=off    <- retirado a los 120 s
+up=160s  miss=0            log=off
+up=180s  miss=1 stage=2    log=info   <- vuelve SOLO con la ventana mala
+```
+
+Segunda mitad (que se retire al recuperarse) en curso. Es la que importa para la
+seguridad del cambio: si no se retirara, la tarjeta no volvería a dormir nunca y el
+ahorro que da el apagado por inactividad se perdería en silencio.
+
+**Sin comprobar todavía:** que las líneas lleguen físicamente a `/SD:/LOG` con marcas
+posteriores a los 120 s. `AT+LOG?` dice que el backend está activo, que es el mismo
+camino que usa `AT+LOG=info` — pero verlo en la tarjeta exige montarla, y montarla por
+USB obliga a `AT+USB=on`, que se lleva el canal AT. Pendiente para la próxima vez que
+haya que leer la tarjeta de todos modos.
 
 ---
 
