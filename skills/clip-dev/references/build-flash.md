@@ -3,12 +3,43 @@
 NCS v3.3.0. Work on `clean-repo` (branched from `feat/https`); `main` is stale and
 describes a different device.
 
+**`zephyr-env.sh` does not put `west` on the PATH.** `west` ships inside Nordic's
+toolchain bundle with its own Python, and `$T/environment.json` is the
+authoritative list of what to export — read it rather than guessing:
+
 ```sh
-source ~/ncs/v3.3.0/zephyr/zephyr-env.sh   # SDK may also live at /opt/nordic/ncs/v3.3.0
+T=~/ncs/toolchains/<hash>                   # el bundle; el hash varía por instalación
+export PATH="$T/bin:$T/usr/bin:$T/usr/local/bin:$T/opt/bin:$T/nrfutil/bin:\
+$T/opt/zephyr-sdk/arm-zephyr-eabi/bin:$PATH"
+export LD_LIBRARY_PATH="$T/lib:$T/lib/x86_64-linux-gnu:$T/usr/local/lib:$LD_LIBRARY_PATH"
+export PYTHONHOME="$T/usr/local"
+export PYTHONPATH="$T/usr/local/lib/python3.12:$T/usr/local/lib/python3.12/site-packages"
+export ZEPHYR_TOOLCHAIN_VARIANT=zephyr
+export ZEPHYR_SDK_INSTALL_DIR="$T/opt/zephyr-sdk"
+export ZEPHYR_BASE=~/ncs/v3.3.0/zephyr
 export ZEPHYR_EXTRA_MODULES="$PWD"          # env var, NOT -D: Kconfig discovers
                                             # modules before CMake exists
+
 west build --build-dir build-clip --board clip/nrf5340/cpuapp applications/clip
 ```
+
+If `west` is missing, recover the paths from a previous build rather than
+searching the filesystem: `grep -i west build-*/clip/zephyr/CMakeCache.txt`
+records the exact interpreter that built it.
+
+**`environment.json` also sets `NRFUTIL_HOME`, and that breaks flashing.** The
+toolchain's nrfutil only ships the `device` command; `mcu-manager` — the one that
+installs firmware — lives in the user's `~/.nrfutil`. Export `NRFUTIL_HOME` to
+build, then unset it to flash, or the symptom is
+`nrfutil command 'mcu-manager' not found` immediately after a clean build.
+
+## Measure size against the same tree, not an old build directory
+
+At ~99% of 933,376 bytes, "how much did this cost" is a real question and stale
+build directories give wrong answers — the tree grows between them. Build the
+change, `git stash` it, rebuild the same directory, compare, then `git stash pop`.
+An incremental rebuild is fast, and the number is then attributable to the diff
+rather than to a week of other commits.
 
 Use `--pristine` after Kconfig, devicetree, sysbuild, partition, or board-level
 changes. If a build directory came from another machine, **delete it** —

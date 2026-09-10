@@ -71,12 +71,31 @@ network-core signing key and break OTA for every shipped unit.
 
 ## Build and flash
 
+**`zephyr-env.sh` alone is not enough — it does not put `west` on your PATH.** `west` lives inside
+Nordic's toolchain bundle with its own Python, and the bundle's own `environment.json` is the
+authoritative list of what to export:
+
 ```sh
-source ~/ncs/v3.3.0/zephyr/zephyr-env.sh     # SDK may also live at /opt/nordic/ncs/v3.3.0
+T=~/ncs/toolchains/911f4c5c26                # el bundle; el hash cambia por instalacion
+export PATH="$T/bin:$T/usr/bin:$T/usr/local/bin:$T/opt/bin:$T/nrfutil/bin:\
+$T/opt/zephyr-sdk/arm-zephyr-eabi/bin:$PATH"
+export LD_LIBRARY_PATH="$T/lib:$T/lib/x86_64-linux-gnu:$T/usr/local/lib:$LD_LIBRARY_PATH"
+export PYTHONHOME="$T/usr/local"
+export PYTHONPATH="$T/usr/local/lib/python3.12:$T/usr/local/lib/python3.12/site-packages"
+export ZEPHYR_TOOLCHAIN_VARIANT=zephyr
+export ZEPHYR_SDK_INSTALL_DIR="$T/opt/zephyr-sdk"
+export ZEPHYR_BASE=~/ncs/v3.3.0/zephyr
 export ZEPHYR_EXTRA_MODULES=$(pwd)           # MUST be an env var, not -D: Kconfig
                                              # discovers modules before CMake exists
+
 west build --build-dir build-clip --board clip/nrf5340/cpuapp applications/clip
 ```
+
+**Do not export the bundle's `NRFUTIL_HOME` if you are going to flash.** It points at the
+toolchain's own nrfutil, which only ships the `device` command — `mcu-manager`, the one that
+installs firmware, lives in the user's `~/.nrfutil`. Build environment and flash environment are
+not the same environment, and the symptom is
+`nrfutil command 'mcu-manager' not found` right after a successful build.
 
 Board identifier is `clip/nrf5340/cpuapp` — not `respeaker/...`.
 
@@ -193,6 +212,16 @@ AT server 8 KB · main 6 KB · wifi STA work queue 6 KB · transfer 4 KB · disp
 list from the response (`stop_recording`, `start_recording`, `upload_now`, `wipe`, `reboot`,
 `health_now`). The device asks; nothing tells it. There is no listening port.
 
+**Where field data actually lives.** Not in this repo. `applications/clip/tests/tools/bpin_http_receiver.py`
+is the **bench** receiver (SQLite at `./recordings/health.db`). Production is a separate repo,
+`bpin-fleet-service`, running **MySQL 8.4** in docker compose on EC2, bound to `127.0.0.1:3307`;
+its `schema.sql` is authoritative. Two tables answer almost every field question: `health_beats`
+(one row per heartbeat, with real columns for `sd_mounted`, `pending_files`, `up_ok`, `up_fail`,
+`reset_cause`, plus a `raw JSON` column holding the whole beat) and `uploads` (one row per file
+that reached `/upload`, with `ok`, `error`, `bytes_in`, `ms_total`). **`uploads` is the one that
+distinguishes "tried and failed" from "never tried"** — an S3 listing cannot. Fields not promoted
+to columns, such as `battery_ua` and `leases`, come out of `raw` with `JSON_EXTRACT`.
+
 **nRF7002 firmware patch.** Lives in the `nrf70_wifi_fw` partition at `0x7C0000` on the **external
 SPI flash**, not the SD card. `nrf70_fw_provision.c` reads a 20-byte header from the card at every
 boot and only rewrites the 128 KB partition on mismatch. During WiFi operation the SD card is not
@@ -285,8 +314,13 @@ at boot. Run `AT+STA=on` first or you will collect blanks. The `chip` field is a
 - **Thread safety across AT and transfer.** Use volatile flags (e.g. `transfer_cancel_requested`).
 - **Corrupt settings boot loop.** A damaged `/lfs/settings/run` blocks `settings_load` ~40 s; a
   watchdog wipes the file and reboots after `CLIP_SETTINGS_LOAD_TIMEOUT_MS`.
-- **Logs go to the SD card** (`/SD:/LOG`, rotating). This is the only window into a device that
-  has stopped responding.
+- **The SD log only covers the first 120 seconds of each boot.**
+  `CLIP_LOG_FS_BOOT_WINDOW_S=120` retires the FS backend so the card can idle-power-off, so
+  `/SD:/LOG` is a boot log, **not** a window into steady-state behaviour. Verified 2026-09-09:
+  the two log files from a field run topped out at uptime `00:01:59` while the incident being
+  chased happened at uptime 2186 s. Anything that must be diagnosable later has to reach the
+  **heartbeat**, not the log — or someone has to send `AT+LOG=on` first and accept that the card
+  then never sleeps (`clip_log_fs_active()` is one of `clip_sd_busy()`'s conditions).
 - **Do not enable `AT+LOG` while USB MSC is mounted** — two writers on the same FAT volume. It has
   taken the device down.
 - **A guard that reads as obviously correct can be exactly backwards.** `wifi_sta_off()` had
@@ -308,6 +342,35 @@ at boot. Run `AT+STA=on` first or you will collect blanks. The `chip` field is a
   auto-mount grabs it on every USB re-enumeration, and two whole association gates were
   invalidated before this was spotted. `gsettings set org.gnome.desktop.media-handling automount false`. The harnesses in
   `applications/clip/tests/hil/` check for this and abort before measuring.
+- **Only `storage_ensure_mounted()` re-arms the SD idle timer.** It is the single call site of
+  `sd_activity_cb()` (`storage.c:466`). Reads and writes do **not** re-arm it. What keeps the card
+  alive during a recording is not the writing — it is `clip_sd_busy()` returning true. So any code
+  that touches the card on a timer must call `storage_ensure_mounted()` first, both to mount it and
+  to hold it. `http_upload.c` was the one consumer that didn't, and it cost 50 minutes of undelivered
+  audio in a store (see `1780026`).
+- **A USB cable hides every SD idle-power bug.** `clip_sd_busy()` returns true while
+  `usb_cdc_is_enabled()`, which stays true until **10 minutes after VBUS goes away**. On a cable the
+  card never idles off, so this whole class of failure cannot be reproduced at the bench — it exists
+  only on battery, which in practice means only in the field. The harnesses in `tests/hil/` drive the
+  device over the cable and by construction cannot see it.
+- **Recording is refused while USB is up and VBUS is present** (`clip_event.c:557`, guarded by
+  `CONFIG_CLIP_USB_MSC`): the host could be writing the card through MSC. The gate reads
+  `battery_vbus_present()` from the NPM1300 over I2C rather than the USB controller's flag, because
+  that one reports phantom `VBUS_REMOVED` when the WiFi radio powers up. To record, unplug.
+- **`AT+USB=off` takes the AT channel with it.** It disables CDC as well as MSC, so the device drops
+  off USB entirely and only a physical replug brings it back. To release the card to the device,
+  unmount on the *host* (`udisksctl unmount`) and leave `AT+USB` alone.
+- **`reset` in the heartbeat is precise, and `unknown` is not a shrug.** `reset_cause_txt()` maps
+  `RESETREAS == 0` to `"unknown"`, and a genuine cold power-up leaves it at 0 — so **`unknown` means
+  the device was powered off and on** (ship-mode exit, battery pulled, first boot). `"software"` means
+  a deliberate `sys_reboot()`: `CONFIG_RESET_ON_FATAL_ERROR` is **not set**, so a crash halts rather
+  than reboots and can never show up as `software`. There are exactly four `sys_reboot()` call sites:
+  the server `reboot` command (`health.c`), the wedge detector (`http_upload.c`), `AT+REBOOT`, and the
+  settings watchdog (`config.c`).
+- **`pending_files` is computed once per window, before uploading.** So the window's *opening* beat
+  carries the **previous** window's number and the closing beat carries this one's — and the closing
+  beat is only sent when the sweep thought it had work. Reading it as "files pending right now" will
+  mislead you.
 - **The fuel gauge cannot see the radio.** Any current figure from `battery_ua` excludes the
   nRF7002. Get real consumption from the SoC slope between heartbeats, never from `battery_ua`.
 - **Crystal load capacitors come from Kconfig, not the devicetree.** `clip_xo_cap_init()` in

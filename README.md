@@ -1,189 +1,177 @@
-# reSpeaker Clip Firmware
+# reSpeaker Clip / B·Pin Firmware
 
-Zephyr RTOS firmware for the **Seeed reSpeaker Clip** — a wearable voice
-recording device based on the Nordic nRF5340 dual-core MCU, with BLE, WiFi AP,
-USB, AT-command control, and UDP file transfer.
+Zephyr RTOS firmware for a **wearable voice recorder** built on the Seeed reSpeaker Clip
+(Nordic nRF5340 + nRF7002). It records Opus audio to an **encrypted file** on a microSD card and
+pushes it to an **HTTPS endpoint over WiFi station mode**. Control is by **AT commands over USB
+CDC serial**.
 
-> **Note**: Product name is spelled **reSpeaker** (lowercase `r`).
+> **There is no Bluetooth, no WiFi access point and no phone app in this build.** If you are
+> reading about BLE, GATT, `ClipAP_XXXX` or `192.168.4.1`, you are reading about the old device
+> (v0.0.8, on `main`, July 2026). BLE was removed as a **security** decision, and the WiFi AP and
+> UDP control channel were removed because the UDP server answered `AT+FACTORY` and `AT+FORMAT`
+> to anyone on the network.
+
+The enclosure is sealed — **no SWD access** — so firmware is installed over USB serial recovery.
+Every flash therefore exercises the real field update path.
 
 ## Hardware
 
 | Component | Part |
-|-----------|------|
-| MCU | nRF5340 (Application core + Network core, dual-core) |
-| WiFi | nRF7002 (QSPI, AP mode) |
-| PMIC / Charger | NPM1300 + nRF Fuel Gauge |
-| Display | CH1115 OLED (88×48) |
-| Audio | PDM microphone array (DMIC) |
-| Storage | microSD (FAT) + 64 Mbit external SPI flash (LittleFS) |
-| Connectivity | BLE 5.x + WiFi 2.4/5G AP + USB CDC ACM + USB MSC |
+|---|---|
+| MCU | nRF5340 (application + network core) |
+| WiFi | nRF7002 over QSPI, **station mode** |
+| PMIC / charger | NPM1300 + nRF Fuel Gauge (custom 170 mAh cell model) |
+| Display | CH1115 OLED 88×48 (I2C2) |
+| Audio | PDM microphone pair (PDM0) |
+| Storage | microSD over SPI4 (FAT) + PY25Q64H 8 MB SPI flash (LittleFS) |
+| Control | USB CDC ACM + MSC, 1200-baud DFU trigger |
 
-## Key Features
+## How one recording travels
 
-- **Audio**: PDM mic → SpeexDSP preprocessing (noise suppression / AGC / dereverb) → Opus encoding
-- **BLE**: AT-command protocol, OTA DFU (MCUmgr), GATT notifications
-- **WiFi**: AP mode (`ClipAP_XXXX`) with UDP file transfer (CRC32-verified)
-- **USB**: CDC ACM serial (3rd AT channel) + MSC mass storage (SD card) + 1200-baud → DFU recovery trigger
-- **Power**: Production idle ~170µA (DCDC, SD power-gating, console off)
-- **Battery**: NPM1300 charging + nRF Fuel Gauge SoC, custom "240" cell model
-- **OTA**: MCUboot (custom) with signed images, BLE/USB serial DFU
+```
+botón → clip_event.c → audio.c → audio_crypto.c → storage.c → http_upload.c → HTTPS
+```
 
-## Getting Started
+- **Opus** encoding, then **AES-128-GCM** at rest in a BPE2 container. The reference decryptor,
+  `applications/clip/tests/tools/bpin_decrypt.py`, *is* the format spec.
+- Sessions are `YYYYMMDDHHMMSS`, chunked under `/SD:/REC/YYYYMMDD/HH/MM/SS/`.
+- Uploads go over **TLS 1.2, ECDHE-ECDSA P-256**. The server certificate must be EC P-256; an RSA
+  certificate or a TLS 1.3-only server fails the handshake without saying why.
+- `/SD:/UPLOADED.TXT` records what has been sent. It **fails open**: unreadable means re-upload,
+  because a duplicate costs storage and a loss costs audio.
+- Every 15 minutes the radio wakes for one window that does **both** jobs — send the heartbeat and
+  drain the upload backlog — so one association pays for both.
 
-### Prerequisites
+## Constraints worth knowing before you touch anything
 
-- [nRF Connect SDK (NCS) v3.3.0](https://docs.nordicsemi.com/bundle/ncs-latest/page/nrf/index.html)
-- Zephyr SDK (toolchain)
-- `west` (Zephyr's meta-tool)
-- nRF Connect for Desktop (flashing) or `nrfutil`
-- Python 3.10+ (for test tools)
+**Flash is the binding constraint.** The linker offers **933,376 bytes** and the image sits at
+about **99%**. Measure before adding anything: `west build -d build-clip/clip -t rom_report`.
+This single number explains most of the architecture — why Bluetooth is compiled out, why the JSON
+parser in `health.c` is hand-rolled, and why the 87 KB nRF7002 firmware patch lives in its own
+flash partition instead of the image.
 
-### Build
+**Static RAM is at about 95%.** Any buffer over ~1 KB goes on the heap, never on a thread stack.
+This firmware has crashed three times from stack sizing.
+
+Full guidance, hard invariants and the accumulated list of pitfalls: **[CLAUDE.md](CLAUDE.md)**.
+
+## Build
+
+`zephyr-env.sh` alone does **not** give you `west` — it lives inside Nordic's toolchain bundle with
+its own Python. The bundle's `environment.json` is the authoritative list of what to export:
 
 ```sh
-# 1. Source the NCS v3.3.0 environment
-source ~/ncs/v3.3.0/zephyr/zephyr-env.sh
+T=~/ncs/toolchains/<hash>                    # el bundle instalado por nRF Connect
+export PATH="$T/bin:$T/usr/bin:$T/usr/local/bin:$T/opt/bin:$T/nrfutil/bin:\
+$T/opt/zephyr-sdk/arm-zephyr-eabi/bin:$PATH"
+export LD_LIBRARY_PATH="$T/lib:$T/lib/x86_64-linux-gnu:$T/usr/local/lib:$LD_LIBRARY_PATH"
+export PYTHONHOME="$T/usr/local"
+export PYTHONPATH="$T/usr/local/lib/python3.12:$T/usr/local/lib/python3.12/site-packages"
+export ZEPHYR_TOOLCHAIN_VARIANT=zephyr
+export ZEPHYR_SDK_INSTALL_DIR="$T/opt/zephyr-sdk"
+export ZEPHYR_BASE=~/ncs/v3.3.0/zephyr
+export ZEPHYR_EXTRA_MODULES=$(pwd)           # env var, no -D: Kconfig descubre
+                                             # los módulos antes de que exista CMake
 
-# 2. Set the module path (REQUIRED — enables Kconfig to discover this repo's
-#    board/drivers/lib. Must be an env var, not -D, because Kconfig module
-#    discovery runs before CMake.)
-export ZEPHYR_EXTRA_MODULES=$(pwd)
-
-# 3. Build the clip app (sysbuild: mcuboot + app + network-core radio)
 west build --build-dir build-clip --board clip/nrf5340/cpuapp applications/clip
 ```
 
-**Production (low-power, console off):**
-```sh
-west build --build-dir build-clip-prod --board clip/nrf5340/cpuapp applications/clip \
-  -- -DSNIPPET_ROOT=$(pwd)/applications/clip -DSNIPPET=production
-```
+Board identifier is `clip/nrf5340/cpuapp`, not `respeaker/...`. Every build is a **sysbuild**
+(MCUboot + app core + network-core radio); the board's `Kconfig.sysbuild` supplies the defaults.
 
-> **Board identifier**: `clip/nrf5340/cpuapp` (NOT `respeaker/...`)
+Use `--pristine` after any change to Kconfig, devicetree, sysbuild, partitions or the board.
 
-### Firmware Upgrade (USB — no J-Link needed)
-
-The reSpeaker Clip ships in an **enclosed housing**, so the SWD/J-Link pads are
-not reachable for end users. Firmware upgrades happen over **USB** (or BLE) with
-mcumgr — no probe, no opening the case. Every clip app has the **1200-baud DFU
-trigger** built in (board-level, `lib/clip_usb_dfu`).
-
-1. Enter MCUboot serial recovery — open the device's USB CDC-ACM port at
-   **1200 baud** (the app reboots into recovery automatically):
-   ```sh
-   python3 -c "import serial; s=serial.Serial('/dev/ttyACMx',1200); s.close()"
-   ```
-   The clip app keeps USB off by default — send `AT+USB=on` over BLE first.
-   Samples and custom apps with the default CDC auto-enable USB (no BLE step).
-   (Holding the user button while plugging USB also enters recovery.)
-2. A new CDC-ACM port appears — **PID `0x8069`** (the running app is `0x0069`;
-   the `0x8000` bit marks bootloader mode; both Seeed VID `0x2886`). Upload the
-   signed app:
-   ```sh
-   nrfutil mcu-manager serial image-upload --firmware clip-<v>-signed.bin --serial-port /dev/ttyACMx
-   nrfutil mcu-manager serial reset     --serial-port /dev/ttyACMx
-   ```
-   MCUboot verifies the signature and boots the new app; the bootloader partition
-   is never touched.
-
-Full guide (BLE OTA, the button path, `mcumgr`/nRF Connect, troubleshooting):
-[docs/usb_dfu.md](docs/usb_dfu.md).
-
-### Flash (development — J-Link/SWD)
-
-For development with a debug probe. The enclosed device has no user-accessible SWD
-— end users use USB DFU (above).
+**Production image** (console off — required for any current measurement):
 
 ```sh
-# west flash handles the dual-core routing (app + net core)
-west flash --build-dir build-clip && nrfutil device reset
+west build --build-dir build-clip-prod --board clip/nrf5340/cpuapp applications/clip -- \
+  -DSNIPPET_ROOT=$(pwd)/applications/clip -DSNIPPET=production
 ```
 
-> `west flash --reset` does NOT work on this board — use `nrfutil device reset`
-> after flashing. If the net-core access port is b0n-locked (after a prior boot),
-> add `--recover`.
-
-### Serial Console
+## Install — USB only, no probe
 
 ```sh
-minicom -D /dev/ttyACM0 -b 921600
+# 1. Entrar en recuperación de MCUboot (o AT+DFU, o botón pulsado al enchufar)
+python3 -c "import serial,time; s=serial.Serial('/dev/ttyACM0',1200); time.sleep(0.5); s.close()"
+
+# 2. Subir la imagen firmada y reiniciar
+nrfutil mcu-manager serial image-upload \
+  --firmware build-clip/clip/zephyr/zephyr.signed.bin --serial-port /dev/ttyACM0
+nrfutil mcu-manager serial reset --serial-port /dev/ttyACM0
 ```
 
-## Project Structure
+- In recovery **two ports appear**; SMP answers on **vcom 0** (the lower number).
+- Upload `zephyr.signed.bin`, **not** `merged.hex` — the latter contains the bootloader and only
+  goes in over a probe.
+- **Do not export the toolchain's `NRFUTIL_HOME` when flashing.** It hides the user's own
+  `~/.nrfutil`, and `mcu-manager` only exists there. The build environment and the flash
+  environment are not the same environment.
 
-| Path | Description |
-|------|-------------|
-| `applications/clip/` | Main application (AT commands, audio, BLE, WiFi, storage) |
-| `boards/seeed/clip/` | Board support package (device trees, Kconfig) |
-| `drivers/` | Custom drivers (GPIO button) |
-| `lib/` | Libraries (Opus, SpeexDSP, Lua, 1200-baud USB DFU trigger) |
-| `samples/` | Example apps (hello_world, opus_encode, wifi_ap_iperf, etc.) |
-| `tests/` | Factory/RF test firmware (`clip`, `otp`, `dtm`, `wifi_radio`, `re`, ...) |
-| `patches/mcuboot/` | MCUboot customization patches (applied to the NCS tree) |
-| `docs/` | Project documentation |
+## Provisioning, by cable, once per device
+
+```
+AT+STACFG="<ssid>","<psk>"     credenciales WiFi
+AT+UPCFG="<host>",<port>       endpoint de subida
+AT+KEYCFG=<32 hex>             clave de cifrado del audio en reposo
+AT+TIME=<epoch>                reloj — no hay fuente de hora autónoma
+```
+
+The fleet CA goes on the card as `/SD:/ca.pem`, and **`nrf70.bin` must be on the card before first
+boot** or WiFi never comes up.
+
+## Repository map
+
+| Path | What |
+|---|---|
+| `applications/clip/` | the product firmware |
+| `applications/clip/tests/hil/` | bench harnesses — association gates, battery logging. **Look here before writing a new one**: numbers only compare when the same script produced them |
+| `applications/clip/tests/tools/` | host side: bench receiver, cable provisioning, BPE2 decryptor, Opus/Ogg wrapper |
+| `applications/clip/tests/audio_test/` | ASR-scored audio quality harness — run before and after any codec or DSP change |
+| `boards/seeed/clip/` | board support package; `pm_static_*.yml` is the authoritative partition map |
+| `drivers/`, `lib/`, `dts/`, `sysbuild/` | out-of-tree drivers, vendored Opus/SpeexDSP, module wiring |
+| `patches/mcuboot/` | five bootloader patches (VBUS-gated recovery, OLED UI, progress hooks) |
+| `tests/` | standalone firmware images flashed *instead of* the product, over SWD |
+| `samples/` | one-idea reference apps — **prototype here**, you cannot try things in a 99%-full image |
+
+Nothing in `tests/` is a unit test. Host-side tests live in `sdk/tests/`.
+
+## Testing on hardware
+
+Bench harnesses live in `applications/clip/tests/hil/` and refuse to run when the bench is dirty —
+a radio lease left over from `AT+STA=on` (which never expires) or the SD card mounted on the host
+(which stops the radio *associating*, not just uploading). Both have destroyed real measurements.
+
+```sh
+cd applications/clip/tests/hil
+python3 assoc_gate.py /tmp/assoc.log 20      # arranque en frío de la radio, N ciclos
+python3 traffic_gate.py /tmp/traffic.log 20  # igual, con tráfico TLS de por medio
+```
+
+**One class of bug these cannot see.** With a USB cable attached the SD card never idle-powers-off,
+so anything that depends on the card sleeping only reproduces **on battery**. Recording is also
+refused while USB is up and VBUS present, since the host could be writing the card over MSC.
+
+## Security posture
+
+TLS is on by default and BLE stays out even if flash appears. Two things are **not** resolved and
+are tracked as such: MCUboot is signed with Nordic's *published example key*, so signature
+verification currently protects nothing; and the network-core key `b0-ecdsa-p256.pem` is a real
+private key in this repository's history whose public hash is in immutable boot on shipped units —
+it **cannot be rotated on existing hardware**. There is also **no authentication on the AT
+channel**, which exposes `FACTORY`, `FORMAT`, `DELETE`, `WIPE` and `DFU` to anyone with a cable.
 
 ## Documentation
 
-### Official References
-
-- **[nRF Connect SDK](https://docs.nordicsemi.com/bundle/ncs-latest/page/nrf/index.html)** — NCS documentation (this firmware targets NCS v3.3.0)
-- **[Zephyr Project](https://docs.zephyrproject.org/)** — Zephyr RTOS documentation
-- **[nRF5340 Product Page](https://www.nordicsemi.com/Products/nRF5340)** — MCU datasheet & specs
-- **[nRF7002](https://www.nordicsemi.com/Products/nRF7002)** — WiFi chipset
-- **[NPM1300](https://www.nordicsemi.com/Products/npm1300)** — PMIC / battery charger
-
-### Project Docs (`docs/`)
-
-| Doc | Description |
-|-----|-------------|
-| [architecture.md](docs/architecture.md) | System architecture & design |
-| [protocol.md](docs/protocol.md) | BLE AT command protocol specification |
-| [udp_protocol.md](docs/udp_protocol.md) | WiFi UDP file transfer protocol |
-| [requirements.md](docs/requirements.md) | Product requirements |
-| [custom_app_guide.md](docs/custom_app_guide.md) | **Custom app development guide** — build, flash, BLE OTA, USB serial DFU recovery |
-| [usb_dfu.md](docs/usb_dfu.md) | Firmware upgrade guide (USB / BLE / programmer) |
-| [audio_quality_standard.md](docs/audio_quality_standard.md) | Audio recording quality standard |
-| [development.md](docs/development.md) | Development log |
-| [whitepaper.md](docs/whitepaper.md) | Firmware whitepaper |
-
-See [CLAUDE.md](CLAUDE.md) for detailed build/flash/power-management guidance
-and known pitfalls.
-
-## Testing
-
-```sh
-# BLE protocol tests
-python tests/ble_test.py --interactive
-
-# WiFi UDP file sync (connect to ClipAP_XXXX first; password 12345678 by default,
-# becomes a random one after the first BLE pairing)
-python applications/clip/tests/tools/udp_sync.py --session <session_id>
-
-# Hardware test firmware
-west build --build-dir build-test --board clip/nrf5340/cpuapp --pristine tests/clip
-```
-
-WiFi AP: SSID `ClipAP_XXXX` (last 4 hex of chip ID) · Password `12345678` (default; random after first pairing) · IP `192.168.4.1` · UDP Port `8089`
-
-## Mobile App & SDK
-
-The companion phone app and SDKs (Flutter, Android, iOS) live under
-[`mobile/`](mobile/README.md). They talk to the Clip over BLE and the device
-Wi-Fi AP — no API key or backend required. See the mobile monorepo README for
-the layout, running the example/sample apps, and the integration & verification
-guides in `mobile/docs/`. **The mobile SDKs are separately licensed** (see each
-`mobile/sdk/*/LICENSE`) and are not covered by the repository Apache-2.0
-license below.
+`SETUP.md` and [CLAUDE.md](CLAUDE.md) are current. Most of `docs/` still describes the v0.0.8
+device and is being replaced — treat the source as authoritative over any of it. The code comments
+in `applications/clip/src/` and the help text in `applications/clip/Kconfig` are the best
+documentation in the project, because they record *why*, including the attempts that failed.
 
 ## License
 
-This firmware is licensed under the [Apache License 2.0](LICENSE). See
-individual files for `SPDX-License-Identifier` details. Third-party libraries
-(Opus, SpeexDSP, Lua) retain their respective licenses. The `mobile/` SDKs are
-separately licensed (see above).
+[Apache License 2.0](LICENSE). Vendored libraries (Opus, SpeexDSP) retain their own licenses.
 
 ## Acknowledgements
 
-- [Nordic Semiconductor](https://www.nordicsemi.com/) — nRF Connect SDK, nRF5340, nRF7002, NPM1300
-- [Zephyr Project](https://zephyrproject.org/) — RTOS
-- [Seeed Studio](https://www.seeedstudio.com/) — reSpeaker Clip hardware
+[Nordic Semiconductor](https://www.nordicsemi.com/) · [Zephyr Project](https://zephyrproject.org/) ·
+[Seeed Studio](https://www.seeedstudio.com/)

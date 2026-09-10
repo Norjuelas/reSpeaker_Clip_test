@@ -22,6 +22,24 @@ discharge phase to avoid 1% visual bounce; charging and discharging have
 different monotonic directions. Persist fuel-gauge state before reboot/power
 events and whenever the displayed SoC changes.
 
+## The cable changes the experiment
+
+`clip_sd_busy()` returns true while `usb_cdc_is_enabled()`, and that stays true
+until **10 minutes after VBUS goes away**. So with a cable attached the SD card
+never idle-powers-off and no SD-idle behaviour — power or correctness — can be
+observed at all. Anything in that area has to be tested **on battery**, with the
+device read from the heartbeat rather than the AT channel.
+
+Recording is also refused while USB is up and VBUS is present
+(`clip_event.c:557`, `CONFIG_CLIP_USB_MSC`), because the host could be writing
+the card over MSC. The gate reads `battery_vbus_present()` from the NPM1300, not
+the USB controller's flag, which reports phantom `VBUS_REMOVED` when the WiFi
+radio powers up.
+
+And note `AT+USB=off` disables CDC as well as MSC: it removes the AT channel and
+only a physical replug brings it back. To hand the card back to the device,
+unmount on the host instead.
+
 ## Validate changes
 
 1. Test debug and production separately.
