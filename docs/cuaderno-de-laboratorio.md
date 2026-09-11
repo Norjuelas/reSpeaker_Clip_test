@@ -804,6 +804,72 @@ con el aparato aparentemente vivo.
 
 ---
 
+## T-01 · TEORÍA: el fallo cae a la misma hora de reloj, así que no es nuestro
+**2026-09-11 · 🔵 teoría, sin comprobar — no corrige nada de lo anterior**
+
+Esto **no** invalida L-014 ni L-015; se anota como hipótesis a falsar. Si se confirma,
+entonces sí habrá que revisar lo que L-014 concluyó.
+
+**De dónde sale.** El usuario observó que **dos grabaciones largas de día salieron bien** y
+las dos que cruzaron la madrugada fallaron. Al mirarlo:
+
+| tanda | tramo | ¿cruzó ~04:48 UTC? | resultado |
+|---|---|---|---|
+| noche 1 | → 09-10 **04:50** | sí | **falló** |
+| "noche 2" | 09-10 14:20 → **23:53** | **no** | limpia |
+| noche 3 | 09-11 03:04 → **04:46** | sí | **falló** |
+
+Los dos últimos latidos antes del silencio: **04:50:09** y **04:46:37**. Tres minutos y
+medio de diferencia, en noches distintas.
+
+Y el histograma de latidos por hora, sobre todo el histórico:
+
+```
+hora UTC:  0   1   2   3   4   5   6   7   8   9  10  11  12 ...
+latidos : 31  27  36  27  26   9   -   -   -   -   7   5  17
+```
+
+**Las horas 06-09 UTC no tienen un solo latido en ningún día**, y la 05 se hunde de 26-36
+a 9.
+
+**Por qué apunta fuera del firmware.** El aparato **no puede saber qué hora es**: su reloj
+está mal (los identificadores de sesión siguen diciendo `2026-08-16`) y no hay lógica
+dependiente de la hora en ninguna parte. Un fallo que cae al mismo minuto de reloj en
+noches distintas es **externo por construcción**.
+
+**El servidor también queda fuera**, y esto lo dice la instrumentación: la noche 3 reportó
+`prev_stage=1` (`CLIP_WIN_NO_LINK`) y todas las ventanas registraron `etapa 1`. El aparato
+**nunca asoció** — ni DHCP ni IP. EC2 no participa antes de que haya red. Un problema de
+servidor habría salido como **etapa 2**, que es justo lo que dio el banco al apuntar el
+endpoint a un puerto muerto.
+
+Queda el **AP o el enlace hasta él**, a las 04:48 UTC = **01:48 local**. Hora típica de
+reinicio programado, comprobación de firmware o re-autenticación PPPoE en un router
+doméstico o en el ISP.
+
+**Ojo con lo que esto NO dice.** n=2. Dos coincidencias al mismo minuto son fuertes pero no
+son prueba, y el fallo del suplicante (comandos de control expirando) sigue siendo real
+pase lo que pase: si el AP desaparece cinco minutos, que wpa_supplicant quede inservible
+durante horas y no lo arregle ni apagar el chip 29 veces **sigue siendo un defecto**. La
+teoría cambiaría el *disparador*, no la fragilidad.
+
+**Cómo falsarla.** Una noche cruzando las 01:48 local sobre **otro AP**. Internet no hace
+falta: el discriminador es la etapa, no que las subidas lleguen.
+
+- **etapa 2** toda la noche (asocia, el latido falla por no haber ruta) → **el AP era la
+  causa**; llevamos dos días instrumentando la capa equivocada, aunque fue la
+  instrumentación la que lo encontró.
+- **etapa 1** otra vez → el fallo viaja con el aparato y la teoría cae.
+
+El AP debería ser el **portátil**, no un teléfono: `iw list` dice que su radio soporta modo
+AP, y no tiene el temporizador de inactividad del hotspot de iOS — que sí es un problema
+real aquí, porque este firmware apaga la radio ~14 de cada 15 minutos y el iPhone cerraría
+el hotspot entre ventanas. Sin internet no habrá latidos, así que el resultado se lee en el
+**log de la tarjeta** (que desde L-008 cubre la grabación entera) y, si se quiere, en los
+logs del propio AP.
+
+---
+
 ## Observaciones sin cambio asociado
 
 - **El latido falla con `-ENOMEM` mientras se drena un atraso grande** (2026-09-10).
