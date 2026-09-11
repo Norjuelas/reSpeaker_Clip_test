@@ -729,7 +729,7 @@ cayeron al mirar el log** — ver ahí.
 ---
 
 ## L-015 · Dejar que el reintento del driver llegue a ejecutarse
-**pendiente de flashear · 2026-09-11 · 🔴 sin verificar, ni siquiera en banco**
+**`9e21bfd` · 2026-09-11 · 🟢 mecanismo verificado en banco, 🔴 sin verificar en campo**
 
 **Para qué.** De las tres ideas "sin coste de audio" de L-014, **dos no sobrevivieron al
 log**, y conviene dejar escrito por qué antes de que alguien las vuelva a proponer:
@@ -778,7 +778,25 @@ libres. Cero avisos.
 ventana mala, y sobre varias noches — L-014 deja claro que la misma imagen da una noche
 limpia y una rota, así que **una noche buena no prueba nada**.
 
-**Resultado.** Nada todavía: **no se ha llegado a flashear.** Al ir a instalarlo, el CDC
+**Resultado. 🟢 Mecanismo verificado en banco el 2026-09-11**, apuntando a un SSID que no
+existe para que la asociación falle de verdad:
+
+```
+[  48s] ventana ABRE (miss=0)
+[ 101s] ventana CIERRA tras  53s   miss=1 stage=1   <- espera normal
+[1003s] ventana ABRE (miss=1)
+[1162s] ventana CIERRA tras 159s   miss=2 stage=1   <- espera larga
+```
+
+53 s frente a 159 s, y la larga **sólo** después de una ventana mala. `stage=1` en las dos,
+que es lo correcto con un SSID inexistente.
+
+**Lo que esto NO prueba: la cura.** Contra un AP que no existe no hay asociación posible
+por mucho que se espere. Que darle al driver sus 138 s recupere de verdad un suplicante
+atascado sólo lo puede decir el fallo real, y sobre **varias** noches — ver L-014: la misma
+imagen dio una noche limpia y una rota.
+
+**Nota de la instalación.** Al ir a flashear, el CDC del aparato dejó de responder Al ir a instalarlo, el CDC
 del aparato dejó de responder — el nodo `/dev/ttyACM0` existe y `nrfutil device list` lo
 enumera, pero `open()` se queda bloqueado incluso con `exclusive=False`. Hizo falta
 replug físico. Anotado por si vuelve a pasar: es la primera vez que se ve el CDC colgado

@@ -901,16 +901,19 @@ int wifi_manual_hold(bool on) { return on ? 0 : wifi_sta_off(); }
  * deja ARRIBA a proposito. La reconexion reintentaba CONNECT para siempre
  * contra el mismo RPU hueco. Ver CLIP_WIFI_RPU_PROBE para la secuencia medida.
  */
-#if defined(CONFIG_CLIP_WIFI_RPU_PROBE)
-static uint32_t rpu_repowers;
-
-/* Cuantas veces se ha tenido que re-alimentar el RPU desde el arranque. Se
- * publica en AT+STA?: si crece en campo, H2 sigue vivo pero recuperandose. */
+/* FUERA de la guarda de CLIP_WIFI_RPU_PROBE a proposito: contar apagados
+ * fallidos no tiene nada que ver con la sonda, y health.c lo publica siempre.
+ * Estuvo dentro por error y el enlace fallaba al desactivar la sonda. */
 uint32_t wifi_teardown_fails(void)
 {
 	return teardown_fails;
 }
 
+#if defined(CONFIG_CLIP_WIFI_RPU_PROBE)
+static uint32_t rpu_repowers;
+
+/* Cuantas veces se ha tenido que re-alimentar el RPU desde el arranque. Se
+ * publica en AT+STA?: si crece en campo, H2 sigue vivo pero recuperandose. */
 uint32_t wifi_rpu_repowers(void)
 {
 	return rpu_repowers;
