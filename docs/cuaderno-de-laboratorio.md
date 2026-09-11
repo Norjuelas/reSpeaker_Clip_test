@@ -729,7 +729,12 @@ cayeron al mirar el log** — ver ahí.
 ---
 
 ## L-015 · Dejar que el reintento del driver llegue a ejecutarse
-**`9e21bfd` · 2026-09-11 · 🟢 mecanismo verificado · 🔴 BENEFICIO REFUTADO en campo**
+**`9e21bfd`, revertido en `HEAD` · 2026-09-11 · 🟢 mecanismo verificado · 🔴 BENEFICIO REFUTADO · ↩ REVERTIDO**
+
+> El código se revirtió el 2026-09-11 tras el resultado de abajo. **El apunte se conserva
+> entero a propósito**: lo que vale no es el cambio, es saber que la premisa se probó y es
+> falsa, para que nadie la vuelva a proponer. Si alguien plantea "esperar más a que el
+> driver reintente", la respuesta ya está medida: 4 ventanas de 158-165 s, 0 asociaciones.
 
 **Para qué.** De las tres ideas "sin coste de audio" de L-014, **dos no sobrevivieron al
 log**, y conviene dejar escrito por qué antes de que alguien las vuelva a proponer:
