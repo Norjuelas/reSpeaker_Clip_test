@@ -674,6 +674,60 @@ zephyr.bin : 11 bytes distintos, TODOS del banner de version
 
 ---
 
+## L-014 · Línea base antes de tocar la radio: qué hace la versión actual
+**código de `ad59518`, imagen construida en `439235c` · 🟡 caracterizada, no arreglada**
+
+**Para qué.** Antes de cambiar nada en `wifi.c` hay que dejar escrito qué hace la versión
+que ya está, o el cambio siguiente no se podrá juzgar. Esta es la imagen que corrió las
+noches 2 y 3 **sin reflashear entre medias** — mismo binario, dos noches, resultados
+opuestos.
+
+**El historial, con la versión de cada noche.**
+
+| noche | imagen | grabación | audio capturado | entrega | qué pasó |
+|---|---|---|---|---|---|
+| 09-09→10 | `1780026` (sólo L-002) | 7 h 21 min | ✅ | ❌ parcial | radio muerta a las 04:50, **5 h 37 min mudo** |
+| 09-10→11 | `ad59518` | 9 h 44 min | ✅ | ✅ completa | **39/39 asociaciones, 0 timeouts** |
+| 09-11 | `ad59518` | 9 h 15 min | ✅ | ❌ parcial | **29 ventanas seguidas fallando, 7 h 33 min mudo, 72 ficheros parados** |
+
+La lectura que importa: **la grabación no ha fallado nunca — 3 de 3 noches capturaron
+audio.** Lo que falla es la entrega, en 2 de las 3. El audio está siempre en la tarjeta;
+lo que se pierde es la visibilidad y el que llegue a tiempo.
+
+Y la misma imagen da una noche limpia y una rota, así que **no es determinista**. Cualquier
+arreglo tiene que evaluarse sobre varias noches, no sobre una.
+
+**Lo que se sabe del fallo, con evidencia.**
+
+- `prev_why=2 prev_miss=29 prev_stage=1 tdfail=0` — 29 ventanas seguidas sin asociar.
+- **`tdfail=0` en las 29.** El apagado funcionó cada vez, así que `rpu_pwroff()` cortó
+  BUCKEN e IOVDD **29 veces** y la asociación falló después de cada una. Un ciclo de
+  alimentación real del chip **no limpia este estado**.
+- Un reinicio del SoC sí lo limpia, en segundos. Dos veces observado.
+- El estado es **del lado del host**: wpa_supplicant deja de contestar a su propio socket
+  de control (`DISCONNECT`, `REMOVE_NETWORK`, `SET country` expiran a los 15-20 s), y ya
+  está roto **antes** de que la ventana siguiente empiece.
+- `no result event` — el driver nunca entrega el resultado de la asociación.
+- Hay una **segunda firma distinta** en otras tandas: tormentas de `0xAAAAAAAA` (398-400)
+  **sin** un solo timeout. Puede que sean dos fallos, no uno.
+
+**Dos cosas nuestras que pueden estar causándolo, no sólo sufriéndolo.**
+
+1. `wifi_sta_off()` manda `DISCONNECT` y **no espera**: sólo registra un aviso y duerme
+   500 ms antes de `net_if_down()`. Pero en el fallo ese DISCONNECT tarda 15-20 s en
+   expirar, así que tiramos la interfaz encima de un comando que el suplicante todavía
+   está procesando. El comentario de esa misma función ya avisa de que eso *"took the
+   whole device down every time"*, y 500 ms fue la mitigación para el caso rápido.
+2. La ventana espera enlace **45 s**, el backoff del driver llega a **120 s**
+   (`STA_RECONNECT_MAX_MS`) y se vio en **138 s**. Soltamos el préstamo a los 45 y la
+   radio se apaga 45 s después: **90 s**. El reintento que el driver tenía programado no
+   llega a ejecutarse **nunca**, ni una vez en toda la noche.
+
+**Qué se va a probar a continuación (L-015), y por qué en este orden.** Los tres primeros
+no cuestan audio; el reinicio sólo se plantea si fallan.
+
+---
+
 ## Observaciones sin cambio asociado
 
 - **El latido falla con `-ENOMEM` mientras se drena un atraso grande** (2026-09-10).
