@@ -729,7 +729,7 @@ cayeron al mirar el log** — ver ahí.
 ---
 
 ## L-015 · Dejar que el reintento del driver llegue a ejecutarse
-**`9e21bfd` · 2026-09-11 · 🟢 mecanismo verificado en banco, 🔴 sin verificar en campo**
+**`9e21bfd` · 2026-09-11 · 🟢 mecanismo verificado · 🔴 BENEFICIO REFUTADO en campo**
 
 **Para qué.** De las tres ideas "sin coste de audio" de L-014, **dos no sobrevivieron al
 log**, y conviene dejar escrito por qué antes de que alguien las vuelva a proponer:
@@ -795,6 +795,37 @@ que es lo correcto con un SSID inexistente.
 por mucho que se espere. Que darle al driver sus 138 s recupere de verdad un suplicante
 atascado sólo lo puede decir el fallo real, y sobre **varias** noches — ver L-014: la misma
 imagen dio una noche limpia y una rota.
+
+**Resultado en campo, 2026-09-11 — el beneficio NO existe.** La tanda del día tuvo dos
+rachas de ventanas malas y la espera larga disparó en las dos, correctamente:
+
+```
+[01:08:53] ventana sin exito (1 seguidas), etapa 1        <- espera normal
+[01:23:53] espera larga (150 s) tras 1 mala(s)
+[01:26:31] ventana sin exito (2 seguidas), etapa 1        <- 158 s
+[01:41:31] espera larga (150 s) tras 2 mala(s)
+[01:44:11] ventana sin exito (3 seguidas), etapa 1        <- 160 s
+[01:59:11] espera larga (150 s) tras 3 mala(s)
+[02:01:52] ventana sin exito (4 seguidas), etapa 1        <- 161 s
+[02:23:41] se recupera tras 4 sin exito
+```
+
+**Cuatro ventanas con espera larga, 158-165 s cada una, y ninguna asoció.** En las dos
+rachas la recuperación llegó en una ventana **posterior, con la espera normal de 45 s**,
+nunca durante una larga.
+
+La premisa de L-015 —*darle al driver sus 138 s y se recuperará*— **queda refutada**: ahora
+el reintento tiene su oportunidad y falla igual.
+
+**Y sugiere el mecanismo contrario.** Si lo que cura es **tiempo con la radio apagada**, la
+espera larga es neutra en el mejor caso y ligeramente contraproducente: mantiene la radio
+encendida 150 s y **retrasa** el apagado. La recuperación llegó siempre tras un hueco
+entre ventanas completo con el chip sin alimentar. Es hipótesis, no hallazgo, pero encaja
+con todo lo que hay — incluidos los 29 ciclos de alimentación de la noche 3, cada uno
+seguido de sólo ~14 min apagado antes del siguiente intento.
+
+**Coste sin beneficio:** ~110 s extra de radio por ventana mala, ~3,8 mAh por racha.
+**Recomendación: revertir**, y llevar una línea base limpia a la prueba del AP alternativo.
 
 **Nota de la instalación.** Al ir a flashear, el CDC del aparato dejó de responder Al ir a instalarlo, el CDC
 del aparato dejó de responder — el nodo `/dev/ttyACM0` existe y `nrfutil device list` lo
