@@ -1390,10 +1390,39 @@ static void periodic_work_fn(struct k_work *work)
 	 * latido Y drena el atraso, para no pagar dos asociaciones. */
 	leased = (wifi_acquire("upload") == 0);
 
-	/* Asociar cuesta ~19 s mas DHCP, medido. 45 s deja margen sin dejar el
-	 * hilo de subida colgado si la red no aparece. */
-	for (int i = 0; i < 45 && !wifi_sta_is_connected(); i++) {
-		k_sleep(K_SECONDS(1));
+	/* Cuanto se espera al enlace. En condiciones normales 45 s: asociar cuesta
+	 * ~19 s mas DHCP, medido, y deja margen sin dejar el hilo de subida colgado
+	 * si la red no aparece.
+	 *
+	 * Tras una ventana mala se espera mas, y por un motivo concreto: el driver
+	 * programa su PROPIO reintento con backoff (STA_RECONNECT_MAX_MS = 120 s) y
+	 * nosotros lo estabamos matando antes de que venciera. Del 2026-09-11, en
+	 * cada una de 29 ventanas seguidas:
+	 *
+	 *   04:52:54  wifi: STA reconnect in 138343 ms   -> vencia 04:55:12
+	 *   04:53:05  ventana: sin enlace tras esperar, suelta el prestamo
+	 *   04:53:50  radio: sin prestamos, se apaga     <- mata el reintento
+	 *
+	 * 45 s de espera mas 45 de gracia del prestamo son 90; el driver queria 138.
+	 * Su recuperacion no llego a intentarse ni una sola vez en toda la noche.
+	 *
+	 * Solo durante las primeras ventanas malas: un fallo persistente no se
+	 * arregla esperando mas, y 29 ventanas a 150 s de radio son ~35 mAh, la
+	 * quinta parte de la celda. */
+	{
+		int link_wait_s = CONFIG_CLIP_WIFI_LINK_WAIT_S;
+
+		if (win_bad_run > 0 &&
+		    win_bad_run <= CONFIG_CLIP_WIFI_LINK_WAIT_RETRY_WINDOWS) {
+			link_wait_s = CONFIG_CLIP_WIFI_LINK_WAIT_BAD_S;
+			LOG_WRN("ventana: espera larga (%d s) tras %u mala(s), para que el "
+				"reintento del driver llegue a correr",
+				link_wait_s, (unsigned int)win_bad_run);
+		}
+
+		for (int i = 0; i < link_wait_s && !wifi_sta_is_connected(); i++) {
+			k_sleep(K_SECONDS(1));
+		}
 	}
 
 	if (!wifi_sta_is_connected()) {

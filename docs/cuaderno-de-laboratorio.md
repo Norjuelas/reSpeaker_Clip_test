@@ -723,8 +723,66 @@ arreglo tiene que evaluarse sobre varias noches, no sobre una.
    radio se apaga 45 s después: **90 s**. El reintento que el driver tenía programado no
    llega a ejecutarse **nunca**, ni una vez en toda la noche.
 
-**Qué se va a probar a continuación (L-015), y por qué en este orden.** Los tres primeros
-no cuestan audio; el reinicio sólo se plantea si fallan.
+**Qué se probó a continuación:** L-015. De los tres candidatos que se plantearon, **dos
+cayeron al mirar el log** — ver ahí.
+
+---
+
+## L-015 · Dejar que el reintento del driver llegue a ejecutarse
+**pendiente de flashear · 2026-09-11 · 🔴 sin verificar, ni siquiera en banco**
+
+**Para qué.** De las tres ideas "sin coste de audio" de L-014, **dos no sobrevivieron al
+log**, y conviene dejar escrito por qué antes de que alguien las vuelva a proponer:
+
+1. *"Esperar a que el DISCONNECT termine antes de `net_if_down()`."* **Descartada.**
+   `STA disconnect failed` aparece **0 veces** en toda la noche: nuestro
+   `net_mgmt(DISCONNECT)` nunca devolvió error. Y los timeouts de `DISCONNECT` y
+   `REMOVE_NETWORK` caen a las 04:52:34 y 04:52:54, **mientras la ventana todavía
+   espera** (pidió la radio a las 04:52:20, se rindió a las 04:53:05) — nuestro apagado
+   no corre hasta 45 s después. Esos comandos son del **camino de reconexión del driver**,
+   no nuestros. No estamos corrompiendo al suplicante: lo estamos viendo fallar.
+
+2. *"No tirar la interfaz incondicionalmente en este estado."* **Descartada por riesgo.**
+   Esa incondicionalidad **es** el arreglo de H2 (`688496b`), que llevó la puerta de
+   asociación de 1/10 a 20/20. Quitarla sin evidencia de que estorbe aquí cambia un fallo
+   conocido-arreglado por uno desconocido.
+
+**Lo que sí quedó en pie.** El ciclo completo, de una de las 29 ventanas:
+
+```
+04:52:20  pedimos la radio
+04:52:19  asociacion falla: "no result event"
+04:52:54  el driver se programa un reintento en 138 s  -> vencia 04:55:12
+04:53:05  nos rendimos a los 45 s y soltamos el prestamo
+04:53:50  la radio se apaga                            <- mata el reintento
+```
+
+**El reintento del driver muere 82 segundos antes de vencer. Las 29 veces.** 45 s de
+espera más 45 de gracia son 90; `STA_RECONNECT_MAX_MS` son 120 y se vio 138. Su
+recuperación no llegó a intentarse **ni una sola vez en toda la noche**.
+
+**Qué cambia.** La espera de enlace pasa a ser adaptativa:
+`CLIP_WIFI_LINK_WAIT_S` (45, igual que antes) en condiciones normales, y
+`CLIP_WIFI_LINK_WAIT_BAD_S` (150 > 120 del backoff) durante las primeras
+`CLIP_WIFI_LINK_WAIT_RETRY_WINDOWS` (3) ventanas malas seguidas.
+
+**Implicación.** Una ventana sana no cambia en nada. Una ventana mala mantiene la radio
+~150 s en vez de 45. El tope de 3 no es cosmético: 29 ventanas a 150 s son **~35 mAh, la
+quinta parte de la celda** — al driver se le da su oportunidad al principio, no toda la
+noche.
+
+**Coste medido.** 927.324 → 927.468 B, **+144 bytes**, 99,35% → 99,37%. Quedan 5.908
+libres. Cero avisos.
+
+**Cómo se verifica.** Que aparezca `ventana: espera larga (150 s)` en el log tras una
+ventana mala, y sobre varias noches — L-014 deja claro que la misma imagen da una noche
+limpia y una rota, así que **una noche buena no prueba nada**.
+
+**Resultado.** Nada todavía: **no se ha llegado a flashear.** Al ir a instalarlo, el CDC
+del aparato dejó de responder — el nodo `/dev/ttyACM0` existe y `nrfutil device list` lo
+enumera, pero `open()` se queda bloqueado incluso con `exclusive=False`. Hizo falta
+replug físico. Anotado por si vuelve a pasar: es la primera vez que se ve el CDC colgado
+con el aparato aparentemente vivo.
 
 ---
 

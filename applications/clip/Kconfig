@@ -989,6 +989,45 @@ config CLIP_WIFI_WEDGE_RECOVERY
 	  se autolimita solo y no pierde datos. Se prefiere eso a un aparato mudo
 	  durante dias, que es lo que pasa hoy.
 
+config CLIP_WIFI_LINK_WAIT_S
+	int "Segundos que la ventana espera al enlace en condiciones normales"
+	default 45
+	range 10 300
+	help
+	  Asociar cuesta ~19 s mas DHCP, medido. 45 deja margen sin dejar el hilo
+	  de subida colgado si la red no aparece.
+
+config CLIP_WIFI_LINK_WAIT_BAD_S
+	int "Segundos que espera tras una ventana mala"
+	default 150
+	range 10 600
+	help
+	  Tiene que ser MAYOR que el backoff del driver, o su reintento no llega a
+	  ejecutarse nunca.
+
+	  El 2026-09-11, en 29 ventanas seguidas fallando, el log mostraba esto en
+	  cada una:
+
+	    04:52:54  wifi: STA reconnect in 138343 ms   -> vencia a las 04:55:12
+	    04:53:05  ventana: sin enlace tras esperar (45 s), suelta el prestamo
+	    04:53:50  radio: sin prestamos, se apaga     <- mata el reintento
+
+	  El driver se daba 138 s y nosotros le dabamos 90 (45 de espera mas 45 de
+	  gracia del prestamo). Su reintento murio 82 segundos antes de vencer, las
+	  29 veces. STA_RECONNECT_MAX_MS son 120 s, asi que 150 cubre el peor caso
+	  con margen.
+
+config CLIP_WIFI_LINK_WAIT_RETRY_WINDOWS
+	int "Cuantas ventanas malas seguidas usan la espera larga"
+	default 3
+	range 0 20
+	help
+	  La espera larga solo durante las primeras ventanas malas. Un fallo
+	  persistente no se arregla esperando mas, y pagarlo cada 15 minutos si
+	  cuesta: 29 ventanas a 150 s de radio son ~35 mAh, la quinta parte de la
+	  celda. Interesa darle al driver su oportunidad al principio, no toda la
+	  noche.
+
 config CLIP_WIFI_WEDGE_WINDOWS
 	int "Ventanas seguidas sin exito antes de reiniciar"
 	depends on CLIP_WIFI_WEDGE_RECOVERY
