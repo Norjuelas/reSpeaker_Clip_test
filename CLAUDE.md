@@ -504,6 +504,7 @@ Nothing in `tests/` is a unit test. Host-side tests are in `sdk/tests/` and
 | `docs/usb_dfu.md` | mostly current |
 | `docs/audio_quality_standard.md` | current, but duplicated by a longer copy under `applications/clip/tests/audio_test/` |
 | `docs/cuaderno-de-laboratorio.md` | **current** — one entry per change: purpose, implication, how it was verified, and the real outcome |
+| `docs/estado-del-problema-radio.md` | **current — read this before touching `wifi.c`.** The open radio bug: symptom, what is proven, what is *ruled out and why*, every measurement, the instrumentation, and the test protocol |
 | `docs/release_notes/` | v0.0.5–v0.1.0; nothing for the current 0.2.0 |
 
 **Treat the source as authoritative over any of these.** Code comments in
