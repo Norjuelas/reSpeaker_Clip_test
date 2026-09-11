@@ -8,7 +8,7 @@ UART.
 > board supplies the bootloader, signing, and network-core radio automatically —
 > no per-app `sysbuild.conf` needed). To build **without** MCUboot, add a
 > `sysbuild.conf` (`SB_CONFIG_BOOTLOADER_NONE=y`); see
-> `docs/custom_app_guide.md` §7.
+> `CLAUDE.md`, seccion "Board and sysbuild".
 
 ## Features
 

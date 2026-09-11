@@ -32,7 +32,7 @@ west build --build-dir build --pristine --board clip/nrf5340/cpuapp samples/t583
 This sample boots under the reSpeaker Clip's custom MCUboot by default (the board
 supplies the bootloader, signing, and network-core radio automatically — no
 per-app `sysbuild.conf` needed). To build **without** MCUboot, add a
-`sysbuild.conf` (`SB_CONFIG_BOOTLOADER_NONE=y`); see `docs/custom_app_guide.md` §7.
+`sysbuild.conf` (`SB_CONFIG_BOOTLOADER_NONE=y`); see `CLAUDE.md`, "Board and sysbuild".
 
 ## Flashing
 

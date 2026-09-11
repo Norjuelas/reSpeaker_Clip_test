@@ -579,6 +579,57 @@ en `CMakeLists.txt:21`, así que sacar el fichero es un cambio aparte que sí va
 
 ---
 
+## L-012 · Fuera 1.014 ficheros que no entran en ninguna imagen
+**pendiente de commit · 2026-09-10 · 🟢 verificado por construcción**
+
+**Para qué.** El repositorio arrastraba 2.339 ficheros rastreados, de los cuales casi la
+mitad pertenecían al aparato retirado. No es cuestión de estética: `mobile/` son 930
+ficheros de SDKs BLE para un producto que ya no existe, y cada búsqueda en el árbol los
+atraviesa.
+
+**Qué cambia.**
+
+| | ficheros | por qué |
+|---|---|---|
+| `mobile/` + sus 2 workflows | 930 | SDKs Flutter/Android/iOS por BLE; BLE se quitó por seguridad |
+| `lib/lua/` + `samples/lua_repl/` | ~80 | `CONFIG_LUA` no lo activa ninguna imagen |
+| `docs/requirements.md`, `custom_app_guide.md`, `development.md` | 3 | era Seeed, describen otro aparato |
+
+Rastreados: **2.339 → 1.326**.
+
+**Implicación.** Ninguna sobre la imagen, y está probado abajo. Lo que sí hubo que
+arreglar son las referencias vivas que quedaban colgando: `skills/clip-dev/references/
+mcuboot.md`, dos README de `samples/` y `applications/clip/tests/docs/testing.md`
+apuntaban a `custom_app_guide.md`; ahora apuntan a la sección "Board and sysbuild" de
+`CLAUDE.md`. Las notas de versión v0.0.6 y v0.0.9 **se dejan intactas**: son registro
+histórico y describen con exactitud lo que existía entonces.
+
+**Lo que casi se rompe.** Quitar `lib/lua` exigía tocar DOS sitios, y sólo encontré uno a
+ojo: `lib/CMakeLists.txt` tiene `add_subdirectory_ifdef(CONFIG_LUA lua)` y `lib/Kconfig`
+tiene `rsource "lua/Kconfig"`. El primero es condicional y habría sobrevivido; el segundo
+**no**, y el árbol no configuraba:
+
+```
+lib/Kconfig:7: '.../lib/lua/Kconfig' not found (in 'rsource "lua/Kconfig"')
+```
+
+Lo cazó la construcción, no la lectura. Es el argumento entero a favor de pasar el gate
+en vez de confiar en que un borrado "obviamente" no afecta.
+
+**Resultado. 🟢 Inerte.**
+
+```
+.config generado : 0 lineas distintas
+FLASH            : 927.324 B en los dos
+zephyr.bin       : 9 bytes distintos -- y son los 9 del hash de commit embebido
+                   v0.2.0-439235cbf0e6  vs  v0.2.0-c6d2a59ba640
+```
+
+Esos 9 bytes son el banner de versión siguiendo a HEAD, que es justo lo que `CLAUDE.md`
+registra como la explicación de las "compilaciones no deterministas" de antes.
+
+---
+
 ## Observaciones sin cambio asociado
 
 - **El latido falla con `-ENOMEM` mientras se drena un atraso grande** (2026-09-10).

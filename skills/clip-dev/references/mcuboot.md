@@ -11,6 +11,6 @@ changing boot, signing, partitions, or network-core behavior.
 - Do not replace board signing keys or add per-app sysbuild files casually:
   devices already contain the matching public key material.
 
-For a custom app, start with `docs/custom_app_guide.md`. Build pristine after
+For a custom app, start with `CLAUDE.md` (Board and sysbuild). Build pristine after
 any sysbuild change and use recovery flashing only when the operation requires
 erasing existing secure images.

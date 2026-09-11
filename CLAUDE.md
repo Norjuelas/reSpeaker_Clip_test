@@ -170,8 +170,9 @@ a space one: if space appeared tomorrow, BLE stays out.
 - `applications/clip/overlay-tls.conf` — **deleted**. It contained no configuration at all, so
   the "with TLS" and "without TLS" recipes in `SETUP.md` produced identical firmware. TLS is on
   by default; `overlay-dev-radio.conf` is the one you pass to turn it *off*.
-- `mobile/`, `tests/ble_test.py`, `tests/otp/`, `docs/whitepaper.md` — the first is obsolete, the
-  rest do not exist.
+- `mobile/`, `tests/ble_test.py`, `tests/otp/`, `docs/whitepaper.md`, `lib/lua/`,
+  `samples/lua_repl/` — none of these exist. `mobile/` and Lua were deleted 2026-09-10;
+  the rest never existed on this branch.
 - Putting the nRF7002 firmware patch back into the application image. It was there, it cost 87 KB
   of a 936 KB slot, and that is what made TLS impossible.
 
@@ -481,12 +482,11 @@ replaced over USB**, only over SWD, so a bootloader change applies to future pro
 | `applications/clip/tests/hil/` | arneses de banco: gates de asociacion, con trafico y por reinicio, y el registro de bateria. **Antes de escribir un guion nuevo para preguntarle algo al aparato, mira si ya esta aqui** — las cifras solo son comparables si las produce el mismo guion |
 | `applications/clip/tests/audio_test/` | ASR-scored audio quality harness — **use it before and after any codec or DSP change** |
 | `boards/seeed/clip/` | board support package |
-| `drivers/`, `lib/`, `dts/`, `include/`, `sysbuild/`, `zephyr/module.yml` | module wiring |
+| `drivers/`, `lib/`, `dts/`, `include/`, `sysbuild/`, `zephyr/module.yml` | module wiring. `lib/` holds opus, speexdsp and `clip_usb_dfu` — Lua was removed, it was never built into any image |
 | `patches/mcuboot/` | bootloader patches |
 | `tests/` | standalone firmware images, flashed *instead of* the product, over SWD: `clip` (HW bench + `lfxo`/`hfxo` crystal tuning shell), `dtm` (BLE RF cert), `wifi_radio` (nRF70 RF cert), `battery_cycle` (charge/discharge cycler), `re` (older duplicate) |
 | `samples/` | one-idea reference apps. **This is where to prototype** — you cannot try things in a 97%-full image |
 | `sdk/` | installable Python package `clip` (BLE and UDP transports only — no USB CDC transport yet, so it cannot talk to this firmware) |
-| `mobile/` | obsolete Flutter/Android/iOS BLE SDKs, slated for deletion |
 
 Nothing in `tests/` is a unit test. Host-side tests are in `sdk/tests/` and
 `applications/clip/tests/tests/`.
@@ -503,7 +503,7 @@ Nothing in `tests/` is a unit test. Host-side tests are in `sdk/tests/` and
 | `docs/udp_protocol.md` | stale — asserts the device is an access point |
 | `docs/usb_dfu.md` | mostly current |
 | `docs/audio_quality_standard.md` | current, but duplicated by a longer copy under `applications/clip/tests/audio_test/` |
-| `docs/requirements.md`, `docs/custom_app_guide.md`, `docs/development.md` | Seeed-era, being removed |
+| `docs/cuaderno-de-laboratorio.md` | **current** — one entry per change: purpose, implication, how it was verified, and the real outcome |
 | `docs/release_notes/` | v0.0.5–v0.1.0; nothing for the current 0.2.0 |
 
 **Treat the source as authoritative over any of these.** Code comments in

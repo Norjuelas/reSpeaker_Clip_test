@@ -403,4 +403,4 @@ jobs:
 
 - [Protocol Documentation](../../docs/protocol.md)
 - [Architecture Documentation](../../docs/architecture.md)
-- [Development Notes](../../docs/development.md)
+- [CLAUDE.md](../../../../CLAUDE.md) — invariantes, escollos y flujo de trabajo
