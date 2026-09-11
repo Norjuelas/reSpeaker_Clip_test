@@ -630,6 +630,50 @@ registra como la explicación de las "compilaciones no deterministas" de antes.
 
 ---
 
+## L-013 · Nueve símbolos de Kconfig que no gobernaban nada
+**pendiente de commit · 2026-09-10 · 🟢 verificado por construcción**
+
+**Para qué.** Nueve `config CLIP_*` aparecían en el `.config` generado y ningún fuente los
+leía. Un símbolo así no es inofensivo: parece una palanca, invita a girarla, y no está
+conectada a nada. Cierra Tier 2, que es lo que permite activar una puerta de cero avisos
+en CI.
+
+**La decisión que había que tomar, y por qué se borra en vez de conectarse.** El backlog
+dejaba abierta la opción de **cablear** el grupo `CLIP_AGC_*` a `audio.c` en vez de
+borrarlo. Mirando el código, no procede:
+
+```c
+audio.c:1241   int32_t target_level = 6000;    /* AGC entero, hecho a mano */
+Kconfig        CLIP_AGC_TARGET default 30000   /* AGC de SpeexDSP */
+```
+
+Cinco veces de diferencia. No son valores por defecto sin cablear esperando conexión: son
+ajustes de un **AGC distinto** —el de SpeexDSP, que no está disponible en modo
+`FIXED_POINT` y se sustituyó por un AGC entero propio con su propio estado
+(`agc_hp_x1`, `agc_envelope`, `agc_gain_q8`). Cablearlos metería un objetivo 5× erróneo.
+Decisión: se borran, y queda anotado para no volver a plantearlo.
+
+**Qué cambia.** Fuera `CLIP_AGC_{TARGET,MAX_GAIN,INCREMENT,DECREMENT}`,
+`CLIP_STORAGE_ENABLED`, `CLIP_STORAGE_SESSIONS_PER_PAGE`, `CLIP_TRANSFER_ENABLED`,
+`CLIP_UDP_MAX_DATA_SIZE`, `CLIP_UDP_HEARTBEAT_INTERVAL_MS`. 27 líneas.
+
+**Implicación.** `CLIP_TRANSFER_ENABLED` merece una nota aparte: **no gobernaba
+`transfer.c`**, que se compila incondicionalmente en `CMakeLists.txt:21`. Quitar el
+símbolo no saca el fichero. Sacar `transfer.c` del build es un cambio distinto y sí vale
+2.864 B — queda pendiente.
+
+**Resultado. 🟢 Inerte.**
+
+```
+.config : solo desaparecen los 9 simbolos, nada mas
+FLASH   : 927.324 B en los dos
+zephyr.bin : 11 bytes distintos, TODOS del banner de version
+             v0.2.0-c6d2a59ba640 -> v0.2.0-98fb52da1f42
+             bytes distintos fuera de esa zona: 0
+```
+
+---
+
 ## Observaciones sin cambio asociado
 
 - **El latido falla con `-ENOMEM` mientras se drena un atraso grande** (2026-09-10).

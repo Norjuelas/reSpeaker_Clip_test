@@ -47,22 +47,6 @@ config CLIP_DEFAULT_DEREVERB
 	bool "Default dereverberation enabled"
 	default y
 
-config CLIP_AGC_MAX_GAIN
-	int "AGC maximum gain (dB)"
-	default 60
-
-config CLIP_AGC_TARGET
-	int "AGC target level"
-	default 30000
-
-config CLIP_AGC_INCREMENT
-	int "AGC max increase (dB/s)"
-	default 60
-
-config CLIP_AGC_DECREMENT
-	int "AGC max decrease (dB/s)"
-	default -100
-
 config CLIP_STORAGE_FULL_PERCENT
 	int "SD usage percent at which recording is refused (storage full)"
 	default 95
@@ -260,17 +244,9 @@ config CLIP_AUDIO_DMIC_FLUSH_FRAMES
 # Storage Configuration
 # =============================================================================
 
-config CLIP_STORAGE_ENABLED
-	bool "Enable SD card storage"
-	default y
-
 config CLIP_STORAGE_MAX_SESSIONS
 	int "Maximum number of sessions to list"
 	default 100
-
-config CLIP_STORAGE_SESSIONS_PER_PAGE
-	int "Sessions per page for LIST command"
-	default 20
 
 config CLIP_STORAGE_MAX_CHUNKS
 	int "Maximum chunks per session"
@@ -307,10 +283,6 @@ config CLIP_AUDIO_SEGMENT_DURATION_NO_SYNC
 # Transfer Configuration
 # =============================================================================
 
-config CLIP_TRANSFER_ENABLED
-	bool "Enable file transfer"
-	default y
-
 config CLIP_TRANSFER_STACK_SIZE
 	int "Transfer thread stack size"
 	default 16384
@@ -346,14 +318,6 @@ config CLIP_UDP_RECV_BUF_SIZE
 config CLIP_UDP_SOCKET_BUF_SIZE
 	int "UDP socket SO_RCVBUF/SO_SNDBUF size"
 	default 4096
-
-config CLIP_UDP_MAX_DATA_SIZE
-	int "UDP maximum data per packet"
-	default 1024
-
-config CLIP_UDP_HEARTBEAT_INTERVAL_MS
-	int "UDP heartbeat interval (ms)"
-	default 5000
 
 config CLIP_UDP_CONNECTION_TIMEOUT_MS
 	int "UDP connection timeout (ms)"
