@@ -1164,6 +1164,114 @@ estamos midiendo. Ver [[T-03]].
 
 ---
 
+## T-04 · Tanda de confirmacion sana — y `0xAAAAAAAA` resulta ser ruido de fondo
+
+**2026-09-12 noche · 🟢 medido — corrige como se lee la firma del fallo**
+
+**Montaje.** Identico a T-03: mismo AP (`CLIP_TEST`), mismo uplink por ethernet, mismo
+endpoint, intervalo 15 min. Unica diferencia: imagen con L-016. Duracion 2 h 38 min
+(`arranque 25: el anterior motivo=1 miss=0 etapa=0 tdfail=0 tras 9491s`).
+
+**Resultado: sana.** Nueve ventanas, **nueve asociaciones**, cadencia exacta:
+
+```
+17:26:55 -> 17:56:47   30 min   84,6 MB   (drenando los 130 atrasados)
+18:11:09 -> 18:33:52   23 min   65,5 MB
+18:48:14 -> 18:51:08    3 min      638 B  <- ventana mala, etapa 2
+19:05:30 -> 19:10:19    5 min
+19:24:41 -> 19:27:36    3 min             <- ventana mala, etapa 2
+19:41:58 -> 19:46:30  4,5 min
+```
+
+El hueco entre el cierre de una ventana y la apertura de la siguiente fue **14 min 22 s
+identico al segundo, las seis veces**.
+
+**Hallazgo 1 — fueron DOS ventanas malas, no una.** Ambas etapa 2 (asocio, el POST fallo),
+ambas de una sola ventana, ambas recuperadas a la siguiente:
+
+```
+[01:25:39] ventana sin exito (1 seguidas), etapa 2   -> 18:46 local
+[01:44:50] se recupera tras 1 sin exito
+[02:02:06] ventana sin exito (1 seguidas), etapa 2   -> 19:22 local
+[02:21:02] se recupera tras 1 sin exito
+```
+
+La consulta al servidor con `LIMIT 5` solo alcanzaba la primera. Dos de nueve ventanas con el
+latido caido en una tanda por lo demas perfecta es una tasa que conviene vigilar. En el AP, la
+ventana mala de las 18:48 movio **638 bytes** — DHCP y nada mas, ni un SYN. Asocio y no llego
+a intentar la conexion.
+
+**Hallazgo 2 — `0xAAAAAAAA` NO es por si solo sintoma de nada. Lo que discrimina es el RITMO.**
+
+Esto corrige como se venia leyendo la firma:
+
+| | errores `0xAAAAAAAA` | duracion | ritmo |
+|---|---|---|---|
+| tanda **sana** (T-04) | 340 | 2 h 38 min | **~2,2/min** |
+| tanda **colgada** (T-03) | 7.968 | ~3 h 40 min retenidos | **~36/min** |
+
+O sea que el aparato produce errores de acceso a la memoria de la RPU **continuamente, tambien
+cuando todo va bien**. Buscar la cadena en un log y concluir "aqui esta el fallo" manda a
+perseguir algo que pasa siempre. **El umbral util es un aumento de ~16x en el ritmo**, no la
+presencia.
+
+Esto tambien abre una pregunta nueva: si en reposo ya hay ~2 errores por minuto en el bus
+hacia la RPU, eso **de base no deberia estar pasando**. Ver [[H-01]].
+
+**Sobre L-016: medio comprobado, y esta tanda no podia comprobarlo entero.**
+- `FILE_SIZE=262144` **confirmado**: `log.0073` llego a 183.970 B, por encima del tope viejo
+  de 131.072.
+- `FILES_LIMIT=100` **sin comprobar**: sigue habiendo 20 ficheros en la tarjeta y el limite
+  solo actua al pasar de 100.
+- Y sobre todo: **una tanda sana casi no escribe log** — el backend se retira a los 120 s y
+  solo vuelve en modo *trouble*. 2 h 38 min sanas cabian en **un solo fichero, 1.952 lineas**.
+  L-016 solo se puede validar con un cuelgue de verdad.
+
+---
+
+## H-01 · HIPOTESIS: y si es hardware de ESTA unidad
+
+**2026-09-12 · 🔵 hipotesis abierta, planteada por el usuario — nada descartado**
+
+**Por que no se puede descartar.** Todo lo que se ha concluido en esta investigacion sale de
+**un solo aparato**. No hay ni una medida de un segundo ejemplar. Con n=1, "fallo de diseno"
+y "fallo de esta unidad" producen exactamente los mismos datos.
+
+**Lo que apunta a hardware.**
+- El fallo vive en el acceso a memoria de la RPU: `hal_rpu_mem_write: Invalid memory address
+  0xAAAAAAAA`. El nRF7002 cuelga del **QSPI**. Un bus marginal (soldadura, pista, integridad
+  de senal) da justo esto: lecturas que devuelven basura.
+- `0xAAAAAAAA` es el patron clasico de linea flotante / sin programar, no un valor que el
+  firmware escriba nunca.
+- **T-04 lo refuerza**: ~2,2 errores por minuto **con todo sano**. Un bus correcto no deberia
+  fallar de fondo.
+
+**Lo que apunta a firmware/driver.**
+- `tdfail=0` en las dos tandas colgadas: `net_if_down()` nunca fallo, o sea que `rpu_pwroff()`
+  corrio y BUCKEN/IOVDD se cortaron. **Apagar y encender el chip no lo arregla, pero reiniciar
+  el SoC si.** Eso coloca el estado roto del lado del host, no dentro del nRF7002 — es dificil
+  de explicar con un fallo puramente electrico del chip.
+
+**Como acorralarlo, por valor decreciente.**
+1. **Un segundo aparato.** El unico experimento decisivo. Misma imagen, mismo AP, misma
+   prueba. Si falla igual, es diseno o firmware; si no falla, es esta unidad. Todo lo demas es
+   secundario a esto.
+2. **El ritmo de `0xAAAAAAAA` como indicador adelantado.** Ya tenemos la linea base (~2,2/min).
+   Medirlo en cada tanda y en cada unidad: si sube antes de colgarse, es un sintoma de
+   degradacion y ademas un aviso temprano util en campo.
+3. **Bajar el reloj del QSPI.** Si el bus va justo, reducir la frecuencia deberia **bajar el
+   ritmo de base**. Es un experimento limpio con una prediccion clara, y si acierta señala
+   integridad de senal sin ambiguedad.
+4. **Temperatura.** `battery_temp_c` viaja en cada latido. Correlacionar el ritmo de errores
+   con la temperatura: un bus marginal empeora con el calor.
+5. **Mecanico.** Flexionar o golpear suavemente el aparato mientras se mide el ritmo. Burdo,
+   pero es la prueba clasica de soldadura fria y cuesta cinco minutos.
+
+**Estado.** Abierta. Nada de lo medido hasta hoy la descarta, y **nada la confirma tampoco**.
+Lo honesto es decir que con n=1 no se puede separar de [[T-03]].
+
+---
+
 ## Observaciones sin cambio asociado
 
 - **El latido falla con `-ENOMEM` mientras se drena un atraso grande** (2026-09-10).
