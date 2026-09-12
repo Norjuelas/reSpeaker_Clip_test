@@ -997,6 +997,75 @@ journalctl --since "2026-09-12 01:11" --until "2026-09-12 09:41" \
 
 ---
 
+## T-03 · El fallo REPRODUCIDO con uplink: 77 intentos, 0 asociaciones, tormenta 0xAAAAAAAA
+
+**2026-09-12 tarde · 🔴 reproducción limpia — el mismo AP que la noche anterior**
+
+**Para qué era.** T-02 dejó el sesgo abierto: sin uplink la radio no hizo trabajo TLS de
+verdad. Esta tanda repite el montaje **cambiando una sola cosa**: el portátil AP ahora sí
+tiene salida (cable ethernet, NAT verificado — el latido llegó al servidor a las 12:33).
+
+**El resultado, con dos testigos que vuelven a coincidir.**
+
+| | noche (T-02, sin uplink) | tarde (T-03, con uplink) |
+|---|---|---|
+| AP | `CLIP_TEST`, el mismo portátil | `CLIP_TEST`, el mismo portátil |
+| asociaciones vistas por el AP | **31 de 31** | **0** en 4 h 23 min |
+| ventanas del aparato | 30 en etapa 2 (asoció) | **18 en etapa 1 (no asoció)** |
+| intentos de conexión | — | **77, ninguno logró nada** |
+
+Nota de arranque, escrita antes del apagado: `motivo=1 miss=18 etapa=1 tdfail=0 tras 16965s`.
+`tdfail=0` otra vez: `net_if_down()` nunca falló, o sea que la RPU **sí** se apagó y encendió
+en cada ventana y aun así no asoció. El estado roto es del lado del host.
+
+**La firma, esta vez completa.** 7.968 errores `0xAAAAAAAA` en la tarde, a ritmo
+**constante** (~401 por fichero de ~11 min ≈ 36/min), sin escalada:
+
+```
+[01:01:53] wifi: STA connecting to 'CLIP_TEST' (WPA2-PSK, reg=CO)
+[01:01:55] wifi_nrf: hal_rpu_mem_write: Invalid memory address 0xAAAAAAAA
+[01:01:55] wifi_nrf: hal_rpu_msg_write: Copying information to RPU failed
+[01:01:55] wifi_nrf: hal_rpu_cmd_process_queue: Writing command to RPU failed
+[01:02:15] wifi_nrf: nrf_wifi_wpa_set_supp_port: nrf_wifi_sys_fmac_chg_sta failed
+[01:02:15] wifi: STA reconnect in 170887 ms
+```
+
+El backoff del supplicant se estira solo: 138240 → 153760 → 161773 → 170887 ms.
+
+**Un reinicio lo arregla, y al instante.** Arranque en frío a las 17:11:5x (`reset: unknown`,
+salida de ship mode al poner el cable) y **asociación a las 17:12:57**, un minuto después.
+Confirmado por el journal del AP.
+
+**Lo que esta tanda NO demuestra, y hay que decirlo.** La hipótesis que la motivaba era "lo
+rompe el tráfico TLS sostenido". **No queda demostrada**: esta tarde **no se subió ni un
+fichero** (`uploaded … HTTP 200`: 0 veces). Lo único que cruzó la red con éxito fue el latido
+manual de las 12:33. La ventana 1 ya falló. O sea que la radio se rompió *antes* de hacer
+trabajo pesado, no *por* hacerlo.
+
+**Y el motivo de que no podamos decir más: la rotación se comió la transición.** Se guardan
+20 ficheros de ~11 min ≈ 3 h 40 min, y la tanda duró 4 h 42 min. El fichero más antiguo
+retenido (`log.0054`) empieza en uptime `00:59:27` y **ya viene con la tormenta en marcha**;
+la racha más baja que sobrevive es la ventana 5. **El minuto en que se rompió está borrado.**
+Ese es el dato que falta y el que hay que capturar la próxima vez.
+
+**Material.** `~/clip-log-tarde5/` (`log.0054`–`log.0073`). El lado AP:
+
+```sh
+journalctl --since "2026-09-12 12:29" --until "2026-09-12 17:12" | grep -c AP-STA-CONNECTED   # 0
+```
+
+**Lo que se lleva de aquí.**
+- La reproducción es **fiable y rápida** (menos de una hora), no hace falta esperar a la
+  madrugada. Eso acelera mucho el ciclo de prueba.
+- La firma `0xAAAAAAAA` a ritmo constante dice que el host perdió el mapa de memoria de la
+  RPU. No es congestión ni señal: es estado corrupto del lado del host.
+- **Antes de la próxima tanda hay que ampliar la retención del log** o capturar por consola,
+  o volveremos a perder la transición.
+- Ver también [[T-02]] (la tanda sin uplink) y la entrada del auto-apagado de USB, que es lo
+  que impidió interrogar al aparato en caliente.
+
+---
+
 ## Observaciones sin cambio asociado
 
 - **El latido falla con `-ENOMEM` mientras se drena un atraso grande** (2026-09-10).
