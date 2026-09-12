@@ -840,6 +840,55 @@ con el aparato aparentemente vivo.
 
 ---
 
+## L-016 · Que la rotación del log deje de comerse la transición
+
+**2026-09-12 · ⏳ pendiente de la próxima tanda**
+
+**Para qué.** En T-03 el aparato estuvo 4 h 42 min sin asociar y **el minuto en que se rompió
+está borrado**: el fichero más antiguo retenido empezaba en uptime `00:59` y ya venía con la
+tormenta `0xAAAAAAAA` en marcha. El dato que explica el fallo es justo el que la rotación tira.
+
+**La cuenta.** El backend FS guardaba 20 ficheros de 128 KB = **2,56 MB**. Con la tormenta
+el log produce ~131 KB por cada 11 min ≈ **715 KB/h**, así que 2,56 MB son **3 h 40 min** de
+historia. Cualquier tanda más larga que eso pierde su propio principio. La tarjeta tiene
+**1.138 MB libres**: se estaba racionando algo de lo que sobra mil veces más.
+
+```diff
+-CONFIG_LOG_BACKEND_FS_FILE_SIZE=131072
+-CONFIG_LOG_BACKEND_FS_FILES_LIMIT=20
++CONFIG_LOG_BACKEND_FS_FILE_SIZE=262144
++CONFIG_LOG_BACKEND_FS_FILES_LIMIT=100
+```
+
+100 × 256 KB = **25,6 MB ≈ 36 h** al ritmo de la tormenta. Cubre una noche entera con margen
+de sobra, y 100 entradas de directorio es la misma convención que ya usa `/SD:/REC` (100
+ficheros por subdirectorio) para no engordar los directorios FAT.
+
+**Implicación.** Sólo afecta a cuándo se BORRA lo viejo. No cambia cuándo se escribe: el
+backend sigue retirándose a los `CLIP_LOG_FS_BOOT_WINDOW_S`=120 s del arranque y sólo vuelve
+en modo *trouble* (`CLIP_LOG_FS_TROUBLE_WINDOWS`=5). O sea que en una tanda sana la tarjeta
+sigue pudiendo dormirse igual que antes, y el consumo no cambia. Lo único que crece es cuánto
+pasado sobrevive cuando las cosas ya van mal — que es exactamente el caso que interesa.
+
+**Coste en imagen: cero, y medido, no razonado.** Son valores de tiempo de ejecución, no
+código:
+
+```
+zephyr.bin antes:  927.324 B
+zephyr.bin después: 927.324 B     <- identico byte a byte
+avisos del compilador: 0
+```
+
+**Cómo se comprobará.** En la próxima reproducción, el fichero más antiguo retenido tiene que
+empezar **antes** de la primera ventana mala, y tiene que verse la **primera** línea
+`0xAAAAAAAA` con lo que la precede. Si eso aparece, L-016 cumplió; si vuelve a faltar, el
+problema no es la retención sino que el backend estaba retirado cuando se rompió, y entonces
+hay que mirar `CLIP_LOG_FS_TROUBLE_WINDOWS` o capturar por consola.
+
+Ver [[T-03]], que es la tanda que motivó esto.
+
+---
+
 ## T-01 · TEORÍA: el fallo cae a la misma hora de reloj, así que no es nuestro
 **2026-09-11 · 🔵 teoría, sin comprobar — no corrige nada de lo anterior**
 
