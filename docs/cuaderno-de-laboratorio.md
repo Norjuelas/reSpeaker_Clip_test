@@ -1115,6 +1115,55 @@ journalctl --since "2026-09-12 12:29" --until "2026-09-12 17:12" | grep -c AP-ST
 
 ---
 
+## I-01 · IDEA: drenar el atraso mientras carga, para empezar cada dia limpio
+
+**2026-09-12 · 💡 idea del usuario, sin implementar — no toca nada todavia**
+
+**De donde sale.** Observacion durante la tanda de confirmacion: el aparato estaba grabando
+*y* subiendo los 130 ficheros atrasados a la vez. Idea: que el atraso salga **cuando esta
+enchufado**, de forma que cada jornada empiece con la tarjeta al dia.
+
+**Por que tiene sentido.**
+- Subir cuesta radio (~41 mA). Con cable esa corriente **no sale de la bateria**, sale del
+  cargador. Ahora mismo se paga igual en los dos casos.
+- Un aparato en el cargador esta parado y sin prisa: es el momento barato para mover
+  megabytes. Uno grabando con bateria es el caro.
+- Hoy el intervalo es fijo (`CLIP_UPLOAD_INTERVAL_MIN`=15) **sea cual sea el estado de
+  alimentacion**. Con 130 ficheros a ~20 s cada uno, el atraso tarda ~43 min repartidos en
+  ventanas de 15 min, o sea varias horas de reloj — y mientras tanto compite con la grabacion.
+
+**Lo barato: no hace falta un estado nuevo.** Todo lo necesario ya existe.
+- `http_upload.c:1616` es el **unico** punto donde se reprograma la pasada periodica:
+  `k_work_reschedule(..., K_MINUTES(CONFIG_CLIP_UPLOAD_INTERVAL_MIN))`.
+- `battery_vbus_present()` ya esta en `battery.h`, y ya se confia en el en la puerta de
+  grabacion — se lee del PMIC por I2C justo porque el flag del controlador USB miente cuando
+  se enciende la radio.
+
+Asi que la version minima es: **en esa reprogramacion, si hay VBUS y el atraso no es cero,
+volver en segundos en vez de en 15 minutos.** Sin hilo nuevo, sin estado nuevo, coste en flash
+practicamente nulo — que importa con 8,4 KB libres.
+
+**Lo que hay que pensar antes de escribirlo.**
+1. **Grabar con cable esta prohibido** (`clip_event.c:557`): la puerta mira
+   `usb_cdc_is_enabled() && battery_vbus_present()`. Con un cargador tonto el CDC no enumera,
+   pero el stack USB del aparato si se enciende con VBUS, asi que **puede que la puerta salte
+   igual con un cargador de pared**. Hay que comprobarlo antes de prometer "carga y graba".
+2. **No dejar la tarjeta sin dormir nunca.** Una pasada continua mantiene
+   `clip_sd_busy()` en true todo el rato. Con cable da igual (el USB ya lo hacia), pero hay
+   que asegurarse de que al quitar el cable se vuelve a la cadencia normal.
+3. **"Empezar cada dia limpio" es mas que subir**: implica tambien una politica de borrado, y
+   `/SD:/UPLOADED.TXT` falla **abierto** a proposito (ilegible = volver a subir). Borrar por
+   haber subido es una decision aparte y mas delicada que esta.
+4. Medir el ahorro real antes y despues: el consumo de la radio no lo ve el medidor de
+   combustible (ver la nota del gauge en CLAUDE.md), asi que hay que sacarlo de la pendiente
+   de SoC entre latidos.
+
+**Estado.** Idea registrada, nada implementado. Bloqueada detras del fallo de radio abierto:
+no conviene tocar la cadencia de las ventanas mientras la cadencia es justo la variable que
+estamos midiendo. Ver [[T-03]].
+
+---
+
 ## Observaciones sin cambio asociado
 
 - **El latido falla con `-ENOMEM` mientras se drena un atraso grande** (2026-09-10).
