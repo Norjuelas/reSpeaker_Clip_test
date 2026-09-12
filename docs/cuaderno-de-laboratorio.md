@@ -906,6 +906,97 @@ logs del propio AP.
 
 ---
 
+## T-02 · AP alternativo: la radio asoció 31 de 31 y cruzó la hora mala
+
+**2026-09-12 · 🟢 resultado medido — falsa T-01, pero con un sesgo grande que hay que decir**
+
+**Para qué era.** T-01 afirmaba que el fallo cae siempre a la misma hora de reloj y que por
+tanto no es nuestro. La forma barata de falsarla: **cambiar de AP** dejando todo lo demás
+igual. Si el fallo es del `APTO11-2G`, desaparece; si es nuestro, viaja con el aparato.
+
+**Montaje.** El portátil como AP (`nmcli device wifi hotspot`, SSID `CLIP_TEST`), el aparato
+con `AT+STACFG="CLIP_TEST",…` y el endpoint **sin tocar** en `13.219.11.10:443`. El portátil
+no tiene otra salida a internet que su propia WiFi, así que al pasar a AP se queda sin uplink
+— y eso era deliberado: el discriminante era `miss_stage` (2 = asoció, 2 = bien; 1 = no asoció
+= mal), leído de la tarjeta después.
+
+**Lo que salió — y esta vez hay dos testigos independientes.**
+
+El AP (journal del portátil, `wpa_supplicant` + `dnsmasq`) registró, de 01:11:20 a 09:40:45
+(**8 h 29 min sin un solo corte del AP**):
+
+```
+31 × AP-STA-CONNECTED b2:2b:20:63:ea:e0
+31 × EAPOL-4WAY-HS-COMPLETED
+31 × DHCPACK 10.42.0.111 ... zephyr
+ 0 × fallo de asociación
+```
+
+Cadencia de reloj, una cada ~16 min 54 s, sin una sola ausencia.
+
+El aparato (`log.0047`, arranque 18) registró **30 ventanas seguidas en etapa 2**:
+
+```
+[00:19:30] ventana sin exito (1 seguidas), etapa 2
+...
+[08:29:38] ventana sin exito (30 seguidas), etapa 2
+```
+
+Etapa 2 = `CLIP_WIN_BEAT_FAIL` = **asoció y el POST falló**. El POST falló porque el portátil
+no tenía internet (`connect a 13.219.11.10:443 fallo: -116`). Es exactamente el resultado
+"bueno" que se había definido antes de la prueba.
+
+**Las dos cuentas encajan** una vez alineado el reloj (arranque ≈ 01:02 local): la ventana 30
+del aparato, uptime `08:29:38`, cae en el `AP-STA-CONNECTED` de las `09:31:32`.
+
+**T-01 queda falsada.** El aparato cruzó **04:48 UTC** (01:48 local) con asociaciones limpias
+a las 01:38:24 y 01:55:18, y atravesó entero el tramo **06–09 UTC** (03–06 local) — las horas
+que en todo el histórico no tienen *ni un solo latido* — asociando cada 17 minutos sin fallar.
+La hora de reloj no explica nada por sí sola.
+
+**El sesgo, que es grande y hay que decirlo antes que la conclusión.** Se cambiaron **dos
+cosas a la vez**, no una:
+
+1. el AP, y
+2. **cuánto trabajo hizo la radio**.
+
+Sin internet, cada ventana fue: asociar → fallar el `connect` en ~3 s → soltar. Nunca hubo un
+handshake TLS completo, ni una subida de 1 MB, ni un minuto sostenido de tráfico. En las
+noches que fallaron el aparato **sí estaba subiendo ficheros de verdad**. Así que esta prueba
+demuestra que **asociarse repetidamente durante 8 h 29 min no rompe la radio**, y no demuestra
+que el `APTO11-2G` sea el culpable. El sospechoso que queda vivo es *el tráfico TLS sostenido*,
+que es justo lo que esta prueba no ejerció.
+
+**El reinicio del final no es el fallo.** `arranque 19; el anterior: motivo=2 miss=31 etapa=1
+tdfail=0 tras 31061s`. Motivo 2 = `CLIP_BOOT_WEDGE`. Durante toda la noche el detector se
+contuvo — `radio: colgada, pero se esta grabando; no se reinicia`, repetido en las ventanas
+23 a 30 — y sólo disparó al **parar la grabación** por la mañana, cuando la ventana 31 (el
+barrido de fin de grabación, fuera de cadencia) no encontró AP y anotó etapa 1. Es decir:
+**el detector de radio colgada se disparó con la radio perfectamente sana**, porque su única
+señal es "ninguna ventana logró nada" y un endpoint inalcanzable produce la misma señal que
+una radio muerta. Eso es un falso positivo real, y en tienda significaría reiniciar un aparato
+sano cada vez que se cae el servidor.
+
+**Material.** Grabó la noche entera: 691 `.opus` en la tarjeta, 590 en `UPLOADED.TXT`, **101
+sin subir** — el atraso esperado, no una pérdida. Batería 93 % → 35 % en ~8 h 40 min.
+
+**Copias.** Logs de la tarjeta en `~/clip-log-dia5/` (`log.0045`–`log.0047`; la noche está en
+`0047`). El registro del AP se saca con:
+
+```sh
+journalctl --since "2026-09-12 01:11" --until "2026-09-12 09:41" \
+  | grep -iE "AP-STA-|DHCPACK"
+```
+
+**Lo que se lleva de aquí.**
+- El AP como testigo independiente es la mejor instrumentación que hemos tenido para este
+  fallo, y es gratis. **Repetir siempre con el portátil de AP**, aunque el AP sí tenga salida.
+- La prueba que falta es la misma pero **con uplink**, para que la radio haga trabajo TLS de
+  verdad y se separe "asociar mucho" de "transferir mucho".
+- El falso positivo del detector de cuelgue merece entrada propia.
+
+---
+
 ## Observaciones sin cambio asociado
 
 - **El latido falla con `-ENOMEM` mientras se drena un atraso grande** (2026-09-10).
